@@ -1,0 +1,16 @@
+{
+  "name": "grid-bot",
+  "version": "1.0.0",
+  "description": "Binance Grid Trading Bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ccxt": "^4.3.0",
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.1",
+    "cors": "^2.8.5"
+  }
+}
