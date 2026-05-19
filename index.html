@@ -806,6 +806,13 @@
   </div>
 </div>
 
+<!-- ══ RUNNING BOTS DASHBOARD ══ -->
+<div id="botsBar" style="display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;align-items:center;border-bottom:1px solid var(--border,#2a2a3a);">
+  <span style="font-weight:600;color:var(--muted,#888);font-size:13px;margin-right:4px;">RUNNING BOTS:</span>
+  <span id="botsBarEmpty" style="color:var(--muted,#888);font-size:13px;">None yet — configure below and click Start</span>
+  <!-- bot chips injected here -->
+</div>
+
 <!-- ══ EXCHANGE TABS ══ -->
 <div class="ex-tabs">
   <div class="ex-tab active" id="tab-binance" onclick="switchExchange('binance')">
@@ -813,6 +820,9 @@
   </div>
   <div class="ex-tab" id="tab-deribit" onclick="switchExchange('deribit')">
     <span class="ex-dot" id="dot-deribit"></span> 🟧 Deribit
+  </div>
+  <div class="ex-tab" id="tab-hyperliquid" onclick="switchExchange('hyperliquid')">
+    <span class="ex-dot" id="dot-hyperliquid"></span> 🟣 Hyperliquid
   </div>
 </div>
 
@@ -839,6 +849,9 @@
             <option value="binance_coinm">Binance Coin-M</option>
             <option value="deribit">Deribit Perpetual</option>
             <option value="deribit_spot">Deribit Spot</option>
+            <option value="hyperliquid">Hyperliquid Perpetual</option>
+            <option value="hyperliquid_spot">Hyperliquid Spot</option>
+            <option value="hyperliquid_hip3">Hyperliquid HIP-3 (coming soon)</option>
           </select>
         </div>
         <div class="field">
@@ -955,6 +968,30 @@
       </div>
     </div>
 
+    <!-- ── Hyperliquid Panel ── -->
+    <div class="ex-panel" id="panel-hyperliquid">
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header">
+          <div class="card-header-row">
+            <span>🟣 Hyperliquid Account Overview</span>
+            <button onclick="refreshHyperliquidPortfolio()" id="hlPortBtn" class="btn-refresh">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;">
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Perps USDC (Free)</div><div class="stat-value blue" id="hlPerpFree">—</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Perps USDC (Total)</div><div class="stat-value" id="hlPerpTotal">—</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Spot USDC</div><div class="stat-value" id="hlSpotUsdc">—</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Open Positions</div><div class="stat-value" id="hlPosCount">—</div></div>
+            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--brand);"><div class="stat-label">Combined USDC</div><div class="stat-value blue" id="hlCombined" style="font-size:24px;">—</div></div>
+          </div>
+          <div id="hlSpotTokens" style="margin-top:12px;font-size:12px;color:var(--muted,#888);"></div>
+          <div id="hlPositions" style="margin-top:8px;font-size:12px;"></div>
+          <div class="timestamp-note" id="hlLastUpdated">Not loaded yet — click Refresh</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Shared per-exchange views (re-rendered on tab switch) ── -->
     <!-- Price / Limit Stats -->
     <div class="stats-grid">
@@ -966,7 +1003,7 @@
 
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">Live PnL</div><div class="stat-value" id="livePnl">—</div></div>
-      <div class="stat-card"><div class="stat-label">Round Trips</div><div class="stat-value blue" id="roundTripsCount">0</div></div>
+      <div class="stat-card"><div class="stat-label">Round Trips</div><div class="stat-value blue" id="roundTripsCount">0</div><div style="font-size:10px;color:var(--muted);font-weight:600;margin-top:2px;">Pending: <span id="pendingRtCount" style="color:var(--amber);">0</span></div></div>
       <div class="stat-card"><div class="stat-label">Buys / Sells</div><div class="stat-value" style="font-size:14px;"><span id="totalBuys" class="buy-text">0</span> / <span id="totalSells" class="sell-text">0</span></div></div>
       <div class="stat-card"><div class="stat-label">Buy Avg / Sell Avg</div><div class="stat-value" style="font-size:13px;"><span id="buyAvg" class="buy-text">—</span> / <span id="sellAvg" class="sell-text">—</span></div></div>
     </div>
@@ -990,9 +1027,30 @@
       </div>
     </div>
 
+    <!-- Recent Round Trips (LIVE) -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-header-row">
+          <span>✅ Recent Round Trips (live)</span>
+          <span style="font-family:var(--font-display);font-size:12px;font-weight:700;color:var(--muted);">Total PnL: <span id="liveRtTotal" style="color:var(--green);">$0.0000</span></span>
+        </div>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <table class="ord-table">
+          <thead><tr><th>#</th><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>PnL</th><th>When</th></tr></thead>
+          <tbody id="liveRtBody"><tr><td colspan="7" class="empty-td">No round trips yet — waiting for first target fill</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Report -->
     <div class="card">
-      <div class="card-header">📈 PnL Report <span id="reportExLabel" class="pill pill-blue" style="margin-left:8px;">Binance</span></div>
+      <div class="card-header">
+        <div class="card-header-row">
+          <span>📈 PnL Report <span id="reportExLabel" class="pill pill-blue" style="margin-left:8px;">Binance</span></span>
+          <button onclick="downloadCsv()" class="btn-refresh">📥 Download CSV</button>
+        </div>
+      </div>
       <div class="card-body">
         <div class="tab-row">
           <button class="tab-btn active" onclick="setReportPeriod('24h', this)">24 Hours</button>
@@ -1009,6 +1067,7 @@
           <div class="rep-stat"><div class="rep-label">Gross PnL</div><div class="rep-value" id="rPnl">—</div></div>
           <div class="rep-stat"><div class="rep-label">Round Trips</div><div class="rep-value" id="rCount">0</div></div>
           <div class="rep-stat"><div class="rep-label">PnL/RT</div><div class="rep-value" id="rPerRt">—</div></div>
+          <div class="rep-stat"><div class="rep-label">Avg Spread</div><div class="rep-value" id="rAvgSpread">—</div></div>
           <div class="rep-stat" id="feesStat" style="display:none;"><div class="rep-label">Fees</div><div class="rep-value neg" id="rFees">—</div></div>
           <div class="rep-stat" id="rebStat" style="display:none;"><div class="rep-label">Rebates</div><div class="rep-value pos" id="rRebates">—</div></div>
           <div class="rep-stat" id="netStat" style="display:none;"><div class="rep-label">Net PnL</div><div class="rep-value" id="rNetPnl">—</div></div>
@@ -1045,8 +1104,11 @@ let selectedSymbol  = "";
 let symbolsLoaded   = false;
 let currentPeriod   = "24h";
 let currentExchange = "binance";   // which tab is active
-let lastFullState   = { binance: {}, deribit: {} };
+let lastFullState   = { binance: {}, deribit: {}, hyperliquid: {} };
 let serverConfig    = { deribitTestnet: false };  // populated from /api/config on init
+let focusedBotId    = null;        // which dynamic bot's data is shown (null = use tab/exchange)
+let allBots         = [];          // from /api/bots
+let newBotMode      = false;       // true = "+ New Bot" clicked, show fresh form ready to start
 
 // ── Per-exchange config persistence (in-memory only) ──────────
 // When you switch tabs we remember each exchange's form values
@@ -1094,37 +1156,54 @@ function switchExchange(exchangeKey) {
   // Save current form before switching
   snapshotForm();
   currentExchange = exchangeKey;
+  focusedBotId = null;   // tab switch clears dynamic-bot focus
+  newBotMode = false;
+  renderBotsBar();
 
   // Update tab UI
   document.getElementById("tab-binance").classList.toggle("active", exchangeKey === "binance");
   document.getElementById("tab-deribit").classList.toggle("active", exchangeKey === "deribit");
+  document.getElementById("tab-hyperliquid").classList.toggle("active", exchangeKey === "hyperliquid");
 
   // Show/hide right-side panels
   document.getElementById("panel-binance").classList.toggle("active", exchangeKey === "binance");
   document.getElementById("panel-deribit").classList.toggle("active", exchangeKey === "deribit");
+  const hlPanel = document.getElementById("panel-hyperliquid");
+  if (hlPanel) hlPanel.classList.toggle("active", exchangeKey === "hyperliquid");
 
   // Update header config card title + env keys note
-  const isDeribit = exchangeKey === "deribit";
-  document.getElementById("configHeader").textContent = isDeribit ? "Deribit Bot Configuration" : "Binance Bot Configuration";
-  document.getElementById("envKeysNote").textContent = isDeribit
-    ? "DERIBIT_CLIENT_ID, DERIBIT_CLIENT_SECRET  (+ DERIBIT_TESTNET=true for test.deribit.com)"
-    : "BINANCE_API_KEY, BINANCE_SECRET_KEY";
+  const isDeribit     = exchangeKey === "deribit";
+  const isHyperliquid = exchangeKey === "hyperliquid";
+  const headerLabel = isDeribit ? "Deribit Bot Configuration"
+                    : isHyperliquid ? "Hyperliquid Bot Configuration"
+                    : "Binance Bot Configuration";
+  document.getElementById("configHeader").textContent = headerLabel;
+  document.getElementById("envKeysNote").textContent =
+      isDeribit     ? "DERIBIT_CLIENT_ID, DERIBIT_CLIENT_SECRET  (+ DERIBIT_TESTNET=true for test.deribit.com)"
+    : isHyperliquid ? "HYPERLIQUID_WALLET_ADDRESS, HYPERLIQUID_PRIVATE_KEY  (+ HYPERLIQUID_TESTNET=true for testnet)"
+                    : "BINANCE_API_KEY, BINANCE_SECRET_KEY";
 
-  // Show 🧪 TESTNET badge only on Deribit tab when server has DERIBIT_TESTNET=true
-  document.getElementById("testnetBadge").style.display =
-    (isDeribit && serverConfig.deribitTestnet) ? "" : "none";
+  // Show 🧪 TESTNET badge — different label/visibility per tab
+  const badge = document.getElementById("testnetBadge");
+  if (isDeribit && serverConfig.deribitTestnet) {
+    badge.style.display = ""; badge.textContent = "🧪 DERIBIT TESTNET";
+  } else if (isHyperliquid && serverConfig.hyperliquidTestnet) {
+    badge.style.display = ""; badge.textContent = "🧪 HYPERLIQUID TESTNET";
+  } else if (!isDeribit && !isHyperliquid && serverConfig.binanceTestnet) {
+    badge.style.display = ""; badge.textContent = "🧪 BINANCE TESTNET";
+  } else {
+    badge.style.display = "none";
+  }
 
   // Show/hide hedge section (Binance only)
-  document.getElementById("hedgeSection").style.display = isDeribit ? "none" : "";
+  document.getElementById("hedgeSection").style.display = (isDeribit || isHyperliquid) ? "none" : "";
 
   // Filter price-source dropdown options based on exchange
   const ps = document.getElementById("priceSource");
   Array.from(ps.options).forEach(opt => {
-    if (isDeribit) {
-      opt.style.display = opt.value.startsWith("deribit") ? "" : "none";
-    } else {
-      opt.style.display = opt.value.startsWith("binance") ? "" : "none";
-    }
+    if (isDeribit)            opt.style.display = opt.value.startsWith("deribit") ? "" : "none";
+    else if (isHyperliquid)   opt.style.display = opt.value.startsWith("hyperliquid") ? "" : "none";
+    else                      opt.style.display = opt.value.startsWith("binance") ? "" : "none";
   });
 
   // Restore this exchange's saved form values
@@ -1134,7 +1213,8 @@ function switchExchange(exchangeKey) {
   onSourceChange();
 
   // Update report label
-  document.getElementById("reportExLabel").textContent = isDeribit ? "Deribit" : "Binance";
+  document.getElementById("reportExLabel").textContent =
+      isDeribit ? "Deribit" : isHyperliquid ? "Hyperliquid" : "Binance";
 
   // Re-render whatever state we have for this exchange
   renderActiveExchange();
@@ -1154,10 +1234,102 @@ ws.onmessage = (e) => {
     renderActiveExchange();
   }
   if (msg.type === "log") {
-    // Only append log if it matches current exchange
-    if (msg.data.exchangeKey === currentExchange) prependLog(msg.data);
+    // Show log if it's for the focused dynamic bot, or (no focus) the active exchange tab
+    const d = msg.data;
+    const match = focusedBotId
+      ? (d.botId === focusedBotId)
+      : (d.exchangeKey === currentExchange || d.botId === currentExchange);
+    if (match) prependLog(d);
   }
 };
+
+// ── 3-second polling fallback ──
+// Even if WebSocket misses an update, this keeps the UI fresh.
+async function pollState() {
+  try {
+    const res = await fetch("/api/status");
+    if (res.ok) {
+      const data = await res.json();
+      lastFullState = data;
+      renderActiveExchange();
+    }
+  } catch(e) { /* ignore — WS will catch up */ }
+  // Also refresh the dynamic bots bar
+  try {
+    const r = await fetch("/api/bots");
+    if (r.ok) { allBots = await r.json(); renderBotsBar(); }
+  } catch(e) {}
+}
+setInterval(pollState, 3000);
+setTimeout(pollState, 200);
+
+// ── Dynamic Running-Bots bar ──
+function renderBotsBar() {
+  const bar = document.getElementById("botsBar");
+  if (!bar) return;
+  // Remove old chips
+  bar.querySelectorAll(".bot-chip").forEach(e => e.remove());
+
+  const active = allBots.filter(b => b.running || !b.isLegacy);
+  const empty  = document.getElementById("botsBarEmpty");
+  if (empty) empty.style.display = active.length ? "none" : "";
+
+  const ICON = { binance:"🟦", deribit:"🟧", hyperliquid:"🟣" };
+  for (const b of active) {
+    const chip = document.createElement("div");
+    chip.className = "bot-chip";
+    const isFocused = (focusedBotId === b.botId);
+    chip.style.cssText = `display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:10px;font-size:12px;cursor:pointer;border:1px solid ${isFocused?'#4a9eff':'var(--border,#2a2a3a)'};background:${isFocused?'rgba(74,158,255,0.12)':'var(--surface-2,#1a1a26)'};`;
+    const dot = b.running ? "🟢" : "🔴";
+    const sym = b.symbol || b.priceSource || b.exchangeKey;
+    chip.innerHTML = `<span>${dot}</span><span>${ICON[b.exchangeKey]||""} <b>${sym}</b></span><span style="color:var(--muted,#888);font-size:10px;">${b.botId}</span>`;
+    chip.onclick = () => { focusedBotId = b.botId; newBotMode = false; renderBotsBar(); renderActiveExchange(); };
+
+    // Stop / delete buttons
+    if (b.running) {
+      const st = document.createElement("button");
+      st.textContent = "■";
+      st.title = "Stop this bot";
+      st.style.cssText = "border:none;background:#a33;color:#fff;border-radius:4px;width:18px;height:18px;font-size:10px;cursor:pointer;line-height:1;";
+      st.onclick = async (e) => { e.stopPropagation(); st.disabled = true;
+        await fetch("/api/stop", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ botId: b.botId }) });
+        setTimeout(pollState, 500);
+      };
+      chip.appendChild(st);
+    } else if (!b.isLegacy) {
+      const del = document.createElement("button");
+      del.textContent = "✕";
+      del.title = "Remove this bot";
+      del.style.cssText = "border:none;background:var(--surface-3,#333);color:#aaa;border-radius:4px;width:18px;height:18px;font-size:10px;cursor:pointer;line-height:1;";
+      del.onclick = async (e) => { e.stopPropagation();
+        await fetch("/api/bot/delete", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ botId: b.botId }) });
+        if (focusedBotId === b.botId) focusedBotId = null;
+        setTimeout(pollState, 300);
+      };
+      chip.appendChild(del);
+    }
+    bar.appendChild(chip);
+  }
+
+  // "+ New Bot" button — enters new-bot mode: fresh form, Start enabled
+  const add = document.createElement("div");
+  add.className = "bot-chip";
+  add.style.cssText = "display:flex;align-items:center;gap:4px;padding:6px 12px;border-radius:10px;font-size:12px;cursor:pointer;border:1px dashed #4a9eff;color:#4a9eff;font-weight:600;";
+  add.textContent = "+ New Bot";
+  add.onclick = () => {
+    focusedBotId = null;
+    newBotMode = true;
+    // Reset the start button explicitly
+    const sb = document.getElementById("startBtn");
+    const xb = document.getElementById("stopBtn");
+    if (sb) { sb.disabled = false; sb.textContent = "▶ Start Bot"; }
+    if (xb) { xb.disabled = true; }
+    renderBotsBar();
+    renderActiveExchange();
+    document.querySelector(".page")?.scrollIntoView({ behavior:"smooth" });
+  };
+  bar.appendChild(add);
+}
 
 // ══════════════════════════════════════════════════════════════
 //  SYMBOL DROPDOWN
@@ -1165,11 +1337,14 @@ ws.onmessage = (e) => {
 async function onSourceChange() {
   const source = document.getElementById("priceSource").value;
   const names  = {
-    binance_spot   : "Binance Spot",
-    binance_futures: "Binance USDT-M Futures",
-    binance_coinm  : "Binance Coin-M Futures",
-    deribit        : "Deribit Perpetuals",
-    deribit_spot   : "Deribit Spot",
+    binance_spot     : "Binance Spot",
+    binance_futures  : "Binance USDT-M Futures",
+    binance_coinm    : "Binance Coin-M Futures",
+    deribit          : "Deribit Perpetuals",
+    deribit_spot     : "Deribit Spot",
+    hyperliquid      : "Hyperliquid Perpetuals",
+    hyperliquid_spot : "Hyperliquid Spot",
+    hyperliquid_hip3 : "Hyperliquid HIP-3 (coming soon)",
   };
   document.getElementById("exchangeName").value = names[source] || "—";
   selectedSymbol = "";
@@ -1282,6 +1457,59 @@ async function loadSymbols(source) {
       renderDropdown(allSymbols.slice(0, 80));
       const envTag = serverConfig.deribitTestnet ? " 🧪 TESTNET" : "";
       document.getElementById("symbolInput").placeholder = `Search ${allSymbols.length} Deribit spot pairs${envTag}...`;
+      return;
+
+    } else if (source === "hyperliquid" || source === "hyperliquid_spot") {
+      // ── HYPERLIQUID PERPS / SPOT ──
+      // Hyperliquid exposes a single POST /info endpoint with body
+      // {"type":"meta"} for perps and {"type":"spotMeta"} for spot.
+      // Symbols come back as a "universe" array.
+      const isSpot = source === "hyperliquid_spot";
+      const host   = serverConfig.hyperliquidTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+      const all = [];
+      try {
+        const r = await fetch(`https://${host}/info`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: isSpot ? "spotMeta" : "meta" }),
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        if (isSpot && j.tokens && j.universe) {
+          // Spot universe: { name: "@1", tokens: [base_idx, quote_idx], index }
+          // tokens[]: [{ name, szDecimals, weiDecimals, index, ... }, ...]
+          for (const u of j.universe) {
+            const baseIdx = u.tokens[0], quoteIdx = u.tokens[1];
+            const base  = j.tokens[baseIdx]?.name;
+            const quote = j.tokens[quoteIdx]?.name;
+            if (base && quote) {
+              all.push({ ccxt: `${base}/${quote}`, native: u.name });
+            }
+          }
+        } else if (!isSpot && j.universe) {
+          // Perp universe: [{ name, szDecimals, maxLeverage, ... }, ...]
+          for (const u of j.universe) {
+            if (u.isDelisted) continue;
+            all.push({ ccxt: `${u.name}/USDC:USDC`, native: u.name + "-PERP" });
+          }
+        }
+      } catch(e) { console.warn("Hyperliquid fetch failed:", e.message); }
+
+      allSymbols = all.sort((a,b) => a.native.localeCompare(b.native));
+      symbolsLoaded = true;
+      if (allSymbols.length === 0) {
+        dd.innerHTML = `<div class="sym-item msg">No Hyperliquid ${isSpot ? "spot" : "perp"} markets found. ${serverConfig.hyperliquidTestnet ? "(testnet)" : ""} Check network.</div>`;
+        return;
+      }
+      renderDropdown(allSymbols.slice(0, 80));
+      const envTag = serverConfig.hyperliquidTestnet ? " 🧪 TESTNET" : "";
+      document.getElementById("symbolInput").placeholder = `Search ${allSymbols.length} Hyperliquid ${isSpot ? "spot pairs" : "perpetuals"}${envTag}...`;
+      return;
+
+    } else if (source === "hyperliquid_hip3") {
+      // Placeholder: HIP-3 markets need a dex-name picker before listing symbols
+      dd.innerHTML = `<div class="sym-item msg">HIP-3 markets are not yet supported in this UI. Coming soon.</div>`;
+      allSymbols = []; symbolsLoaded = true;
       return;
 
     } else {
@@ -1420,6 +1648,47 @@ async function refreshDeribitPortfolio() {
   }
 }
 
+async function refreshHyperliquidPortfolio() {
+  const btn = document.getElementById("hlPortBtn");
+  btn.textContent = "Loading..."; btn.disabled = true;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  try {
+    const res  = await fetch("/api/hl_portfolio");
+    const data = await res.json();
+    if (!res.ok) {
+      set("hlLastUpdated", "Error: " + (data.error || "unknown"));
+      return;
+    }
+    set("hlPerpFree",  "$" + data.perpFree.toFixed(2));
+    set("hlPerpTotal", "$" + data.perpTotal.toFixed(2));
+    set("hlSpotUsdc",  "$" + data.spotUsdc.toFixed(2));
+    set("hlPosCount",  String(data.positions.length));
+    set("hlCombined",  "$" + data.combined.toFixed(2));
+
+    // Spot tokens line
+    const st = document.getElementById("hlSpotTokens");
+    if (st) {
+      st.innerHTML = data.spotTokens.length
+        ? "Spot: " + data.spotTokens.map(t => `<b>${t.coin}</b> ${t.total.toFixed(4)}`).join("  ·  ")
+        : "Spot: (no tokens)";
+    }
+    // Positions line
+    const pp = document.getElementById("hlPositions");
+    if (pp) {
+      pp.innerHTML = data.positions.length
+        ? data.positions.map(p =>
+            `<span style="color:${p.uPnl>=0?'var(--green)':'var(--red)'}">📍 ${p.coin} ${p.side} ${p.size} @ $${p.entryPx.toFixed(4)} | uPnL ${p.uPnl>=0?'+':''}$${p.uPnl.toFixed(4)}</span>`
+          ).join("<br>")
+        : '<span style="color:var(--muted,#888)">No open positions</span>';
+    }
+    set("hlLastUpdated", `${data.env} · Updated: ${new Date().toLocaleTimeString()}`);
+  } catch(err) {
+    set("hlLastUpdated", "Fetch error: " + err.message);
+  } finally {
+    btn.textContent = "↻ Refresh"; btn.disabled = false;
+  }
+}
+
 // ══════════════════════════════════════════════════════════════
 //  START / STOP
 // ══════════════════════════════════════════════════════════════
@@ -1457,10 +1726,14 @@ async function startBot() {
       alert("Error: " + data.error);
       btn.disabled = false; btn.textContent = "▶ Start Bot";
     } else {
+      // Focus the newly-created bot so its data shows immediately
+      if (data.botId) focusedBotId = data.botId;
+      newBotMode = false;
       document.getElementById("upperLimitPreview").value = "$" + data.upperLimit;
       document.getElementById("lowerLimitPreview").value = "$" + data.lowerLimit;
       document.getElementById("stopBtn").disabled = false;
       loadReport();
+      setTimeout(pollState, 400);
     }
   } catch(err) {
     alert("Network error: " + err.message);
@@ -1470,10 +1743,16 @@ async function startBot() {
 
 async function stopBot() {
   document.getElementById("stopBtn").disabled = true;
+  // Stop the focused dynamic bot if one is selected, else the legacy slot
+  const target = focusedBotId || currentExchange;
   try {
-    await fetch(`/api/stop?exchange=${currentExchange}`, { method:"POST" });
+    await fetch("/api/stop", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ botId: target }),
+    });
     document.getElementById("startBtn").disabled = false;
     document.getElementById("startBtn").textContent = "▶ Start Bot";
+    setTimeout(pollState, 500);
   } catch(err) { alert(err.message); }
 }
 
@@ -1482,17 +1761,45 @@ async function stopBot() {
 //  Picks the active exchange's slice from lastFullState and re-renders
 // ══════════════════════════════════════════════════════════════
 function renderActiveExchange() {
-  const state = lastFullState[currentExchange] || {};
+  let state;
+  if (newBotMode) {
+    // Fresh form: not tied to any running bot. Force a "stopped/ready" view
+    // so the Start button is enabled and the form is blank.
+    state = { running: false, _newBot: true };
+  } else if (focusedBotId && lastFullState[focusedBotId]) {
+    state = lastFullState[focusedBotId];
+  } else {
+    state = lastFullState[currentExchange] || {};
+  }
   renderState(state);
 
-  // Update top-tab dots
-  document.getElementById("dot-binance").classList.toggle("live", !!lastFullState.binance?.running);
-  document.getElementById("dot-deribit").classList.toggle("live", !!lastFullState.deribit?.running);
+  // Update top-tab dots — a tab is "live" if its legacy slot OR any dynamic
+  // bot of that exchange is running
+  const liveByExch = { binance:false, deribit:false, hyperliquid:false };
+  for (const [k, v] of Object.entries(lastFullState)) {
+    if (v && v.running && v.exchangeKey) liveByExch[v.exchangeKey] = true;
+  }
+  document.getElementById("dot-binance").classList.toggle("live", liveByExch.binance);
+  document.getElementById("dot-deribit").classList.toggle("live", liveByExch.deribit);
+  document.getElementById("dot-hyperliquid").classList.toggle("live", liveByExch.hyperliquid);
 }
 
 function renderState(state) {
   const dot = document.getElementById("statusDot");
   const txt = document.getElementById("statusText");
+
+  if (state._newBot) {
+    // Fresh "new bot" form — ready to configure & start
+    dot.className = "status-dot stopped"; txt.textContent = "NEW BOT"; txt.style.color = "var(--muted,#888)";
+    document.getElementById("startBtn").disabled = false;
+    document.getElementById("startBtn").textContent = "▶ Start Bot";
+    document.getElementById("stopBtn").disabled  = true;
+    document.getElementById("headerSymbol").textContent = "Configure new bot";
+    document.getElementById("livePrice").textContent      = "—";
+    document.getElementById("entryPriceStat").textContent = "—";
+    return;  // don't overwrite with any running bot's data
+  }
+
   if (state.running) {
     dot.className = "status-dot live"; txt.textContent = "LIVE"; txt.style.color = "var(--green)";
     document.getElementById("startBtn").disabled = true;
@@ -1527,7 +1834,8 @@ function renderState(state) {
 
     const rtEl = document.getElementById("roundTripsCount");
     rtEl.textContent = rt;
-    rtEl.title = `min(buys ${s.totalBuys}, sells ${s.totalSells}) = ${rt}`;
+    rtEl.title = `${s.totalBuys} buys, ${s.totalSells} sells, ${rt} completed RTs, ${s.pendingLegs || 0} pending`;
+    document.getElementById("pendingRtCount").textContent = s.pendingLegs ?? 0;
 
     document.getElementById("totalBuys").textContent  = s.totalBuys  ?? 0;
     document.getElementById("totalSells").textContent = s.totalSells ?? 0;
@@ -1536,6 +1844,7 @@ function renderState(state) {
   } else {
     document.getElementById("livePnl").textContent = "—";
     document.getElementById("roundTripsCount").textContent = "0";
+    document.getElementById("pendingRtCount").textContent = "0";
     document.getElementById("totalBuys").textContent = "0";
     document.getElementById("totalSells").textContent = "0";
     document.getElementById("buyAvg").textContent = "—";
@@ -1546,6 +1855,9 @@ function renderState(state) {
   document.getElementById("orderBadge").textContent = (state.openOrders||[]).length;
   renderOrdersTable(state.openOrders || []);
   renderGridVisual(state.openOrders || [], state.lastPrice);
+
+  // Recent Round Trips (live, real-time)
+  renderLiveRoundTrips(state.completedRoundTrips || []);
 
   // Logs
   const feed = document.getElementById("logFeed");
@@ -1586,6 +1898,48 @@ function renderGridVisual(orders, price) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  LIVE ROUND TRIPS (real-time panel)
+//  Renders the most recent completed round trips with PnL.
+//  Updates whenever the bot state broadcasts (every 5 sec or on event).
+// ══════════════════════════════════════════════════════════════
+function renderLiveRoundTrips(rts) {
+  const tbody = document.getElementById("liveRtBody");
+  const totalEl = document.getElementById("liveRtTotal");
+
+  // Total PnL across ALL completed RTs
+  const total = rts.reduce((s, rt) => s + (rt.pnl || 0), 0);
+  totalEl.textContent = (total >= 0 ? "+$" : "-$") + Math.abs(total).toFixed(4);
+  totalEl.style.color = total >= 0 ? "var(--green)" : "var(--red)";
+
+  if (!rts.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-td">No round trips yet — waiting for first target fill</td></tr>`;
+    return;
+  }
+
+  // Show the 20 most recent
+  const recent = rts.slice(0, 20);
+  tbody.innerHTML = recent.map((rt, i) => {
+    const isPositive = rt.pnl >= 0;
+    const pnlClass   = isPositive ? "pos-text" : "sell-text";
+    const pnlSign    = isPositive ? "+" : "";
+    const sideText   = rt.openSide === "buy"
+      ? `<span class="buy-text">BUY→SELL</span>`
+      : `<span class="sell-text">SELL→BUY</span>`;
+    const closeTime  = new Date(rt.closeTs).toLocaleTimeString();
+    const rowBg      = i % 2 === 0 ? "" : "background:var(--surface-2);";
+    return `<tr style="${rowBg}">
+      <td style="font-weight:700;color:var(--brand);">#${rts.length - i}</td>
+      <td>${sideText}</td>
+      <td class="buy-text">$${rt.buyPrice.toFixed(4)}</td>
+      <td class="sell-text">$${rt.sellPrice.toFixed(4)}</td>
+      <td>${rt.qty}</td>
+      <td class="${pnlClass}" style="font-weight:800;">${pnlSign}$${Math.abs(rt.pnl).toFixed(4)}</td>
+      <td style="color:var(--muted);">${closeTime}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ══════════════════════════════════════════════════════════════
 //  ORDERS TABLE
 // ══════════════════════════════════════════════════════════════
 function renderOrdersTable(orders) {
@@ -1620,36 +1974,58 @@ function setReportPeriod(period, btn) {
   if (period !== "custom") loadReport();
 }
 
-async function loadReport() {
-  let url = `/api/report?exchange=${currentExchange}&period=${currentPeriod}`;
+// Build the report URL params (used by both loadReport and downloadCsv)
+function reportQueryString() {
+  let qs = `exchange=${currentExchange}&period=${currentPeriod}`;
   if (currentPeriod === "custom") {
     const from = document.getElementById("fromDate").value;
     const to   = document.getElementById("toDate").value;
-    if (!from || !to) return;
-    url += `&from=${new Date(from).getTime()}&to=${new Date(to).getTime() + 86400000}`;
+    if (!from || !to) return null;
+    qs += `&from=${new Date(from).getTime()}&to=${new Date(to).getTime() + 86400000}`;
   }
+  return qs;
+}
+
+async function loadReport() {
+  const qs = reportQueryString();
+  if (!qs) return;
   try {
-    const res  = await fetch(url);
+    const res  = await fetch(`/api/report?${qs}`);
     const data = await res.json();
     renderReport(data);
   } catch(err) { console.error("Report error:", err); }
+}
+
+// Trigger a CSV file download in the browser for the currently-selected period.
+function downloadCsv() {
+  const qs = reportQueryString();
+  if (!qs) { alert("Please pick a custom date range first."); return; }
+  // Anchor-based download — browser handles the response's Content-Disposition.
+  const a = document.createElement("a");
+  a.href = `/api/csv?${qs}`;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function renderReport(data) {
   const pnl      = data.pnl      || 0;
   const rt       = data.count    || 0;
   const perRtPnl = data.perRtPnl || 0;
+  const avgSpread = data.avgSpread || 0;
   const isDeribit = currentExchange === "deribit";
 
   const pnlEl = document.getElementById("rPnl");
-  pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(4) + " USDT";
+  pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(4);
   pnlEl.className   = "rep-value " + (pnl > 0 ? "pos" : pnl < 0 ? "neg" : "");
 
   const rtEl = document.getElementById("rCount");
   rtEl.textContent = rt;
-  rtEl.title = `min(${data.periodBuys} buys, ${data.periodSells} sells) = ${rt}`;
+  rtEl.title = `${data.periodBuys || 0} buys, ${data.periodSells || 0} sells in period`;
 
   document.getElementById("rPerRt").textContent  = perRtPnl ? `+$${perRtPnl.toFixed(4)}` : "—";
+  document.getElementById("rAvgSpread").textContent = avgSpread ? `$${avgSpread.toFixed(4)}` : "—";
 
   // Show/hide fee/rebate/net cells based on exchange
   document.getElementById("feesStat").style.display = isDeribit ? "" : "none";
@@ -1679,12 +2055,14 @@ function renderReport(data) {
     const dur       = formatDuration(rt.durationMs);
     const closeTime = new Date(rt.closeTs).toLocaleTimeString();
     const rowBg     = i % 2 === 0 ? "" : "background:var(--surface-2);";
+    const pnlClass  = rt.pnl >= 0 ? "pos-text" : "sell-text";
+    const pnlSign   = rt.pnl >= 0 ? "+" : "";
     return `<tr style="${rowBg}">
       <td class="${rt.openSide==="BUY"?"buy-text":"sell-text"}">${rt.openSide}</td>
       <td class="buy-text">$${rt.buyPrice.toFixed(4)}</td>
       <td class="sell-text">$${rt.sellPrice.toFixed(4)}</td>
       <td>${rt.qty}</td>
-      <td class="pos-text">+${rt.pnl.toFixed(4)}</td>
+      <td class="${pnlClass}">${pnlSign}${rt.pnl.toFixed(4)}</td>
       <td style="color:var(--muted);">${dur}</td>
       <td style="color:var(--muted);">${closeTime}</td>
     </tr>`;

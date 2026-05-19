@@ -14,6 +14,10 @@ const WebSocket = require("ws");
 const ccxt      = require("ccxt");
 const https     = require("https");
 const crypto    = require("crypto");
+// Native Hyperliquid SDK — used as fallback because CCXT's Hyperliquid
+// integration has known bugs with fetchOpenOrders and cancelOrder.
+const hl        = require("@nktkas/hyperliquid");
+const { privateKeyToAccount } = require("viem/accounts");
 
 const app    = express();
 const server = http.createServer(app);
@@ -28,25 +32,31 @@ app.use(express.static(__dirname));
 //  Each exchange has its own isolated bot instance.
 //  bots.binance and bots.deribit can run independently.
 // ============================================================
-function makeFreshBot(exchangeKey) {
+function makeFreshBot(exchangeKey, botId) {
   return {
+    botId,
     exchangeKey,
+    label               : null,
     running             : false,
     config              : null,
     exchange            : null,
     openOrders          : [],
     entryPrice          : null,
     lastPrice           : null,
+    bestBid             : null,
+    bestAsk             : null,
     upperLimit          : null,
     lowerLimit          : null,
     fillHistory         : [],
     pendingRoundTrips   : [],
     completedRoundTrips : [],
+    recentlyCancelled   : {},
     logs                : [],
     loopTimer           : null,
     loopCount           : 0,
     lastNotifiedRt      : 0,
     stats               : null,
+    hlCache             : null,
     hedge : {
       enabled          : false,
       futuresExchange  : null,
@@ -61,14 +71,38 @@ function makeFreshBot(exchangeKey) {
   };
 }
 
+// ── DYNAMIC BOT REGISTRY ──────────────────────────────────────────────
+// Keyed by unique botId. Run many bots at once (HYPE perp + BTC perp +
+// ETH spot, etc). The 3 legacy keys remain as default first-bot slots
+// for backward compatibility (Binance hedge code, Telegram menus).
 const bots = {
-  binance : makeFreshBot("binance"),
-  deribit : makeFreshBot("deribit"),
+  binance     : makeFreshBot("binance",     "binance"),
+  deribit     : makeFreshBot("deribit",     "deribit"),
+  hyperliquid : makeFreshBot("hyperliquid", "hyperliquid"),
 };
 
+let botIdCounter = 1;
+function createBotInstance(exchangeKey, label) {
+  const botId = `${exchangeKey}_${++botIdCounter}`;
+  const bot = makeFreshBot(exchangeKey, botId);
+  bot.label = label || botId;
+  bots[botId] = bot;
+  return bot;
+}
+function removeBotInstance(botId) {
+  if (botId === "binance" || botId === "deribit" || botId === "hyperliquid") {
+    bots[botId] = makeFreshBot(botId, botId);
+  } else {
+    delete bots[botId];
+  }
+}
+function listBots() { return Object.values(bots); }
+
+
 const EXCHANGE_TAG = {
-  binance : "🟦 Binance",
-  deribit : "🟧 Deribit",
+  binance     : "🟦 Binance",
+  deribit     : "🟧 Deribit",
+  hyperliquid : "🟣 Hyperliquid",
 };
 
 // ============================================================
@@ -118,12 +152,72 @@ function tgAck(queryId, toast) {
   return tgPost("answerCallbackQuery", {callback_query_id:queryId, text:toast||""});
 }
 
+// ── Telegram sendDocument (multipart/form-data, no external deps) ──
+// Telegram's sendDocument requires multipart/form-data when uploading a
+// file from memory. We build the multipart body manually with a unique
+// boundary, then POST it with Node's https module.
+function tgSendDocument(chatId, filename, contentBuffer, caption) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const boundary = "----GridBot" + crypto.randomBytes(16).toString("hex");
+    const CRLF = "\r\n";
+
+    // Build multipart body as Buffer (because file content is binary)
+    const parts = [];
+    const pushField = (name, value) => {
+      parts.push(Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`));
+    };
+    pushField("chat_id", String(chatId));
+    if (caption) pushField("caption", caption);
+    if (caption) pushField("parse_mode", "HTML");
+
+    // File part
+    parts.push(Buffer.from(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="document"; filename="${filename}"${CRLF}` +
+      `Content-Type: text/csv${CRLF}${CRLF}`
+    ));
+    parts.push(Buffer.isBuffer(contentBuffer) ? contentBuffer : Buffer.from(contentBuffer));
+    parts.push(Buffer.from(CRLF));
+
+    // Closing boundary
+    parts.push(Buffer.from(`--${boundary}--${CRLF}`));
+
+    const body = Buffer.concat(parts);
+
+    const req = https.request({
+      host: "api.telegram.org",
+      path: `/bot${token}/sendDocument`,
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+        "Content-Length": body.length,
+        "User-Agent": "node",
+      },
+    }, (res) => {
+      let raw = "";
+      res.on("data", (c) => raw += c);
+      res.on("end", () => {
+        try { resolve(JSON.parse(raw)); }
+        catch (e) { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.write(body);
+    req.end();
+  });
+}
+
 // ── Telegram menus ──────────────────────────────────────────
 function exchangeSelectorMenu(action) {
   return [
     [
       {text:`🟦 Binance ${bots.binance.running?"🟢":"🔴"}`, callback_data:`pick_binance_${action}`},
       {text:`🟧 Deribit ${bots.deribit.running?"🟢":"🔴"}`, callback_data:`pick_deribit_${action}`},
+    ],
+    [
+      {text:`🟣 Hyperliquid ${bots.hyperliquid.running?"🟢":"🔴"}`, callback_data:`pick_hyperliquid_${action}`},
     ],
     [{text:"⬅ Back to Menu", callback_data:"main_menu"}],
   ];
@@ -133,7 +227,8 @@ function mainMenu() {
   return [
     [{text:"📊 Status",      callback_data:"act_status"   },{text:"💼 Portfolio",  callback_data:"act_portfolio"}],
     [{text:"🔄 Restart Bot", callback_data:"act_restart"  },{text:"⏹ Stop Bot",   callback_data:"act_stop"     }],
-    [{text:"📈 PnL Report",  callback_data:"act_report"   },{text:"❓ Help",       callback_data:"act_help"     }],
+    [{text:"📈 PnL Report",  callback_data:"act_report"   },{text:"📥 Download CSV", callback_data:"act_csv"  }],
+    [{text:"❓ Help",         callback_data:"act_help"     }],
   ];
 }
 
@@ -143,7 +238,7 @@ function exchangeMenu(exchangeKey) {
   return [
     [{text:`📊 ${tag} Status`, callback_data:`do_status_${e}`}, {text:`💼 Portfolio`, callback_data:`do_portfolio_${e}`}],
     [{text:`🔄 Restart`, callback_data:`do_restart_${e}`}, {text:`⏹ Stop`, callback_data:`do_stop_${e}`}],
-    [{text:`📈 PnL Report`, callback_data:`do_report_${e}`}],
+    [{text:`📈 PnL Report`, callback_data:`do_report_${e}`}, {text:`📥 CSV`, callback_data:`do_csv_${e}`}],
     [{text:"⬅ Back", callback_data:"main_menu"}],
   ];
 }
@@ -181,6 +276,7 @@ function tgHelpText() {
 /status     Live bot status (pick exchange)
 /portfolio  Portfolio (pick exchange)
 /report     PnL report (pick exchange)
+/csv        Download 24h CSV (pick exchange)
 /restart    Restart with new params
 /stop       Stop a bot
 
@@ -224,7 +320,10 @@ Symbol  : <code>${cfg?.symbol||"—"}</code>
 RTs     : <code>${r.count}</code>
 PnL/RT  : <code>+$${(r.perRtPnl||0).toFixed(4)}</code>
 Gross   : <code>$${(r.pnl||0).toFixed(4)}</code>
-${feesSection}Buys    : <code>${r.periodBuys}</code>   Sells: <code>${r.periodSells}</code>`;
+Avg spread : <code>$${(r.avgSpread||0).toFixed(4)}</code>  (target: <code>$${cfg?.targetSpread||0}</code>)
+${feesSection}Buys    : <code>${r.periodBuys}</code>   Sells: <code>${r.periodSells}</code>
+
+Tap 📥 CSV for full 24h export.`;
 }
 
 // ============================================================
@@ -235,9 +334,11 @@ let _portfolioTsLastFetch = 0;
 async function getPortfolioTsOffset() {
   const now = Date.now();
   if (now - _portfolioTsLastFetch < 60_000) return _portfolioTsOffset;
+  const binanceTestnet = String(process.env.BINANCE_TESTNET || "").toLowerCase() === "true";
+  const host = binanceTestnet ? "testnet.binance.vision" : "api.binance.com";
   try {
     const serverTime = await new Promise((resolve, reject) => {
-      https.get({ host:"api.binance.com", path:"/api/v3/time", headers:{"User-Agent":"node"} }, (res) => {
+      https.get({ host, path:"/api/v3/time", headers:{"User-Agent":"node"} }, (res) => {
         let raw=""; res.on("data",c=>raw+=c);
         res.on("end",()=>{ try{resolve(JSON.parse(raw).serverTime)}catch(e){reject(e)} });
       }).on("error", reject);
@@ -250,16 +351,21 @@ async function getPortfolioTsOffset() {
 async function binanceTs() { return Date.now() + await getPortfolioTsOffset(); }
 
 function fapiSignedGet(path, apiKey, secretKey, ts) {
+  const binanceTestnet = String(process.env.BINANCE_TESTNET || "").toLowerCase() === "true";
+  const host = binanceTestnet ? "testnet.binancefuture.com" : "fapi.binance.com";
   return new Promise((resolve, reject) => {
     const q=`timestamp=${ts}&recvWindow=60000`;
     const sig=crypto.createHmac("sha256",secretKey).update(q).digest("hex");
-    https.get({host:"fapi.binance.com",path:`${path}?${q}&signature=${sig}`,headers:{"X-MBX-APIKEY":apiKey,"User-Agent":"node"}},
+    https.get({host, path:`${path}?${q}&signature=${sig}`,headers:{"X-MBX-APIKEY":apiKey,"User-Agent":"node"}},
       (res)=>{let raw="";res.on("data",c=>raw+=c);res.on("end",()=>{try{resolve(JSON.parse(raw))}catch(e){reject(new Error(raw.slice(0,200)))}});
     }).on("error",reject);
   });
 }
 
 function dapiSignedRequest(path, apiKey, secretKey, tsOverride) {
+  // NOTE: Coin-M (dapi) has NO Binance testnet, so we always go to production
+  // here even when BINANCE_TESTNET=true. The fapiSignedGet path uses testnet
+  // when applicable; this one cannot.
   return new Promise((resolve, reject) => {
     const timestamp = tsOverride || Date.now();
     const queryStr  = `timestamp=${timestamp}&recvWindow=60000`;
@@ -498,6 +604,111 @@ ${posLines}
   }
 }
 
+// ── Hyperliquid portfolio (uses CCXT fetchBalance + fetchPositions) ──
+async function tgHyperliquidPortfolioText() {
+  const walletAddr = process.env.HYPERLIQUID_WALLET_ADDRESS;
+  const privateKey = process.env.HYPERLIQUID_PRIVATE_KEY;
+  if (!walletAddr || !privateKey) return "❌ HYPERLIQUID_WALLET_ADDRESS / HYPERLIQUID_PRIVATE_KEY missing in .env";
+
+  try {
+    const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+
+    // Build two exchange instances — one for perps, one for spot — because
+    // Hyperliquid uses separate "clearinghouse" endpoints for each.
+    const exPerps = new ccxt.hyperliquid({
+      walletAddress: walletAddr, privateKey,
+      options: { defaultType: "swap" },
+    });
+    const exSpot = new ccxt.hyperliquid({
+      walletAddress: walletAddr, privateKey,
+      options: { defaultType: "spot" },
+    });
+    if (useTestnet) { exPerps.setSandboxMode(true); exSpot.setSandboxMode(true); }
+    await exPerps.loadMarkets();
+
+    // ── PERPS USDC balance ──
+    const perpBal = await exPerps.fetchBalance().catch(() => ({}));
+    let perpFree = 0, perpTotal = 0;
+    if (perpBal.USDC) {
+      perpFree  = parseFloat(perpBal.USDC.free  || 0);
+      perpTotal = parseFloat(perpBal.USDC.total || 0);
+    } else if (perpBal.total?.USDC) {
+      perpTotal = parseFloat(perpBal.total.USDC || 0);
+      perpFree  = parseFloat(perpBal.free?.USDC || perpTotal);
+    }
+
+    // ── SPOT balances (all tokens, not just USDC) ──
+    const spotBal = await exSpot.fetchBalance().catch((e) => { console.warn("[HL spot bal]", e.message); return {}; });
+    const spotTokens = [];   // [{ ccy, free, total }]
+    if (spotBal.total) {
+      for (const [ccy, total] of Object.entries(spotBal.total)) {
+        const t = parseFloat(total || 0);
+        if (t > 0) {
+          spotTokens.push({
+            ccy,
+            free  : parseFloat(spotBal.free?.[ccy] || 0),
+            total : t,
+          });
+        }
+      }
+    }
+
+    // ── Open perp positions ──
+    let positions = [];
+    try { positions = await exPerps.fetchPositions(); } catch(e) {}
+    let posLines = "";
+    const openPositions = positions.filter(p => parseFloat(p.contracts || p.info?.szi || 0) !== 0);
+    if (openPositions.length > 0) {
+      for (const p of openPositions) {
+        const sz   = parseFloat(p.contracts || p.info?.szi || 0);
+        const side = sz > 0 ? "LONG" : "SHORT";
+        const uPnl = parseFloat(p.unrealizedPnl ?? p.info?.unrealizedPnl ?? 0);
+        const mark = parseFloat(p.markPrice ?? p.info?.markPx ?? 0);
+        posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+      }
+    } else {
+      posLines = "  (no open positions)\n";
+    }
+
+    // ── Format spot section + compute spot USDC value ──
+    let spotLines = "";
+    let spotUsdcTotal = 0;
+    if (spotTokens.length === 0) {
+      spotLines = "  (no spot balances)\n";
+    } else {
+      for (const t of spotTokens) {
+        spotLines += `  <code>${t.ccy.padEnd(6)}</code> Free: <b>${t.free.toFixed(4)}</b> | Total: <b>${t.total.toFixed(4)}</b>\n`;
+        if (t.ccy === "USDC") spotUsdcTotal += t.total;
+      }
+    }
+    const combinedUsdc = perpTotal + spotUsdcTotal;
+
+    const envTag = useTestnet ? "🧪 TESTNET" : "🟢 MAINNET";
+    return `<b>💼 🟣 Hyperliquid Portfolio</b> ${envTag}
+<i>${new Date().toLocaleString()}</i>
+Wallet: <code>${walletAddr.slice(0,10)}...${walletAddr.slice(-6)}</code>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 <b>Perps Account</b>
+  Free  USDC: <b>$${perpFree.toFixed(2)}</b>
+  Total USDC: <b>$${perpTotal.toFixed(2)}</b>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🪙 <b>Spot Account</b>
+${spotLines}  Spot USDC value: <b>$${spotUsdcTotal.toFixed(2)}</b>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>Open Perp Positions</b>
+${posLines}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💵 <b>COMBINED USDC: $${combinedUsdc.toFixed(2)}</b>
+   (Perps $${perpTotal.toFixed(2)} + Spot $${spotUsdcTotal.toFixed(2)})`;
+
+  } catch(err) {
+    return `❌ Hyperliquid portfolio fetch failed:\n<code>${err.message}</code>`;
+  }
+}
+
 // ============================================================
 //  RESTART HANDLER (per exchange)
 // ============================================================
@@ -534,12 +745,14 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     await exchange.loadMarkets();
     if (exchangeKey === "binance") await syncExchangeTime(exchange);
 
-    const entryPrice = await getCurrentPrice(exchange, cfg.symbol);
+    const tick       = await getTickerSnapshot(exchange, cfg.symbol);
+    const entryPrice = tick.last;
     const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
     const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
 
     Object.assign(bot, {
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
+      bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true, openOrders: [],
       fillHistory: [], pendingRoundTrips: [], completedRoundTrips: [],
       logs: [], loopCount: 0, lastNotifiedRt: 0,
@@ -554,7 +767,7 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     }
 
     await maintainGrid(exchangeKey, entryPrice);
-    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), 5000);
+    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), 6000);
     log(exchangeKey, `Telegram restart: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
     broadcast("state", buildStateSnapshot());
 
@@ -647,6 +860,7 @@ async function handleTgUpdate(update) {
       case "/status":    await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("status")); break;
       case "/portfolio": await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("portfolio")); break;
       case "/report":    await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("report")); break;
+      case "/csv":       await tgSend(fromId, "Pick an exchange for 24h CSV:", exchangeSelectorMenu("csv")); break;
       case "/restart":   await tgSend(fromId, "Pick an exchange to restart:", exchangeSelectorMenu("restart")); break;
       case "/stop":      await tgSend(fromId, "Pick an exchange to stop:", exchangeSelectorMenu("stop")); break;
       case "/help":      await tgSend(fromId, tgHelpText(), mainMenu()); break;
@@ -666,7 +880,10 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
       return;
     case "portfolio": {
       await tgEdit(chatId, msgId, `⏳ Fetching ${tag} balances...`, null);
-      const txt = exchangeKey === "binance" ? await tgBinancePortfolioText() : await tgDeribitPortfolioText();
+      let txt;
+      if (exchangeKey === "binance")          txt = await tgBinancePortfolioText();
+      else if (exchangeKey === "hyperliquid") txt = await tgHyperliquidPortfolioText();
+      else                                    txt = await tgDeribitPortfolioText();
       await tgEdit(chatId, msgId, txt, exchangeMenu(exchangeKey));
       return;
     }
@@ -675,6 +892,25 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
       if (exchangeKey === "deribit") await refreshDeribitFees().catch(()=>{});
       await tgEdit(chatId, msgId, tgReportText(exchangeKey), exchangeMenu(exchangeKey));
       return;
+    case "csv": {
+      await tgEdit(chatId, msgId, `⏳ Building 24h CSV for ${tag}...`, null);
+      if (exchangeKey === "deribit") await refreshDeribitFees().catch(()=>{});
+      const now    = Date.now();
+      const fromTs = now - 24 * 60 * 60 * 1000;
+      const csv    = buildCsvReport(exchangeKey, fromTs, now);
+      const dateStr = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+      const filename = `gridbot_${exchangeKey}_24h_${dateStr}.csv`;
+      const r        = getRoundTripReport(exchangeKey, fromTs, now);
+      const caption  = `📥 <b>${tag} 24h CSV Report</b>\n\nRound trips: <b>${r.count}</b>\nTotal PnL: <b>$${r.pnl.toFixed(4)}</b>\nSymbol: <code>${bot.config?.symbol || "—"}</code>`;
+      const result   = await tgSendDocument(chatId, filename, Buffer.from(csv, "utf8"), caption);
+      if (result?.ok) {
+        await tgEdit(chatId, msgId, `✅ ${tag} CSV sent.`, exchangeMenu(exchangeKey));
+      } else {
+        const err = result?.description || "unknown";
+        await tgEdit(chatId, msgId, `❌ Failed to send CSV: <code>${err}</code>`, exchangeMenu(exchangeKey));
+      }
+      return;
+    }
     case "stop":
       if (!bot.running) {
         await tgEdit(chatId, msgId, `ℹ️ ${tag} is already stopped.`, exchangeMenu(exchangeKey));
@@ -707,6 +943,7 @@ function startTelegramPoller() {
     {command:"status",    description:"Bot status (pick exchange)"},
     {command:"portfolio", description:"Portfolio (pick exchange)"},
     {command:"report",    description:"PnL report (pick exchange)"},
+    {command:"csv",       description:"Download 24h CSV (pick exchange)"},
     {command:"restart",   description:"Restart bot (pick exchange)"},
     {command:"stop",      description:"Stop bot (pick exchange)"},
     {command:"help",      description:"Help"},
@@ -740,13 +977,19 @@ function broadcast(type, data) {
   wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
-function log(exchangeKey, msg, level = "info") {
-  const tag = EXCHANGE_TAG[exchangeKey] || exchangeKey;
-  const entry = { exchangeKey, msg: `[${tag}] ${msg}`, level, ts: new Date().toISOString() };
-  bots[exchangeKey].logs.unshift(entry);
-  if (bots[exchangeKey].logs.length > 200) bots[exchangeKey].logs.pop();
+function log(botId, msg, level = "info") {
+  const bot = bots[botId];
+  const exch = bot?.exchangeKey || botId;
+  const baseTag = EXCHANGE_TAG[exch] || exch;
+  const isLegacy = (botId === "binance" || botId === "deribit" || botId === "hyperliquid");
+  const tag = isLegacy ? baseTag : `${baseTag}#${botId}`;
+  const entry = { exchangeKey: bot?.exchangeKey || botId, botId, msg: `[${tag}] ${msg}`, level, ts: new Date().toISOString() };
+  if (bot) {
+    bot.logs.unshift(entry);
+    if (bot.logs.length > 200) bot.logs.pop();
+  }
   broadcast("log", entry);
-  console.log(`[${exchangeKey.toUpperCase()}/${level.toUpperCase()}] ${msg}`);
+  console.log(`[${String(botId).toUpperCase()}/${level.toUpperCase()}] ${msg}`);
 }
 
 // ============================================================
@@ -779,11 +1022,26 @@ function buildExchange(priceSource, apiKey, secretKey) {
     return ex;
   };
 
+  // Set BINANCE_TESTNET=true in .env to route Binance traffic to:
+  //   Spot: testnet.binance.vision   |   USDM: testnet.binancefuture.com
+  // Coin-M Futures has NO official Binance testnet, so we warn and stay on prod.
+  const binanceTestnet = String(process.env.BINANCE_TESTNET || "").toLowerCase() === "true";
+
   if (priceSource === "binance_futures") {
-    return stripCurrencies(new ccxt.binanceusdm({ ...baseCreds, options:{...baseCreds.options, defaultType:"future"} }));
+    const ex = stripCurrencies(new ccxt.binanceusdm({ ...baseCreds, options:{...baseCreds.options, defaultType:"future"} }));
+    if (binanceTestnet) { ex.setSandboxMode(true); console.log("[BINANCE USDM] 🧪 Using TESTNET (testnet.binancefuture.com)"); }
+    else                { console.log("[BINANCE USDM] 🟢 Using PRODUCTION (fapi.binance.com)"); }
+    return ex;
   }
   if (priceSource === "binance_coinm") {
-    return stripCurrencies(new ccxt.binancecoinm({ ...baseCreds, options:{...baseCreds.options, defaultType:"delivery"} }));
+    const ex = stripCurrencies(new ccxt.binancecoinm({ ...baseCreds, options:{...baseCreds.options, defaultType:"delivery"} }));
+    if (binanceTestnet) {
+      console.warn("[BINANCE COIN-M] ⚠️ Binance does NOT operate a Coin-M testnet. Staying on PRODUCTION (dapi.binance.com).");
+      console.warn("[BINANCE COIN-M] To test the bot logic, switch priceSource to Binance Spot or Binance Futures (USDT-M).");
+    } else {
+      console.log("[BINANCE COIN-M] 🟢 Using PRODUCTION (dapi.binance.com)");
+    }
+    return ex;
   }
   if (priceSource === "deribit" || priceSource === "deribit_spot") {
     const isSpot = priceSource === "deribit_spot";
@@ -791,7 +1049,6 @@ function buildExchange(priceSource, apiKey, secretKey) {
       apiKey, secret: secretKey,
       options: { defaultType: isSpot ? "spot" : "swap" },
     });
-    // ── Testnet support ──────────────────────────────────────
     // Set DERIBIT_TESTNET=true in .env to use test.deribit.com
     // (testnet has its own separate accounts + API keys)
     const useTestnet = String(process.env.DERIBIT_TESTNET || "").toLowerCase() === "true";
@@ -803,13 +1060,47 @@ function buildExchange(priceSource, apiKey, secretKey) {
     }
     return ex;
   }
-  return stripCurrencies(new ccxt.binance(baseCreds));
+  if (priceSource === "hyperliquid" || priceSource === "hyperliquid_spot" || priceSource === "hyperliquid_hip3") {
+    // Hyperliquid uses wallet-based auth: walletAddress (your main wallet's
+    // public address) + privateKey (the API Wallet's private key — NOT your
+    // main wallet's key). The API wallet can place orders but cannot withdraw.
+    const isSpot = priceSource === "hyperliquid_spot";
+    const isHip3 = priceSource === "hyperliquid_hip3";
+
+    const ex = new ccxt.hyperliquid({
+      walletAddress : apiKey,    // ← we abuse the apiKey slot to carry walletAddress
+      privateKey    : secretKey, // ← and secretKey slot to carry privateKey
+      options: { defaultType: isSpot ? "spot" : "swap" },
+    });
+
+    const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+    if (useTestnet) {
+      ex.setSandboxMode(true);
+      console.log(`[HYPERLIQUID ${isSpot ? "SPOT" : isHip3 ? "HIP-3" : "PERP"}] 🧪 Using TESTNET (api.hyperliquid-testnet.xyz)`);
+    } else {
+      console.log(`[HYPERLIQUID ${isSpot ? "SPOT" : isHip3 ? "HIP-3" : "PERP"}] 🟢 Using PRODUCTION (api.hyperliquid.xyz)`);
+    }
+
+    if (isHip3) {
+      console.warn("[HYPERLIQUID HIP-3] HIP-3 markets require a 'dex' parameter on each order. Not yet supported by this bot — falling back to perpetuals.");
+    }
+    return ex;
+  }
+  // Default: Binance Spot
+  const ex = stripCurrencies(new ccxt.binance(baseCreds));
+  if (binanceTestnet) { ex.setSandboxMode(true); console.log("[BINANCE SPOT] 🧪 Using TESTNET (testnet.binance.vision)"); }
+  else                { console.log("[BINANCE SPOT] 🟢 Using PRODUCTION (api.binance.com)"); }
+  return ex;
 }
 
 function injectKeysIntoCfg(exchangeKey, cfg) {
   if (exchangeKey === "deribit") {
     cfg.apiKey    = process.env.DERIBIT_CLIENT_ID;
     cfg.secretKey = process.env.DERIBIT_CLIENT_SECRET;
+  } else if (exchangeKey === "hyperliquid") {
+    // Hyperliquid uses walletAddress + privateKey, stored in the apiKey/secretKey slots
+    cfg.apiKey    = process.env.HYPERLIQUID_WALLET_ADDRESS;
+    cfg.secretKey = process.env.HYPERLIQUID_PRIVATE_KEY;
   } else {
     cfg.apiKey    = process.env.BINANCE_API_KEY;
     cfg.secretKey = process.env.BINANCE_SECRET_KEY;
@@ -826,8 +1117,17 @@ async function syncExchangeTime(exchange) {
     const isUsdm  = exchange.id === "binanceusdm";
     const isCoinm = exchange.id === "binancecoinm";
     const path    = isUsdm ? "/fapi/v1/time" : isCoinm ? "/dapi/v1/time" : "/api/v3/time";
+    // Use testnet host if BINANCE_TESTNET=true (and Coin-M stays on prod since
+    // there's no Coin-M testnet)
+    const binanceTestnet = String(process.env.BINANCE_TESTNET || "").toLowerCase() === "true";
+    let host;
+    if (binanceTestnet && isUsdm)        host = "testnet.binancefuture.com";
+    else if (binanceTestnet && !isCoinm) host = "testnet.binance.vision";
+    else if (isUsdm)                     host = "fapi.binance.com";
+    else if (isCoinm)                    host = "dapi.binance.com";
+    else                                 host = "api.binance.com";
     const serverTime = await new Promise((resolve, reject) => {
-      https.get({host:"api.binance.com", path, headers:{"User-Agent":"node"}}, (res) => {
+      https.get({host, path, headers:{"User-Agent":"node"}}, (res) => {
         let raw=""; res.on("data",c=>raw+=c);
         res.on("end",()=>{ try{resolve(JSON.parse(raw).serverTime)}catch(e){reject(e)} });
       }).on("error", reject);
@@ -837,7 +1137,7 @@ async function syncExchangeTime(exchange) {
     exchange.options.timeDifference = offset;
     exchange.nonce = () => Date.now() + offset;
     exchange.milliseconds = () => Date.now() + offset;
-    console.log(`[TIME SYNC] ${exchange.id} offset=${offset}ms`);
+    console.log(`[TIME SYNC] ${exchange.id} via ${host} offset=${offset}ms`);
   } catch (err) {
     console.warn("[TIME SYNC] Failed:", err.message);
   }
@@ -846,6 +1146,18 @@ async function syncExchangeTime(exchange) {
 async function getCurrentPrice(exchange, symbol) {
   const ticker = await exchange.fetchTicker(symbol);
   return ticker.last;
+}
+
+// Returns { last, bid, ask } in one shot.
+// We use bid/ask to clamp post_only orders (Deribit rejects post-only orders
+// that would cross the spread with code 11054 "post_only_reject").
+async function getTickerSnapshot(exchange, symbol) {
+  const ticker = await exchange.fetchTicker(symbol);
+  return {
+    last: ticker.last,
+    bid : ticker.bid || ticker.last,
+    ask : ticker.ask || ticker.last,
+  };
 }
 
 async function getMarketInfo(exchange, symbol) {
@@ -859,13 +1171,15 @@ async function getMarketInfo(exchange, symbol) {
 // ============================================================
 //  EMERGENCY STOP (per exchange)
 // ============================================================
-async function emergencyStop(exchangeKey, reason) {
-  const bot = bots[exchangeKey];
+async function emergencyStop(botId, reason) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
   if (!bot.running) return;
   clearInterval(bot.loopTimer);
   bot.running = false;
-  log(exchangeKey, `EMERGENCY STOP: ${reason}`, "error");
-  try { await cancelAllOrders(exchangeKey); } catch(e){}
+  log(botId, `EMERGENCY STOP: ${reason}`, "error");
+  try { await cancelAllOrders(botId); } catch(e){}
 
   const cfg = bot.config;
   if (cfg?.telegramToken && cfg?.telegramChatId) {
@@ -880,66 +1194,218 @@ async function emergencyStop(exchangeKey, reason) {
 // ============================================================
 //  GRID LOOP (per exchange)
 // ============================================================
-async function gridLoop(exchangeKey) {
-  const bot = bots[exchangeKey];
-  if (!bot.running) return;
+async function gridLoop(botId) {
+  const bot = bots[botId];
+  if (!bot || !bot.running) return;
+  const exchangeKey = bot.exchangeKey;
+
+  // Rate-limit backoff: if we recently hit 429, skip this cycle entirely
+  if (bot.rateLimitUntil && Date.now() < bot.rateLimitUntil) {
+    return;
+  }
+
   try {
-    const currentPrice = await getCurrentPrice(bot.exchange, bot.config.symbol);
+    // One ticker fetch per loop — gives us last + bid + ask for post_only safety
+    const tick = await getTickerSnapshot(bot.exchange, bot.config.symbol);
+    const currentPrice = tick.last;
     bot.lastPrice = currentPrice;
+    bot.bestBid   = tick.bid;
+    bot.bestAsk   = tick.ask;
 
     if (currentPrice >= bot.upperLimit) {
-      await emergencyStop(exchangeKey, `Price $${currentPrice} reached UPPER LIMIT $${bot.upperLimit}`);
+      await emergencyStop(botId, `Price $${currentPrice} reached UPPER LIMIT $${bot.upperLimit}`);
       return;
     }
     if (currentPrice <= bot.lowerLimit) {
-      await emergencyStop(exchangeKey, `Price $${currentPrice} reached LOWER LIMIT $${bot.lowerLimit}`);
+      await emergencyStop(botId, `Price $${currentPrice} reached LOWER LIMIT $${bot.lowerLimit}`);
       return;
     }
 
-    await checkAndHandleFills(exchangeKey, currentPrice);
-
     bot.loopCount = (bot.loopCount || 0) + 1;
-    if (bot.loopCount % 5 === 0) await syncOrdersFromExchange(exchangeKey);
 
-    await maintainGrid(exchangeKey, currentPrice);
+    // Fill detection uses openOrders (weight 20 on Hyperliquid — expensive).
+    // Only check every OTHER loop to halve the rate-limit cost. Order fills
+    // still get caught within ~12s worst case, fine for grid trading.
+    if (bot.loopCount % 2 === 0 || bot.openOrders.length === 0) {
+      await checkAndHandleFills(botId, currentPrice);
+    }
 
-    const cfg2  = bot.config;
-    const fills = bot.fillHistory;
-    const buys  = fills.filter(f => f.side === "buy").length;
-    const sells = fills.filter(f => f.side === "sell").length;
-    const currRt = Math.min(buys, sells);
-    if (currRt > (bot.lastNotifiedRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
-      const tsp      = cfg2.targetSpread || 0;
-      const qty      = cfg2.qtyPerStep   || 0;
-      const totalPnl = parseFloat((currRt * tsp * qty).toFixed(4));
-      const perRtPnl = parseFloat((tsp * qty).toFixed(4));
+    if (bot.loopCount % 5 === 0) await syncOrdersFromExchange(botId);
+
+    // Bail before maintainGrid if stop was clicked during this iteration
+    if (!bot.running) return;
+    await maintainGrid(botId, currentPrice);
+
+    // Telegram RT alert — fires once per actual completed round trip.
+    const cfg2 = bot.config;
+    const completedCount = bot.completedRoundTrips.length;
+    if (completedCount > (bot.lastNotifiedRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
+      const newlyCompleted = completedCount - (bot.lastNotifiedRt || 0);
+      const totalPnl = parseFloat(bot.completedRoundTrips.reduce((s, r) => s + (r.pnl || 0), 0).toFixed(4));
       const tag      = EXCHANGE_TAG[exchangeKey];
       await sendTelegram(cfg2.telegramToken, cfg2.telegramChatId,
-        `${tag} ✅ Round Trip #${currRt}!
-Symbol: ${cfg2.symbol}
-Price: $${currentPrice.toFixed(4)}
-PnL this RT: +$${perRtPnl}
-Total PnL: +$${totalPnl}
-Buys: ${buys}  Sells: ${sells}`
+        `${tag} 📊 Total: ${completedCount} round trips  |  PnL: +$${totalPnl}\n${newlyCompleted > 1 ? `(${newlyCompleted} new since last update)` : ""}`
       );
-      bot.lastNotifiedRt = currRt;
-      log(exchangeKey, `📲 Telegram RT #${currRt}  PnL: +$${totalPnl}`);
+      bot.lastNotifiedRt = completedCount;
+      log(botId, `📲 Telegram summary  RTs: ${completedCount}  PnL: +$${totalPnl}`);
     }
 
     broadcast("state", buildStateSnapshot());
   } catch (err) {
-    log(exchangeKey, `Loop error: ${err.message}`, "error");
+    if ((err.message || "").includes("429") || /too many requests/i.test(err.message || "")) {
+      bot.rateLimitUntil = Date.now() + 45000;  // pause 45s on rate limit
+      log(botId, `⏸ Rate limited (429) — pausing this bot for 45s. Consider fewer bots or slower loop.`, "warn");
+    } else {
+      log(botId, `Loop error: ${err.message}`, "error");
+    }
   }
 }
 
 // ============================================================
 //  CHECK FILLS
 // ============================================================
-async function checkAndHandleFills(exchangeKey, currentPrice) {
-  const bot = bots[exchangeKey];
+async function checkAndHandleFills(botId, currentPrice) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
   if (bot.openOrders.length === 0) return;
 
+  // ── HYPERLIQUID FAST PATH ───────────────────────────────────────────
+  // CCXT's fetchOrder is broken on Hyperliquid (issue #27113). It returns
+  // wrong/stale data, leading to phantom duplicate fills. Use native
+  // openOrders to determine fills:
+  //   - fetch user's open orders ONCE
+  //   - any tracked order NOT in that list = filled
+  // Each filled order is processed exactly once (idempotent).
+  if (exchangeKey === "hyperliquid") {
+    const cache = bot.hlCache;
+    if (!cache?.infoClient) {
+      // No cache yet — skip this cycle, will retry next loop
+      return;
+    }
+    const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+    let exchangeOrders;
+    try {
+      exchangeOrders = await Promise.race([
+        cache.infoClient.openOrders({ user: wallet }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("openOrders timeout 5s")), 5000)),
+      ]);
+    } catch (err) {
+      log(botId, `Native openOrders failed: ${err.message} — skipping fill check`, "warn");
+      return;
+    }
+
+    // exchangeOrders is array of { coin, oid, side, sz, limitPx, ... }
+    // Build a set of oid strings still open on the exchange
+    const stillOpenIds = new Set(exchangeOrders.map(o => String(o.oid)));
+
+    // Filter to orders for THIS market. Perp coin = "HYPE", spot coin = "@107"
+    // (or a named pair). Match on cache.coinId. If NONE match the coinId but
+    // there ARE open orders, the coin format is unexpected — fall back to
+    // matching purely by oid (our locally-tracked IDs are unique anyway).
+    const ourCoinId = cache.coinId;
+    let ourOpen = exchangeOrders.filter(o => o.coin === ourCoinId);
+    if (ourOpen.length === 0 && exchangeOrders.length > 0) {
+      // Fallback: trust oid matching across all returned orders
+      ourOpen = exchangeOrders;
+    }
+    const ourOpenIds = new Set(ourOpen.map(o => String(o.oid)));
+
+    const stillOpenLocal = [];
+    for (const tracked of bot.openOrders) {
+      const trackedId = String(tracked.id);
+      // Skip if we just placed it (within last 3 sec) — exchange might not have indexed yet
+      const age = Date.now() - (tracked.placedAt || 0);
+      if (age < 3000) {
+        stillOpenLocal.push(tracked);
+        continue;
+      }
+
+      if (ourOpenIds.has(trackedId)) {
+        // Still alive on exchange
+        stillOpenLocal.push(tracked);
+        continue;
+      }
+
+      // Tracked order is GONE from exchange — must be filled (or externally cancelled).
+      // If it was in recentlyCancelled, treat as cancel and just drop it.
+      if (bot.recentlyCancelled?.[trackedId]) {
+        delete bot.recentlyCancelled[trackedId];
+        continue;
+      }
+
+      // Treat as FILLED.
+      const fillTs    = new Date().toISOString();
+      const fillPrice = tracked.price;
+      const fillQty   = tracked.qty;
+      log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
+
+      bot.fillHistory.unshift({
+        side: tracked.side, price: fillPrice, qty: fillQty,
+        type: tracked.type, ts: fillTs,
+        fee: 0, feeCcy: "", orderId: tracked.id,
+      });
+
+      if (tracked.type === "entry") {
+        const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+        const targetSide  = tracked.side === "sell" ? "buy" : "sell";
+        const targetPrice = tracked.side === "sell"
+          ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
+          : roundPrice(fillPrice + cfg.targetSpread, tickSize);
+
+        bot.pendingRoundTrips.push({
+          id: `rt_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+          openSide: tracked.side, openPrice: fillPrice,
+          targetOrderId: null, targetSide, targetPrice,
+          qty: fillQty, openTs: fillTs,
+        });
+        log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
+
+      } else if (tracked.type === "target") {
+        const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
+        if (matched.length === 0) {
+          // Fallback: price-based
+          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+          const entrySide  = tracked.side === "buy" ? "sell" : "buy";
+          const entryPrice = tracked.side === "buy"
+            ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
+            : roundPrice(fillPrice - cfg.targetSpread, tickSize);
+          const fallbackIdx = bot.pendingRoundTrips.findIndex(
+            rt => rt.openSide === entrySide && Math.abs(rt.openPrice - entryPrice) < tickSize
+          );
+          if (fallbackIdx !== -1) {
+            matched.push(bot.pendingRoundTrips[fallbackIdx]);
+            log(botId, `Target matched by price fallback`, "warn");
+          }
+        }
+        bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => !matched.includes(rt));
+        for (const rt of matched) {
+          const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
+          const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
+          const pnl       = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+          bot.completedRoundTrips.unshift({
+            id: rt.id, openSide: rt.openSide,
+            openPrice: rt.openPrice, closePrice: fillPrice,
+            buyPrice, sellPrice, qty: rt.qty, pnl,
+            openTs: rt.openTs, closeTs: fillTs,
+            durationMs: Date.now() - new Date(rt.openTs).getTime(),
+          });
+          log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  PnL:+$${pnl.toFixed(4)}`, "success");
+          if (cfg?.telegramToken && cfg?.telegramChatId) {
+            const tag = EXCHANGE_TAG[exchangeKey];
+            sendTelegram(cfg.telegramToken, cfg.telegramChatId,
+              `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nPnL: +$${pnl.toFixed(4)}`
+            );
+          }
+        }
+      }
+    }
+    bot.openOrders = stillOpenLocal;
+    return;
+  }
+
+  // ── DEFAULT PATH (Binance, Deribit): use CCXT fetchOrder per tracked ──
   const stillOpen = [];
 
   for (const tracked of bot.openOrders) {
@@ -953,7 +1419,7 @@ async function checkAndHandleFills(exchangeKey, currentPrice) {
         const feeCost   = parseFloat(order.fee?.cost ?? 0);
         const feeCcy    = order.fee?.currency || "";
 
-        log(exchangeKey, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
+        log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
 
         bot.fillHistory.unshift({
           side: tracked.side, price: fillPrice, qty: fillQty,
@@ -962,36 +1428,53 @@ async function checkAndHandleFills(exchangeKey, currentPrice) {
         });
 
         if (tracked.type === "entry") {
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+          // Just record the pending round trip. The strict-6 algorithm in
+          // maintainGrid (which runs immediately after this in gridLoop)
+          // will handle target placement and entry promotion.
           const targetSide  = tracked.side === "sell" ? "buy" : "sell";
+          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
           const targetPrice = tracked.side === "sell"
             ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
             : roundPrice(fillPrice + cfg.targetSpread, tickSize);
 
-          const rtKey = `${tracked.side}_${fillPrice.toFixed(6)}`;
-          const alreadyPending = bot.pendingRoundTrips.some(rt => rt.rtKey === rtKey);
-          if (!alreadyPending) {
-            bot.pendingRoundTrips.push({
-              rtKey, id:`rt_${Date.now()}`,
-              openSide: tracked.side, openPrice: fillPrice,
-              targetSide, targetPrice, qty: fillQty, openTs: fillTs,
-            });
-            log(exchangeKey, `Pending RT [${rtKey}]: target ${targetSide.toUpperCase()} @ $${targetPrice}`);
-          }
-
-          await placeTargetOrder(exchangeKey, tracked.side, fillPrice, fillQty);
+          bot.pendingRoundTrips.push({
+            id              : `rt_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+            openSide        : tracked.side,
+            openPrice       : fillPrice,
+            targetOrderId   : null,
+            targetSide,
+            targetPrice,
+            qty             : fillQty,
+            openTs          : fillTs,
+          });
+          log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
 
         } else if (tracked.type === "target") {
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
-          const entrySide  = tracked.side === "buy" ? "sell" : "buy";
-          const entryPrice = tracked.side === "buy"
-            ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
-            : roundPrice(fillPrice - cfg.targetSpread, tickSize);
-          const rtKey = `${entrySide}_${entryPrice.toFixed(6)}`;
+          // Find ALL pending RTs that point to this order id
+          const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
 
-          const idx = bot.pendingRoundTrips.findIndex(rt => rt.rtKey === rtKey);
-          if (idx !== -1) {
-            const rt        = bot.pendingRoundTrips.splice(idx, 1)[0];
+          if (matched.length === 0) {
+            // Fallback: try price-based match for legacy/external orders
+            const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+            const entrySide  = tracked.side === "buy" ? "sell" : "buy";
+            const entryPrice = tracked.side === "buy"
+              ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
+              : roundPrice(fillPrice - cfg.targetSpread, tickSize);
+            const fallbackIdx = bot.pendingRoundTrips.findIndex(
+              rt => rt.openSide === entrySide && Math.abs(rt.openPrice - entryPrice) < tickSize
+            );
+            if (fallbackIdx !== -1) {
+              matched.push(bot.pendingRoundTrips[fallbackIdx]);
+              log(botId, `Target matched by price fallback`, "warn");
+            } else {
+              log(botId, `Target filled but no pending RT linked — fill recorded as standalone`, "warn");
+            }
+          }
+
+          // Remove matched RTs from pending and add to completed
+          bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => !matched.includes(rt));
+
+          for (const rt of matched) {
             const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
             const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
             const pnl       = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
@@ -999,20 +1482,19 @@ async function checkAndHandleFills(exchangeKey, currentPrice) {
             bot.completedRoundTrips.unshift({
               id: rt.id, openSide: rt.openSide,
               openPrice: rt.openPrice, closePrice: fillPrice,
+              buyPrice, sellPrice,
               qty: rt.qty, pnl,
               openTs: rt.openTs, closeTs: fillTs,
               durationMs: Date.now() - new Date(rt.openTs).getTime(),
             });
-            log(exchangeKey, `✅ ROUND TRIP  Buy@$${buyPrice.toFixed(4)} Sell@$${sellPrice.toFixed(4)}  PnL:$${pnl.toFixed(4)}`, "success");
+            log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  PnL:+$${pnl.toFixed(4)}`, "success");
 
             if (cfg?.telegramToken && cfg?.telegramChatId) {
               const tag = EXCHANGE_TAG[exchangeKey];
               sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-                `${tag} ✅ Round Trip\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nPnL: $${pnl.toFixed(4)}`
+                `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nPnL: +$${pnl.toFixed(4)}`
               );
             }
-          } else {
-            log(exchangeKey, `Target ${tracked.side.toUpperCase()} @ $${fillPrice} filled — RT key [${rtKey}] not found`, "warn");
           }
         }
 
@@ -1020,7 +1502,7 @@ async function checkAndHandleFills(exchangeKey, currentPrice) {
         stillOpen.push(tracked);
       }
     } catch (err) {
-      log(exchangeKey, `fetchOrder error (${tracked.id}): ${err.message}`, "warn");
+      log(botId, `fetchOrder error (${tracked.id}): ${err.message}`, "warn");
       stillOpen.push(tracked);
     }
   }
@@ -1030,9 +1512,16 @@ async function checkAndHandleFills(exchangeKey, currentPrice) {
 
 // ============================================================
 //  PLACE TARGET ORDER
+//  Returns { id, price, qty, side } of the placed (or existing) target
+//  order, OR null if placement completely failed. The returned id is
+//  used to link the round trip to the order, so closing matches by
+//  order id (not by price reconstruction, which fails when prices
+//  drift due to post_only safe-price adjustments).
 // ============================================================
-async function placeTargetOrder(exchangeKey, filledSide, fillPrice, fillQty) {
-  const bot = bots[exchangeKey];
+async function placeTargetOrder(botId, filledSide, fillPrice, fillQty) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
   const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol);
 
@@ -1042,10 +1531,22 @@ async function placeTargetOrder(exchangeKey, filledSide, fillPrice, fillQty) {
     : roundPrice(fillPrice + cfg.targetSpread, tickSize);
   const qty = roundQty(fillQty, stepSize);
 
+  // ── Smart sharing/promotion at the target price ──
+  // If an order already exists on the same side at the exact target price,
+  // we have two cases:
+  //   (a) An existing TARGET → share it (multi-entry → one target close-out)
+  //   (b) An existing ENTRY at that price → PROMOTE it to a target. The
+  //       order on the exchange doesn't change (same side, same price), so
+  //       we just relabel it locally. This avoids placing a duplicate.
   const existing = bot.openOrders.find(o => o.side === targetSide && Math.abs(o.price - targetPrice) < 0.000001);
   if (existing) {
-    log(exchangeKey, `Target ${targetSide.toUpperCase()} @ $${targetPrice} already on exchange`);
-    return;
+    if (existing.type === "entry") {
+      existing.type = "target";   // promote in-place
+      log(botId, `Promoted ENTRY ${targetSide.toUpperCase()} @ $${targetPrice} → TARGET (same side & price as needed target)`, "success");
+    } else {
+      log(botId, `Target ${targetSide.toUpperCase()} @ $${targetPrice} already on exchange — sharing with existing target`);
+    }
+    return { id: existing.id, price: existing.price, qty: existing.qty, side: targetSide, shared: true };
   }
 
   const sideOrders = bot.openOrders.filter(o => o.side === targetSide);
@@ -1053,155 +1554,704 @@ async function placeTargetOrder(exchangeKey, filledSide, fillPrice, fillQty) {
     const victim = sideOrders.filter(o => o.type === "entry")
       .sort((a,b) => Math.abs(b.price - fillPrice) - Math.abs(a.price - fillPrice))[0];
     if (victim) {
-      try {
-        await bot.exchange.cancelOrder(victim.id, cfg.symbol);
+      const ok = await cancelSingleOrder(botId, victim.id, cfg.symbol);
+      if (ok) {
+        bot.recentlyCancelled = bot.recentlyCancelled || {};
+        bot.recentlyCancelled[victim.id] = Date.now();
         bot.openOrders = bot.openOrders.filter(o => o.id !== victim.id);
-        log(exchangeKey, `Removed ENTRY ${victim.side.toUpperCase()} @ $${victim.price} — making room for target`);
-      } catch (err) { log(exchangeKey, `Could not remove entry: ${err.message}`, "warn"); }
+        log(botId, `Removed ENTRY ${victim.side.toUpperCase()} @ $${victim.price} — making room for target`);
+      } else {
+        log(botId, `Could not remove entry ${victim.id} — will retry`, "warn");
+      }
     }
   }
 
+  // Deribit: post_only to capture maker rebates
+  const params = exchangeKey === "deribit" ? { post_only: true } : {};
   try {
-    // Deribit: post_only to capture maker rebates
-    const params = exchangeKey === "deribit" ? { post_only: true } : {};
     const order = await bot.exchange.createLimitOrder(cfg.symbol, targetSide, qty, targetPrice, params);
-    bot.openOrders.push({ id: order.id, side: targetSide, price: targetPrice, qty, type: "target" });
-    log(exchangeKey, `Target ${targetSide.toUpperCase()} placed @ $${targetPrice}`);
+    bot.openOrders.push({ id: order.id, side: targetSide, price: targetPrice, qty, type: "target", placedAt: Date.now() });
+    log(botId, `Target ${targetSide.toUpperCase()} placed @ $${targetPrice}`);
+    return { id: order.id, price: targetPrice, qty, side: targetSide, shared: false };
   } catch (err) {
-    log(exchangeKey, `Target placement failed @ $${targetPrice}: ${err.message}`, "error");
+    const isPostOnlyReject = (err.message || "").includes("post_only_reject");
+    if (exchangeKey === "deribit" && isPostOnlyReject) {
+      // Spread crossed — retry one tick further from market
+      const ticker = await getTickerSnapshot(bot.exchange, cfg.symbol).catch(() => null);
+      const ask = ticker?.ask || bot.bestAsk || targetPrice;
+      const bid = ticker?.bid || bot.bestBid || targetPrice;
+      const safePrice = targetSide === "sell"
+        ? roundPrice(Math.max(targetPrice, ask + tickSize), tickSize)
+        : roundPrice(Math.min(targetPrice, bid - tickSize), tickSize);
+      log(botId, `Target ${targetSide.toUpperCase()} @ $${targetPrice} crossed spread, retrying @ $${safePrice}`, "warn");
+      try {
+        const order = await bot.exchange.createLimitOrder(cfg.symbol, targetSide, qty, safePrice, params);
+        bot.openOrders.push({ id: order.id, side: targetSide, price: safePrice, qty, type: "target", placedAt: Date.now() });
+        log(botId, `Target ${targetSide.toUpperCase()} placed @ $${safePrice} (adjusted)`);
+        return { id: order.id, price: safePrice, qty, side: targetSide, shared: false };
+      } catch (retryErr) {
+        log(botId, `Target retry failed @ $${safePrice}: ${retryErr.message}`, "error");
+        return null;
+      }
+    }
+    log(botId, `Target placement failed @ $${targetPrice}: ${err.message}`, "error");
+    return null;
   }
 }
 
 // ============================================================
 //  MAINTAIN GRID
 // ============================================================
-async function maintainGrid(exchangeKey, currentPrice) {
-  const bot = bots[exchangeKey];
+// ============================================================
+//  MAINTAIN GRID  (always exactly 6 orders, by proximity priority)
+//  Algorithm:
+//    1. Collect "wanted" orders:
+//       - Pending targets (one per pending RT)
+//       - Up to 3 entry sells above current price (stepping outward)
+//       - Up to 3 entry buys  below current price
+//    2. Dedupe by (side, price), preferring targets over entries
+//    3. Sort by distance from current price
+//    4. Take top TARGET_TOTAL = 6
+//    5. Diff against bot.openOrders (match by side+price):
+//       - Cancel any open order NOT in the desired set
+//       - Place any desired order NOT already on the exchange
+// ============================================================
+async function maintainGrid(botId, currentPrice) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
+  if (!bot.running) return;
   const cfg = bot.config;
   const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol);
   const qty = roundQty(cfg.qtyPerStep, stepSize);
+  const PER_SIDE = 3;            // exactly 3 above + 3 below = 6 total
+  const isDeribit = exchangeKey === "deribit";
+  const orderParams = isDeribit ? { post_only: true } : {};
 
-  const staleTargetDist = cfg.avgSellSpacing * 3;
-  const keepOrders = [];
-  for (const o of bot.openOrders) {
-    let shouldCancel = false, reason = "";
-    if (o.type === "entry") {
-      if (o.side === "sell" && o.price <= currentPrice) { shouldCancel = true; reason = "wrong-side (sell below price)"; }
-      if (o.side === "buy"  && o.price >= currentPrice) { shouldCancel = true; reason = "wrong-side (buy above price)"; }
+  const bid = bot.bestBid || currentPrice;
+  const ask = bot.bestAsk || currentPrice;
+  const minSellPrice = isDeribit ? roundPrice(ask + tickSize, tickSize) : currentPrice + tickSize;
+  const maxBuyPrice  = isDeribit ? roundPrice(bid - tickSize, tickSize) : currentPrice - tickSize;
+  const isPostOnlyReject = (err) => err && (err.message || "").includes("post_only_reject");
+
+  // ════════════════════════════════════════════════════════════════════
+  //  PER-SIDE STRICT 3+3
+  //  ABOVE price = SELL side (entries + targets that sit above price)
+  //  BELOW price = BUY side  (entries + targets that sit below price)
+  //  Each side independently keeps its 3 CLOSEST-to-price orders.
+  //  Targets are preferred over entries when both want the same slot.
+  // ════════════════════════════════════════════════════════════════════
+
+  // ---- 1. Reserved entry prices (an open RT's entry slot is locked) ----
+  const reservedEntryPrices = new Set();
+  for (const rt of bot.pendingRoundTrips) {
+    reservedEntryPrices.add(`${rt.openSide}_${roundPrice(rt.openPrice, tickSize)}`);
+  }
+
+  // ---- 2. Build WANTED for each side separately ----
+  // SELL side wanted (price > currentPrice): target sells + 3 entry sells
+  // BUY side wanted  (price < currentPrice): target buys  + 3 entry buys
+  const wantSell = [];   // each: {side, price, qty, type, rtId, distance}
+  const wantBuy  = [];
+
+  // 2a. Targets — route by ORDER SIDE (a buy is always a buy), and clamp
+  //     any target that ended up on the wrong side of price after a fast move.
+  //     A target BUY must sit below price; a target SELL must sit above.
+  //     If price surged PAST a target buy (now above price), clamp it just
+  //     below price so it stays a valid resting buy that closes the RT.
+  for (const rt of bot.pendingRoundTrips) {
+    let p = roundPrice(rt.targetPrice, tickSize);
+    if (rt.targetSide === "buy") {
+      // Buy target must be strictly below current price
+      if (p >= currentPrice) p = roundPrice(currentPrice - tickSize, tickSize);
+      if (isDeribit && p > maxBuyPrice) p = maxBuyPrice;
+      wantBuy.push({ side: "buy", price: p, qty: rt.qty,
+                     type: "target", rtId: rt.id, distance: Math.abs(p - currentPrice) });
     } else {
-      const dist = Math.abs(o.price - currentPrice);
-      if (dist > staleTargetDist) { shouldCancel = true; reason = `stuck $${dist.toFixed(4)} from price`; }
+      // Sell target must be strictly above current price
+      if (p <= currentPrice) p = roundPrice(currentPrice + tickSize, tickSize);
+      if (isDeribit && p < minSellPrice) p = minSellPrice;
+      wantSell.push({ side: "sell", price: p, qty: rt.qty,
+                      type: "target", rtId: rt.id, distance: Math.abs(p - currentPrice) });
     }
-    if (shouldCancel) {
-      try {
-        await bot.exchange.cancelOrder(o.id, cfg.symbol);
-        log(exchangeKey, `Cancelled ${o.type.toUpperCase()} ${o.side.toUpperCase()} @ $${o.price} — ${reason}`);
-      } catch (err) {
-        log(exchangeKey, `Cancel failed (${o.id}): ${err.message}`, "warn");
-        keepOrders.push(o);
-      }
-    } else { keepOrders.push(o); }
-  }
-  bot.openOrders = keepOrders;
-
-  const sellSideCount = bot.openOrders.filter(o => o.price > currentPrice).length;
-  const buySideCount  = bot.openOrders.filter(o => o.price < currentPrice).length;
-  const sellNeeded = Math.max(0, 3 - sellSideCount);
-  const buyNeeded  = Math.max(0, 3 - buySideCount);
-
-  if (sellNeeded === 0 && buyNeeded === 0) {
-    log(exchangeKey, `Grid full: ${bot.openOrders.length} total`);
-    return;
   }
 
+  // 2b. Entry candidates — 3 sells above, 3 buys below
   const spacing      = cfg.avgSellSpacing;
   const snappedPrice = roundPrice(Math.round(currentPrice / spacing) * spacing, tickSize);
-  const occupiedEntryPrices = new Set(bot.openOrders.filter(o => o.type === "entry").map(o => o.price));
-  const orderParams = exchangeKey === "deribit" ? { post_only: true } : {};
+  for (let step = 1; step <= 40; step++) {
+    const ps = roundPrice(snappedPrice + step * cfg.avgSellSpacing, tickSize);
+    if (ps > currentPrice && ps >= minSellPrice && ps <= bot.upperLimit
+        && !reservedEntryPrices.has(`sell_${ps}`)) {
+      wantSell.push({ side: "sell", price: ps, qty, type: "entry", rtId: null,
+                      distance: Math.abs(ps - currentPrice) });
+    }
+    const pb = roundPrice(snappedPrice - step * cfg.avgBuySpacing, tickSize);
+    if (pb < currentPrice && pb <= maxBuyPrice && pb >= bot.lowerLimit
+        && !reservedEntryPrices.has(`buy_${pb}`)) {
+      wantBuy.push({ side: "buy", price: pb, qty, type: "entry", rtId: null,
+                     distance: Math.abs(pb - currentPrice) });
+    }
+    // Stop once we have plenty of candidates on both sides
+    if (wantSell.length >= 12 && wantBuy.length >= 12) break;
+  }
 
-  if (sellNeeded > 0) {
-    let placed = 0, step = 1;
-    while (placed < sellNeeded && step <= 20) {
-      const price = roundPrice(snappedPrice + step * cfg.avgSellSpacing, tickSize);
-      step++;
-      if (price <= currentPrice)         continue;
-      if (price > bot.upperLimit)        continue;
-      if (occupiedEntryPrices.has(price)) continue;
-      try {
-        const order = await bot.exchange.createLimitOrder(cfg.symbol, "sell", qty, price, orderParams);
-        log(exchangeKey, `Entry SELL @ $${price}  [${sellSideCount + placed + 1}/3]`);
-        bot.openOrders.push({ id: order.id, side: "sell", price, qty, type: "entry" });
-        occupiedEntryPrices.add(price); placed++;
-      } catch (err) { log(exchangeKey, `Entry SELL failed @ $${price}: ${err.message}`, "error"); }
+  // ---- 3. Dedupe per side by price; prefer target over entry ----
+  const dedupeSide = (arr) => {
+    const m = new Map();
+    for (const w of arr) {
+      const k = w.price;
+      const prev = m.get(k);
+      if (!prev) { m.set(k, w); continue; }
+      if (prev.type === "target" && w.type === "entry") continue;
+      if (prev.type === "entry"  && w.type === "target") m.set(k, w);
+    }
+    return [...m.values()].sort((a, b) => a.distance - b.distance);
+  };
+  const sellDesired = dedupeSide(wantSell).slice(0, PER_SIDE);
+  const buyDesired  = dedupeSide(wantBuy).slice(0, PER_SIDE);
+  const desired = [...sellDesired, ...buyDesired];
+
+  // ---- 4. Diff against current open orders ----
+  const desiredKeys = new Set(desired.map(d => `${d.side}_${d.price}`));
+  const existingByKey = new Map();
+  for (const o of bot.openOrders) existingByKey.set(`${o.side}_${o.price}`, o);
+
+  // 4a. Cancel any open order NOT in desired (these are the "far" ones)
+  const toCancel = bot.openOrders.filter(o => !desiredKeys.has(`${o.side}_${o.price}`));
+  if (toCancel.length > 0) {
+    if (exchangeKey === "hyperliquid") {
+      // ONE batched native call cancels all far orders at once (~0.5s total
+      // instead of N×0.5s serial). Removes the placement delay you saw.
+      const ids = toCancel.map(o => o.id);
+      const result = await hyperliquidNativeCancel(bot, ids);
+      if (result.ok) {
+        for (const r of result.results) {
+          const o = toCancel.find(x => Number(x.id) === r.id);
+          if (!o) continue;
+          const s = r.status;
+          const gone = (s === "success") || (s && s.error && /never placed|already cancel|filled/i.test(s.error));
+          if (gone) {
+            bot.recentlyCancelled = bot.recentlyCancelled || {};
+            bot.recentlyCancelled[o.id] = Date.now();
+            bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
+            if (o.type === "target") {
+              for (const rt of bot.pendingRoundTrips) {
+                if (rt.targetOrderId === o.id) rt.targetOrderId = null;
+              }
+            }
+            log(botId, `↓ Cancelled ${o.type?.toUpperCase()||""} ${o.side.toUpperCase()} @ $${o.price} — far from price`);
+          }
+        }
+      } else {
+        log(botId, `Batch cancel failed: ${result.error} — will retry next loop`, "warn");
+      }
+    } else {
+      // CCXT path (Binance/Deribit): serial is fine, those APIs are fast
+      for (const o of toCancel) {
+        if (!bot.running) break;
+        const ok = await cancelSingleOrder(botId, o.id, cfg.symbol);
+        if (ok) {
+          bot.recentlyCancelled = bot.recentlyCancelled || {};
+          bot.recentlyCancelled[o.id] = Date.now();
+          bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
+          if (o.type === "target") {
+            for (const rt of bot.pendingRoundTrips) {
+              if (rt.targetOrderId === o.id) rt.targetOrderId = null;
+            }
+          }
+          log(botId, `↓ Cancelled ${o.type?.toUpperCase()||""} ${o.side.toUpperCase()} @ $${o.price} — far from price`);
+        } else {
+          log(botId, `Cancel failed for ${o.id} — will retry next loop`, "warn");
+        }
+      }
     }
   }
 
-  if (buyNeeded > 0) {
-    let placed = 0, step = 1;
-    while (placed < buyNeeded && step <= 20) {
-      const price = roundPrice(snappedPrice - step * cfg.avgBuySpacing, tickSize);
-      step++;
-      if (price >= currentPrice)         continue;
-      if (price < bot.lowerLimit)        continue;
-      if (occupiedEntryPrices.has(price)) continue;
-      try {
-        const order = await bot.exchange.createLimitOrder(cfg.symbol, "buy", qty, price, orderParams);
-        log(exchangeKey, `Entry BUY  @ $${price}  [${buySideCount + placed + 1}/3]`);
-        bot.openOrders.push({ id: order.id, side: "buy", price, qty, type: "entry" });
-        occupiedEntryPrices.add(price); placed++;
-      } catch (err) { log(exchangeKey, `Entry BUY failed @ $${price}: ${err.message}`, "error"); }
+  // 4b. Promote existing entry→target where a desired target matches it
+  for (const d of desired) {
+    const existing = existingByKey.get(`${d.side}_${d.price}`);
+    if (!existing) continue;
+    if (d.type === "target" && existing.type !== "target") {
+      existing.type = "target";
+      if (d.rtId) {
+        const rt = bot.pendingRoundTrips.find(r => r.id === d.rtId);
+        if (rt && !rt.targetOrderId) rt.targetOrderId = existing.id;
+      }
+      log(botId, `🔗 Promoted ${existing.side.toUpperCase()} @ $${existing.price} → TARGET`, "success");
     }
+  }
+
+  // 4c. Place desired orders not yet open
+  const existingKeys = new Set(bot.openOrders.map(o => `${o.side}_${o.price}`));
+  let toPlace = desired.filter(d => !existingKeys.has(`${d.side}_${d.price}`));
+
+  // ── SPOT INVENTORY GATE ────────────────────────────────────────────
+  // On Hyperliquid SPOT you can only sell base token you actually hold.
+  // Check free HYPE balance and cap the number of sell orders we place
+  // (entries + targets) so we don't spam "insufficient balance" failures.
+  if (exchangeKey === "hyperliquid" && bot.hlCache?.isSpot) {
+    const base = bot.hlCache.base;
+    const freeBase = await hyperliquidNativeSpotBalance(bot, base);
+    if (freeBase === null) {
+      log(botId, `Spot balance unavailable — placing all; some sells may fail`, "warn");
+    } else {
+      const wantSellOrders = toPlace.filter(d => d.side === "sell");
+      const buyOrders      = toPlace.filter(d => d.side === "buy");
+      let budget = freeBase;
+      const allowedSells = [];
+      for (const d of wantSellOrders.sort((a,b)=>a.distance-b.distance)) {
+        if (budget >= d.qty - 1e-9) { allowedSells.push(d); budget -= d.qty; }
+      }
+      if (allowedSells.length < wantSellOrders.length) {
+        log(botId, `Spot inventory: ${freeBase.toFixed(4)} ${base} free → can place ${allowedSells.length}/${wantSellOrders.length} sells`, "warn");
+      }
+      toPlace = [...buyOrders, ...allowedSells];
+    }
+  }
+
+  if (exchangeKey === "hyperliquid" && toPlace.length > 0) {
+    const reqs = toPlace.map(d => ({ side: d.side, price: d.price, qty: d.qty }));
+    const results = await hyperliquidNativeOrders(bot, reqs);
+    for (let i = 0; i < toPlace.length; i++) {
+      if (!bot.running) break;
+      const d = toPlace[i], r = results[i];
+      if (r.id) {
+        bot.openOrders.push({ id: r.id, side: d.side, price: d.price, qty: d.qty,
+                              type: d.type, placedAt: Date.now() });
+        if (d.type === "target" && d.rtId) {
+          const rt = bot.pendingRoundTrips.find(rr => rr.id === d.rtId);
+          if (rt) rt.targetOrderId = r.id;
+        }
+        const tag = d.type === "target" ? "🎯 TARGET" : "📥 ENTRY";
+        log(botId, `↑ ${tag} ${d.side.toUpperCase()} @ $${d.price}  qty:${d.qty}${r.filled ? "  (already filled!)" : ""}`);
+      } else {
+        const msg = r.error || "unknown";
+        log(botId, `Place ${d.type.toUpperCase()} ${d.side.toUpperCase()} failed @ $${d.price}: ${msg}`, msg.includes("crossed") ? "warn" : "error");
+      }
+    }
+  } else {
+    for (const d of toPlace) {
+      if (!bot.running) break;
+      try {
+        const order = await bot.exchange.createLimitOrder(cfg.symbol, d.side, d.qty, d.price, orderParams);
+        bot.openOrders.push({ id: order.id, side: d.side, price: d.price, qty: d.qty,
+                              type: d.type, placedAt: Date.now() });
+        if (d.type === "target" && d.rtId) {
+          const rt = bot.pendingRoundTrips.find(r => r.id === d.rtId);
+          if (rt) rt.targetOrderId = order.id;
+        }
+        const tag = d.type === "target" ? "🎯 TARGET" : "📥 ENTRY";
+        log(botId, `↑ ${tag} ${d.side.toUpperCase()} @ $${d.price}  qty:${d.qty}`);
+      } catch (err) {
+        if (isPostOnlyReject(err)) {
+          log(botId, `${d.side.toUpperCase()} @ $${d.price} crossed spread — retry next loop`, "warn");
+        } else {
+          log(botId, `Place ${d.type.toUpperCase()} ${d.side.toUpperCase()} failed @ $${d.price}: ${err.message}`, "error");
+        }
+      }
+    }
+  }
+
+  // ---- 5. Status summary ----
+  const sellCount = bot.openOrders.filter(o => o.price > currentPrice).length;
+  const buyCount  = bot.openOrders.filter(o => o.price < currentPrice).length;
+  const tg = bot.openOrders.filter(o => o.type === "target").length;
+  const en = bot.openOrders.filter(o => o.type === "entry").length;
+  if (toCancel.length > 0 || toPlace.length > 0) {
+    log(botId, `Grid: ${sellCount} above + ${buyCount} below = ${bot.openOrders.length} (${en} entries, ${tg} targets)`);
   }
 }
 
 // ============================================================
 //  CANCEL ALL + SYNC
 // ============================================================
-async function cancelAllOrders(exchangeKey) {
-  const bot = bots[exchangeKey];
+// Hyperliquid native order placement. Use this instead of CCXT
+// createLimitOrder which can take 20+ seconds on Hyperliquid.
+// Accepts an array of orders: [{side: "buy"|"sell", price: number, qty: number}, ...]
+// Returns: [{id: string, error?: string}, ...] in same order as input.
+// Native Hyperliquid spot balance for a given token. Fast (~200ms) vs
+// CCXT fetchBalance which hangs/times out. Returns free amount (number).
+async function hyperliquidNativeSpotBalance(bot, token) {
+  const cache = bot.hlCache;
+  if (!cache?.infoClient) return null;
+  const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+  try {
+    const state = await Promise.race([
+      cache.infoClient.spotClearinghouseState({ user: wallet }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 4000)),
+    ]);
+    const bal = (state?.balances || []).find(b => b.coin === token);
+    if (!bal) return 0;
+    const total = parseFloat(bal.total || 0);
+    const hold  = parseFloat(bal.hold  || 0);  // amount locked in open orders
+    return Math.max(0, total - hold);            // free = total - hold
+  } catch (e) {
+    return null;  // null = couldn't determine (caller decides what to do)
+  }
+}
+
+async function hyperliquidNativeOrders(bot, orders) {
+  const cache = bot.hlCache;
+  if (!cache?.assetIndex === undefined || !cache.exchClient) {
+    return orders.map(() => ({ id: null, error: "Hyperliquid cache not initialized" }));
+  }
+
+  // Format price: max 5 sig figs for perps, 8 for spot. Also max szDecimals decimals.
+  const formatPrice = (p) => {
+    const sig = cache.maxSig;
+    let s = p.toPrecision(sig);
+    // toPrecision may give scientific notation for very small/large. Avoid it for typical crypto.
+    if (s.includes("e")) s = Number(p).toFixed(sig);
+    // Strip trailing zeros after decimal
+    if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+    return s;
+  };
+  const formatSize = (sz) => {
+    let s = sz.toFixed(cache.szDecimals);
+    if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+    return s;
+  };
+
+  const orderRequests = orders.map(o => ({
+    a: cache.assetIndex,
+    b: o.side === "buy",
+    p: formatPrice(o.price),
+    s: formatSize(o.qty),
+    r: false,
+    t: { limit: { tif: "Gtc" } },  // Good 'til cancelled
+  }));
+
+  try {
+    const resp = await Promise.race([
+      cache.exchClient.order({ orders: orderRequests, grouping: "na" }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
+    ]);
+    const statuses = resp?.response?.data?.statuses || [];
+    return orders.map((_, i) => {
+      const s = statuses[i];
+      if (s?.resting) return { id: String(s.resting.oid), error: null };
+      if (s?.filled)  return { id: String(s.filled.oid),  error: null, filled: true };
+      if (s?.error)   return { id: null, error: s.error };
+      return { id: null, error: "unknown status" };
+    });
+  } catch (e) {
+    // Parse partial-success from error.response (same pattern as cancel)
+    const statuses = e?.response?.response?.data?.statuses;
+    if (Array.isArray(statuses) && statuses.length === orders.length) {
+      return orders.map((_, i) => {
+        const s = statuses[i];
+        if (s?.resting) return { id: String(s.resting.oid), error: null };
+        if (s?.filled)  return { id: String(s.filled.oid),  error: null, filled: true };
+        if (s?.error)   return { id: null, error: s.error };
+        return { id: null, error: "unknown status" };
+      });
+    }
+    return orders.map(() => ({ id: null, error: e.message }));
+  }
+}
+
+// Single-order place wrapper: native for Hyperliquid, CCXT for others
+async function placeSingleOrder(botId, side, qty, price, symbol, orderParams) {
+  const bot = bots[botId];
+  const exchangeKey = bot.exchangeKey;
+  if (exchangeKey === "hyperliquid") {
+    const results = await hyperliquidNativeOrders(bot, [{ side, price, qty }]);
+    const r = results[0];
+    if (r.id) return { id: r.id, status: r.filled ? "filled" : "open" };
+    throw new Error(r.error || "Place failed");
+  }
+  // CCXT path
+  return await bot.exchange.createLimitOrder(symbol, side, qty, price, orderParams || {});
+}
+
+
+// ============================================================
+// CCXT's Hyperliquid `cancelOrder` and `fetchOpenOrders` are known buggy
+// (issues #26655 and #27113). We use the @nktkas/hyperliquid SDK to talk
+// to the native Hyperliquid REST API directly. This signs cancel
+// actions with the API wallet's private key and POSTs to /exchange.
+
+// Single-order cancel wrapper: uses native SDK for Hyperliquid (fast),
+// CCXT for others. Returns true on success, false on real failure.
+// Already-filled/cancelled orders count as success.
+async function cancelSingleOrder(botId, orderId, symbol) {
+  const bot = bots[botId];
+  const exchangeKey = bot.exchangeKey;
+  if (exchangeKey === "hyperliquid") {
+    const result = await hyperliquidNativeCancel(bot, [orderId]);
+    if (!result.ok) return false;
+    const s = result.results[0]?.status;
+    if (s === "success") return true;
+    if (s && s.error) {
+      const m = s.error.toLowerCase();
+      return m.includes("never placed") || m.includes("already cancel") || m.includes("filled");
+    }
+    return false;
+  }
+  // CCXT path for Binance/Deribit, with timeout safety
+  try {
+    await Promise.race([
+      bot.exchange.cancelOrder(orderId, symbol),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout 5s")), 5000)),
+    ]);
+    return true;
+  } catch (err) {
+    const m = (err.message || "").toLowerCase();
+    if (m.includes("never placed") || m.includes("already cancel") || m.includes("filled") || m.includes("not found")) return true;
+    return false;
+  }
+}
+
+async function hyperliquidNativeCancel(bot, orderIds) {
+  const cfg = bot.config;
+
+  // Use pre-warmed SDK + asset index from bot.hlCache (set on bot start).
+  // Falls back to fresh lookup only if the cache is missing.
+  let exchClient, infoClient, assetIndex;
+  if (bot.hlCache?.assetIndex !== undefined && bot.hlCache.exchClient) {
+    exchClient = bot.hlCache.exchClient;
+    infoClient = bot.hlCache.infoClient;
+    assetIndex = bot.hlCache.assetIndex;
+  } else {
+    // Fresh lookup (slow path)
+    const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+    const wallet = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+    const transport = new hl.HttpTransport({ isTestnet: useTestnet });
+    exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
+    infoClient = new hl.InfoClient({ transport });
+
+    const isSpot = (cfg.priceSource === "hyperliquid_spot");
+    const base   = cfg.symbol.split("/")[0];
+    assetIndex = -1;
+    try {
+      if (isSpot) {
+        const m = await infoClient.spotMeta();
+        for (let i = 0; i < m.universe.length; i++) {
+          const baseToken = m.tokens[m.universe[i].tokens[0]];
+          if (baseToken?.name === base) { assetIndex = 10000 + m.universe[i].index; break; }
+        }
+      } else {
+        const m = await infoClient.meta();
+        for (let i = 0; i < m.universe.length; i++) {
+          if (m.universe[i].name === base) { assetIndex = i; break; }
+        }
+      }
+    } catch (e) {
+      return { ok: false, error: `Could not resolve asset index: ${e.message}`, results: [] };
+    }
+    if (assetIndex < 0) return { ok: false, error: `Asset not found in Hyperliquid universe`, results: [] };
+  }
+
+  // Build cancels array. Order IDs must be numeric.
+  const cancels = orderIds.map(id => ({ a: assetIndex, o: Number(id) })).filter(c => Number.isFinite(c.o));
+  if (cancels.length === 0) return { ok: false, error: "No valid numeric order IDs", results: [] };
+
+  try {
+    const resp = await Promise.race([
+      exchClient.cancel({ cancels }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
+    ]);
+    // Response shape: { status: "ok", response: { type: "cancel", data: { statuses: [...] } } }
+    const statuses = resp?.response?.data?.statuses || [];
+    return { ok: true, results: cancels.map((c, i) => ({ id: c.o, status: statuses[i] })) };
+  } catch (e) {
+    // The SDK throws ApiRequestError when ANY individual cancel in a batch
+    // has an "error" status, even when the others succeeded. The raw API
+    // response is preserved on err.response. Extract the per-order statuses
+    // so we report partial success correctly. Already-filled/cancelled
+    // orders count as success (goal: no open order at that ID — achieved).
+    const statuses = e?.response?.response?.data?.statuses;
+    if (Array.isArray(statuses) && statuses.length === cancels.length) {
+      return { ok: true, results: cancels.map((c, i) => ({ id: c.o, status: statuses[i] })) };
+    }
+    return { ok: false, error: e.message, results: [] };
+  }
+}
+
+
+async function cancelAllOrders(botId) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
   if (!bot.exchange || !cfg) return;
 
-  try {
-    await bot.exchange.cancelAllOrders(cfg.symbol);
-    log(exchangeKey, `All orders cancelled (bulk)`, "success");
+  // Mark bot as stopped first — prevents maintainGrid from racing
+  bot.running = false;
+
+  const toCancel = [...bot.openOrders];
+  log(botId, `Starting cancel: ${toCancel.length} locally-tracked order(s)`, "info");
+
+  if (toCancel.length === 0) {
+    log(botId, `Nothing to cancel — local tracking is empty`, "info");
+    bot.pendingRoundTrips = [];
+    return;
+  }
+
+  // ── HYPERLIQUID FAST PATH ──────────────────────────────────────────
+  // CCXT's Hyperliquid cancelOrder times out. Use native SDK instead.
+  if (exchangeKey === "hyperliquid") {
+    log(botId, `Using native Hyperliquid SDK for cancellation (bypass CCXT)`, "info");
+    const orderIds = toCancel.map(o => o.id);
+    const result = await hyperliquidNativeCancel(bot, orderIds);
+    if (!result.ok) {
+      log(botId, `❌ Native cancel failed: ${result.error}`, "error");
+      log(botId, `⚠️ Please check Hyperliquid web UI and cancel manually`, "error");
+    } else {
+      let ok = 0, fail = 0;
+      for (const r of result.results) {
+        const status = r.status;
+        const tracked = toCancel.find(o => Number(o.id) === r.id);
+        const tag = tracked ? `${tracked.side?.toUpperCase()} @ $${tracked.price}` : `id ${r.id}`;
+        if (status === "success") {
+          log(botId, `  ↳ Cancelled ${tag}`, "info");
+          ok++;
+        } else if (status && status.error) {
+          if (status.error.toLowerCase().includes("never placed") ||
+              status.error.toLowerCase().includes("already cancel") ||
+              status.error.toLowerCase().includes("filled")) {
+            log(botId, `  ↳ ${tag} already gone (${status.error})`, "info");
+            ok++;
+          } else {
+            log(botId, `  ↳ FAILED ${tag}: ${status.error}`, "warn");
+            fail++;
+          }
+        } else {
+          log(botId, `  ↳ ? ${tag}: ${JSON.stringify(status)}`, "warn");
+          fail++;
+        }
+      }
+      if (fail === 0) {
+        log(botId, `✅ All ${ok} order(s) cancelled via native SDK`, "success");
+      } else {
+        log(botId, `⚠️ Native SDK summary: ${ok} OK, ${fail} FAILED`, "warn");
+      }
+    }
     bot.openOrders = [];
+    bot.pendingRoundTrips = [];
+    return;
+  }
+
+  // ── DEFAULT PATH (Binance, Deribit): use CCXT ──────────────────────
+  // Try bulk cancel first, wrapped with timeout.
+  try {
+    await Promise.race([
+      bot.exchange.cancelAllOrders(cfg.symbol),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("cancelAllOrders timeout 5s")), 5000)),
+    ]);
+    log(botId, `Bulk cancel succeeded`, "success");
+    bot.openOrders = [];
+    bot.pendingRoundTrips = [];
     return;
   } catch (err) {
-    log(exchangeKey, `Bulk cancel failed: ${err.message} — falling back`, "warn");
+    log(botId, `Bulk cancel ${err.message.includes("timeout") ? "timed out" : "not supported"}: ${err.message} — using per-order cancels`, "warn");
   }
 
-  try {
-    const all = await bot.exchange.fetchOpenOrders(cfg.symbol);
-    for (const o of all) {
-      try { await bot.exchange.cancelOrder(o.id, cfg.symbol); } catch(e){}
+  // Per-order cancellation. Each cancelOrder call is wrapped in its own
+  // 5-second timeout so a single bad call can't stall the whole sequence.
+  let successCount = 0, failCount = 0;
+  for (const o of toCancel) {
+    try {
+      await Promise.race([
+        bot.exchange.cancelOrder(o.id, cfg.symbol),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout 5s")), 5000)),
+      ]);
+      bot.recentlyCancelled = bot.recentlyCancelled || {};
+      bot.recentlyCancelled[o.id] = Date.now();
+      log(botId, `  ↳ Cancelled ${o.side?.toUpperCase()} @ $${o.price}  id:${String(o.id).slice(0,16)}`, "info");
+      successCount++;
+    } catch (e) {
+      // "Order was never placed, already canceled, or filled" = success in disguise
+      const msg = (e.message || "").toLowerCase();
+      if (msg.includes("never placed") || msg.includes("already cancel") || msg.includes("filled")) {
+        log(botId, `  ↳ ${o.side?.toUpperCase()} @ $${o.price} already gone (${e.message})`, "info");
+        successCount++;
+      } else {
+        log(botId, `  ↳ FAILED ${o.side?.toUpperCase()} @ $${o.price}: ${e.message}`, "warn");
+        failCount++;
+      }
     }
-  } catch (err) {
-    for (const o of bot.openOrders) {
-      try { await bot.exchange.cancelOrder(o.id, cfg.symbol); } catch(e){}
-    }
+    // Always remove from local tracking
+    bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
   }
+
+  if (failCount === 0) {
+    log(botId, `✅ All ${successCount} order(s) cancelled`, "success");
+  } else {
+    log(botId, `⚠️ Cancel summary: ${successCount} OK, ${failCount} FAILED — check Hyperliquid web UI manually`, "error");
+  }
+
   bot.openOrders = [];
+  bot.pendingRoundTrips = [];
 }
 
-async function syncOrdersFromExchange(exchangeKey) {
-  const bot = bots[exchangeKey];
+async function syncOrdersFromExchange(botId) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
+  // Hyperliquid's fetchOpenOrders AND fetchOrder both return broken data
+  // (CCXT bugs #26655 + #27113). Local tracking is the source of truth for
+  // Hyperliquid; skip the sync entirely.
+  if (exchangeKey === "hyperliquid") return;
+  const GRACE_MS = 30_000;       // ignore orphan-style mismatches for orders this fresh
+  const now      = Date.now();
   try {
     const exchangeOrders = await bot.exchange.fetchOpenOrders(cfg.symbol);
     const exchangeIds    = new Set(exchangeOrders.map(o => o.id));
     const trackedIds     = new Set(bot.openOrders.map(o => o.id));
 
-    const orphans = exchangeOrders.filter(o => !trackedIds.has(o.id));
+    // ── Garbage-collect stale recentlyCancelled entries ──
+    bot.recentlyCancelled = bot.recentlyCancelled || {};
+    for (const id of Object.keys(bot.recentlyCancelled)) {
+      if (now - bot.recentlyCancelled[id] > GRACE_MS) delete bot.recentlyCancelled[id];
+    }
+
+    // ── Cancel TRUE orphans (on exchange, not tracked, and not recently cancelled by us) ──
+    // The recently-cancelled filter prevents re-cancelling orders that we
+    // just cancelled but Deribit's fetchOpenOrders hasn't propagated yet.
+    const orphans = exchangeOrders.filter(o =>
+      !trackedIds.has(o.id) && !bot.recentlyCancelled[o.id]
+    );
     if (orphans.length > 0) {
-      log(exchangeKey, `Found ${orphans.length} orphan orders — cancelling`, "warn");
+      log(botId, `Found ${orphans.length} orphan orders on exchange — cancelling`, "warn");
       for (const o of orphans) {
-        try { await bot.exchange.cancelOrder(o.id, cfg.symbol); } catch(e){}
+        const ok = await cancelSingleOrder(botId, o.id, cfg.symbol);
+        if (ok) bot.recentlyCancelled[o.id] = now;
       }
     }
-    bot.openOrders = bot.openOrders.filter(o => exchangeIds.has(o.id));
+
+    // ── Locally-tracked orders missing from the exchange ──
+    // Skip orders placed in the last 30s — Deribit may not have propagated
+    // them to fetchOpenOrders yet, so they look "missing" but they're really fine.
+    const missingFromExchange = bot.openOrders.filter(o =>
+      !exchangeIds.has(o.id) && (now - (o.placedAt || 0) > GRACE_MS)
+    );
+    for (const o of missingFromExchange) {
+      try {
+        const order = await bot.exchange.fetchOrder(o.id, cfg.symbol);
+        if (order.status === "closed" || order.status === "filled") {
+          // It filled — let checkAndHandleFills logic handle it on the next loop.
+          log(botId, `Sync detected filled order: ${o.type.toUpperCase()} ${o.side.toUpperCase()} @ $${o.price} (will be processed next loop)`, "info");
+          // DON'T remove from openOrders yet — let checkAndHandleFills process it.
+        } else if (order.status === "canceled" || order.status === "cancelled") {
+          // External cancel — clean up
+          if (o.type === "target") {
+            const orphaned = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === o.id);
+            if (orphaned.length > 0) {
+              bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => rt.targetOrderId !== o.id);
+              log(botId, `Sync: target ${o.id} was cancelled externally — discarded ${orphaned.length} pending RT(s)`, "warn");
+            }
+          }
+          bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
+        }
+      } catch (err) {
+        log(botId, `Sync fetchOrder failed for ${o.id}: ${err.message}`, "warn");
+      }
+    }
   } catch (err) {
-    log(exchangeKey, `sync failed: ${err.message}`, "warn");
+    log(botId, `sync failed: ${err.message}`, "warn");
   }
 }
 
@@ -1216,16 +2266,21 @@ function calcLiveStats(exchangeKey) {
   const buyAvg  = buys.length  ? buys.reduce((s,f)  => s + f.price, 0) / buys.length  : null;
   const sellAvg = sells.length ? sells.reduce((s,f) => s + f.price, 0) / sells.length : null;
 
-  const rt  = Math.min(buys.length, sells.length);
+  // SINGLE SOURCE OF TRUTH: completedRoundTrips
+  // Each entry is created when a target order fills against a tracked entry order,
+  // so this is the ACTUAL count and PnL — not an estimate based on min(buys, sells).
+  const completed = bot.completedRoundTrips || [];
+  const rt        = completed.length;
+  const realPnl   = completed.reduce((s, x) => s + (x.pnl || 0), 0);
+
   const qty = bot.config?.qtyPerStep    || 0;
   const tsp = bot.config?.targetSpread  || 0;
-  const simplePnl = parseFloat((rt * tsp * qty).toFixed(4));
 
   let totalFees = 0;
   for (const f of fills) totalFees += (f.fee || 0);
 
   return {
-    totalPnl       : simplePnl,
+    totalPnl       : parseFloat(realPnl.toFixed(4)),
     buyAvg         : buyAvg  ? parseFloat(buyAvg.toFixed(4))  : null,
     sellAvg        : sellAvg ? parseFloat(sellAvg.toFixed(4)) : null,
     totalRoundTrips: rt,
@@ -1244,82 +2299,141 @@ function getRoundTripReport(exchangeKey, fromTs, toTs) {
   const bot = bots[exchangeKey];
   const tsp = bot.config?.targetSpread || 0;
   const qty = bot.config?.qtyPerStep   || 0;
-  const perRtPnl  = parseFloat((tsp * qty).toFixed(6));
-  const tolerance = tsp * 0.10;
 
+  // SINGLE SOURCE OF TRUTH: completedRoundTrips, filtered by closeTs in [fromTs, toTs]
+  const completed = (bot.completedRoundTrips || []).filter(rt => {
+    const t = new Date(rt.closeTs).getTime();
+    return t >= fromTs && t <= toTs;
+  });
+
+  const rows = completed.map(rt => ({
+    openSide  : rt.openSide.toUpperCase(),
+    buyPrice  : rt.buyPrice  ?? (rt.openSide === "buy"  ? rt.openPrice : rt.closePrice),
+    sellPrice : rt.sellPrice ?? (rt.openSide === "sell" ? rt.openPrice : rt.closePrice),
+    qty       : rt.qty,
+    pnl       : rt.pnl,
+    openTs    : rt.openTs,
+    closeTs   : rt.closeTs,
+    durationMs: rt.durationMs,
+  })).sort((a, b) => new Date(b.closeTs) - new Date(a.closeTs));
+
+  const rt  = rows.length;
+  const pnl = parseFloat(rows.reduce((s, r) => s + (r.pnl || 0), 0).toFixed(4));
+  const perRtPnl = rt > 0 ? parseFloat((pnl / rt).toFixed(6)) : parseFloat((tsp * qty).toFixed(6));
+
+  // Average actual spread between paired buy/sell (real market behavior — not the configured target)
+  const avgSpread = rt > 0
+    ? parseFloat((rows.reduce((s, r) => s + (r.sellPrice - r.buyPrice), 0) / rt).toFixed(6))
+    : 0;
+
+  // Fee/rebate info still comes from fillHistory (per-fill data)
   const periodFills = bot.fillHistory.filter(f => {
     const t = new Date(f.ts).getTime();
     return t >= fromTs && t <= toTs;
   });
-
   const periodBuys  = periodFills.filter(f => f.side === "buy").length;
   const periodSells = periodFills.filter(f => f.side === "sell").length;
 
-  const usedBuyIdx = new Set(), usedSellIdx = new Set(), rows = [];
-  const buyFills  = periodFills.filter(f => f.side === "buy") .sort((a,b) => new Date(a.ts)-new Date(b.ts));
-  const sellFills = periodFills.filter(f => f.side === "sell").sort((a,b) => new Date(a.ts)-new Date(b.ts));
-
-  for (let bi = 0; bi < buyFills.length; bi++) {
-    if (usedBuyIdx.has(bi)) continue;
-    const b = buyFills[bi];
-    for (let si = 0; si < sellFills.length; si++) {
-      if (usedSellIdx.has(si)) continue;
-      const s = sellFills[si];
-      const diff = s.price - b.price;
-      if (Math.abs(diff - tsp) <= tolerance && new Date(s.ts) >= new Date(b.ts)) {
-        usedBuyIdx.add(bi); usedSellIdx.add(si);
-        rows.push({
-          openSide:"BUY", buyPrice:b.price, sellPrice:s.price, qty,
-          pnl:perRtPnl, openTs:b.ts, closeTs:s.ts,
-          durationMs:new Date(s.ts)-new Date(b.ts),
-        });
-        break;
-      }
-    }
-  }
-
-  for (let si = 0; si < sellFills.length; si++) {
-    if (usedSellIdx.has(si)) continue;
-    const s = sellFills[si];
-    for (let bi = 0; bi < buyFills.length; bi++) {
-      if (usedBuyIdx.has(bi)) continue;
-      const b = buyFills[bi];
-      const diff = s.price - b.price;
-      if (Math.abs(diff - tsp) <= tolerance && new Date(b.ts) >= new Date(s.ts)) {
-        usedSellIdx.add(si); usedBuyIdx.add(bi);
-        rows.push({
-          openSide:"SELL", buyPrice:b.price, sellPrice:s.price, qty,
-          pnl:perRtPnl, openTs:s.ts, closeTs:b.ts,
-          durationMs:new Date(b.ts)-new Date(s.ts),
-        });
-        break;
-      }
-    }
-  }
-
-  rows.sort((a,b) => new Date(b.closeTs) - new Date(a.closeTs));
-  const rt  = rows.length;
-  const pnl = parseFloat((rt * perRtPnl).toFixed(4));
-
-  // Fees / rebates breakdown (Deribit-style, but works for any exchange that reports fees)
-  let totalFees = 0, totalRebates = 0, netPnl = pnl;
+  let totalFees = 0, totalRebates = 0;
   for (const f of periodFills) {
     const fee = f.fee || 0;
     if (fee > 0) totalFees += fee;
     else         totalRebates += -fee;
   }
-  netPnl = parseFloat((pnl - totalFees + totalRebates).toFixed(6));
+  const netPnl = parseFloat((pnl - totalFees + totalRebates).toFixed(6));
 
   return {
     count: rt, pnl,
-    wins: rt, losses: 0,
-    winRate: rt > 0 ? 100 : 0,
+    wins: rows.filter(r => r.pnl > 0).length,
+    losses: rows.filter(r => r.pnl < 0).length,
+    winRate: rt > 0 ? Math.round(rows.filter(r => r.pnl > 0).length / rt * 100) : 0,
     roundTrips: rows,
-    periodBuys, periodSells, perRtPnl,
+    periodBuys, periodSells, perRtPnl, avgSpread,
     totalFees   : parseFloat(totalFees.toFixed(6)),
     totalRebates: parseFloat(totalRebates.toFixed(6)),
     netPnl,
   };
+}
+
+// ============================================================
+//  CSV REPORT BUILDER
+//  Builds the CSV payload for /api/csv and Telegram download.
+//  Layout:
+//    Header: summary metadata (totals + config)
+//    Blank line
+//    Detail: per-round-trip rows
+// ============================================================
+function buildCsvReport(exchangeKey, fromTs, toTs) {
+  const bot = bots[exchangeKey];
+  const cfg = bot.config || {};
+  const r   = getRoundTripReport(exchangeKey, fromTs, toTs);
+
+  // Helper: CSV-safe field (escapes commas, quotes, newlines)
+  const esc = (v) => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  const lines = [];
+
+  // ── SUMMARY HEADER ─────────────────────────────────────
+  lines.push("# GRID BOT 24H PNL REPORT");
+  lines.push(`# Exchange,${esc(exchangeKey)}`);
+  lines.push(`# Symbol,${esc(cfg.symbol || "")}`);
+  lines.push(`# Period from,${esc(new Date(fromTs).toISOString())}`);
+  lines.push(`# Period to,${esc(new Date(toTs).toISOString())}`);
+  lines.push(`# Generated,${esc(new Date().toISOString())}`);
+  lines.push("");
+
+  // Summary metrics row (the columns you asked for in point 4)
+  lines.push("RTPS,TOTAL_PNL,PER_STEP_QTY,AVG_SPREAD,TARGET_SPREAD,DISTANCE,TOTAL_FEES,TOTAL_REBATES,NET_PNL");
+  lines.push([
+    r.count,
+    r.pnl.toFixed(6),
+    cfg.qtyPerStep ?? "",
+    r.avgSpread.toFixed(6),
+    cfg.targetSpread ?? "",
+    cfg.distance ?? "",
+    r.totalFees.toFixed(6),
+    r.totalRebates.toFixed(6),
+    r.netPnl.toFixed(6),
+  ].map(esc).join(","));
+  lines.push("");
+
+  // ── DETAIL ROWS ────────────────────────────────────────
+  // Each round trip shows the consecutive buy AND sell side-by-side, with PnL.
+  // "Open side" tells you which leg fired first (buy entry then sell target, or sell entry then buy target).
+  lines.push("ROUND_TRIP,OPEN_SIDE,BUY_PRICE,SELL_PRICE,QTY,SPREAD,PNL,DURATION_SEC,OPENED_AT,CLOSED_AT");
+
+  // Sort detail rows by close time ascending so the CSV reads chronologically top-to-bottom
+  const orderedRows = [...r.roundTrips].sort((a, b) => new Date(a.closeTs) - new Date(b.closeTs));
+
+  orderedRows.forEach((rt, idx) => {
+    const spread   = (rt.sellPrice - rt.buyPrice).toFixed(6);
+    const durSec   = ((rt.durationMs || 0) / 1000).toFixed(1);
+    const openedAt = new Date(rt.openTs).toISOString();
+    const closedAt = new Date(rt.closeTs).toISOString();
+    lines.push([
+      idx + 1,
+      rt.openSide,
+      rt.buyPrice.toFixed(6),
+      rt.sellPrice.toFixed(6),
+      rt.qty,
+      spread,
+      rt.pnl.toFixed(6),
+      durSec,
+      openedAt,
+      closedAt,
+    ].map(esc).join(","));
+  });
+
+  if (orderedRows.length === 0) {
+    lines.push("# No round trips in this period");
+  }
+
+  return lines.join("\n");
 }
 
 // ============================================================
@@ -1361,6 +2475,9 @@ function buildStateSnapshot() {
     const b = bots[key];
     b.stats = calcLiveStats(key);
     snap[key] = {
+      botId               : b.botId || key,
+      exchangeKey         : b.exchangeKey,
+      label               : b.label || key,
       running             : b.running,
       lastPrice           : b.lastPrice,
       entryPrice          : b.entryPrice,
@@ -1373,7 +2490,8 @@ function buildStateSnapshot() {
       stats               : b.stats,
       logsRecent          : b.logs.slice(0, 50),
       symbol              : b.config?.symbol || null,
-      hedge               : key === "binance" ? {
+      priceSource         : b.config?.priceSource || null,
+      hedge               : b.exchangeKey === "binance" ? {
         enabled         : b.hedge.enabled,
         spotInventory   : b.hedge.spotInventory,
         currentShortQty : b.hedge.currentShortQty,
@@ -1393,15 +2511,41 @@ function buildStateSnapshot() {
 // ============================================================
 app.get("/api/status", (req, res) => res.json(buildStateSnapshot()));
 
+// List all bot instances (for the dynamic dashboard)
+app.get("/api/bots", (req, res) => {
+  const list = listBots().map(b => ({
+    botId       : b.botId,
+    exchangeKey : b.exchangeKey,
+    label       : b.label || b.botId,
+    running     : b.running,
+    symbol      : b.config?.symbol || null,
+    priceSource : b.config?.priceSource || null,
+    isLegacy    : (b.botId === "binance" || b.botId === "deribit" || b.botId === "hyperliquid"),
+  }));
+  res.json(list);
+});
+
+// Delete a stopped bot instance
+app.post("/api/bot/delete", (req, res) => {
+  const botId = req.body?.botId || req.query?.botId;
+  if (!botId || !bots[botId]) return res.status(400).json({ error: "Unknown bot" });
+  if (bots[botId].running) return res.status(400).json({ error: "Stop the bot before deleting" });
+  removeBotInstance(botId);
+  broadcast("state", buildStateSnapshot());
+  res.json({ success: true, botId });
+});
+
 // Server-side config flags the frontend needs to know about
 app.get("/api/config", (req, res) => {
   res.json({
-    deribitTestnet: String(process.env.DERIBIT_TESTNET || "").toLowerCase() === "true",
+    deribitTestnet     : String(process.env.DERIBIT_TESTNET || "").toLowerCase() === "true",
+    binanceTestnet     : String(process.env.BINANCE_TESTNET || "").toLowerCase() === "true",
+    hyperliquidTestnet : String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true",
   });
 });
 
 app.get("/api/report", async (req, res) => {
-  const exchangeKey = req.query.exchange || "binance";
+  const exchangeKey = req.query.botId || req.query.exchange || "binance";
   if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });
 
   const now    = Date.now();
@@ -1420,8 +2564,34 @@ app.get("/api/report", async (req, res) => {
   res.json({ period, fromTs, toTs, exchange: exchangeKey, ...getRoundTripReport(exchangeKey, fromTs, toTs) });
 });
 
+// CSV download (browser) — same period semantics as /api/report
+app.get("/api/csv", async (req, res) => {
+  const exchangeKey = req.query.botId || req.query.exchange || "binance";
+  if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });
+
+  const now    = Date.now();
+  const period = req.query.period || "24h";
+  let fromTs, toTs = now;
+  if (period === "24h")      fromTs = now - 24 * 60 * 60 * 1000;
+  else if (period === "7d")  fromTs = now - 7  * 24 * 60 * 60 * 1000;
+  else if (period === "30d") fromTs = now - 30 * 24 * 60 * 60 * 1000;
+  else if (period === "custom") {
+    fromTs = parseInt(req.query.from) || (now - 24 * 60 * 60 * 1000);
+    toTs   = parseInt(req.query.to)   || now;
+  } else fromTs = now - 24 * 60 * 60 * 1000;
+
+  if (exchangeKey === "deribit") await refreshDeribitFees().catch(()=>{});
+
+  const csv = buildCsvReport(exchangeKey, fromTs, toTs);
+  const dateStr  = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+  const filename = `gridbot_${exchangeKey}_${period}_${dateStr}.csv`;
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(csv);
+});
+
 app.get("/api/logs", (req, res) => {
-  const exchangeKey = req.query.exchange;
+  const exchangeKey = req.query.botId || req.query.exchange;
   if (exchangeKey && bots[exchangeKey]) return res.json(bots[exchangeKey].logs);
   const all = [...bots.binance.logs, ...bots.deribit.logs];
   all.sort((a,b) => new Date(b.ts) - new Date(a.ts));
@@ -1431,26 +2601,50 @@ app.get("/api/logs", (req, res) => {
 app.post("/api/start", async (req, res) => {
   const cfg = req.body;
   const priceSource = cfg.priceSource;
-  // Both "deribit" (perpetual) and "deribit_spot" map to the deribit bot slot.
-  // Only one Deribit bot can run at a time — switching between perp/spot
-  // means stopping one and starting the other.
-  const exchangeKey = (priceSource === "deribit" || priceSource === "deribit_spot") ? "deribit" : "binance";
-  const bot = bots[exchangeKey];
+  // Determine the exchange family
+  let exchangeKey;
+  if (priceSource === "deribit" || priceSource === "deribit_spot") {
+    exchangeKey = "deribit";
+  } else if (priceSource === "hyperliquid" || priceSource === "hyperliquid_spot" || priceSource === "hyperliquid_hip3") {
+    exchangeKey = "hyperliquid";
+  } else {
+    exchangeKey = "binance";
+  }
 
-  if (bot.running) return res.status(400).json({ error: `${EXCHANGE_TAG[exchangeKey]} bot is already running` });
+  // ── DYNAMIC BOT INSTANCE ──
+  // First bot of an exchange (when the legacy slot is free) reuses the
+  // legacy slot — keeps Binance hedge + Telegram menus working. Additional
+  // bots get a fresh unique instance so many run simultaneously.
+  let bot, botId;
+  const legacy = bots[exchangeKey];
+  if (legacy && !legacy.running) {
+    bot   = legacy;
+    botId = exchangeKey;
+    // refresh the legacy slot
+    bots[exchangeKey] = makeFreshBot(exchangeKey, exchangeKey);
+    bot   = bots[exchangeKey];
+  } else {
+    const lbl = `${cfg.symbol || exchangeKey} ${priceSource.includes("spot") ? "Spot" : priceSource.includes("hyperliquid") ? "Perp" : ""}`.trim();
+    bot   = createBotInstance(exchangeKey, lbl);
+    botId = bot.botId;
+  }
+  bot.label = `${cfg.symbol || exchangeKey}`;
 
   injectKeysIntoCfg(exchangeKey, cfg);
 
   if (!cfg.apiKey || !cfg.secretKey) {
+    removeBotInstance(botId);
     const which = exchangeKey === "deribit"
       ? "DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET"
+      : exchangeKey === "hyperliquid"
+      ? "HYPERLIQUID_WALLET_ADDRESS / HYPERLIQUID_PRIVATE_KEY"
       : "BINANCE_API_KEY / BINANCE_SECRET_KEY";
     return res.status(400).json({ error: `${which} missing in .env file` });
   }
 
   const required = ["priceSource","symbol","distance","avgSellSpacing","avgBuySpacing","targetSpread","qtyPerStep"];
   for (const f of required) {
-    if (!cfg[f] && cfg[f] !== 0) return res.status(400).json({ error: `Missing field: ${f}` });
+    if (!cfg[f] && cfg[f] !== 0) { removeBotInstance(botId); return res.status(400).json({ error: `Missing field: ${f}` }); }
   }
 
   cfg.distance       = parseFloat(cfg.distance);
@@ -1464,16 +2658,77 @@ app.post("/api/start", async (req, res) => {
     await exchange.loadMarkets();
     if (exchangeKey === "binance") await syncExchangeTime(exchange);
 
-    const entryPrice = await getCurrentPrice(exchange, cfg.symbol);
+    const tick       = await getTickerSnapshot(exchange, cfg.symbol);
+    const entryPrice = tick.last;
     const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
     const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
 
     Object.assign(bot, {
+      botId, exchangeKey,
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
+      bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true,
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
       completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0,
     });
+
+    // Pre-warm the Hyperliquid native SDK: resolve asset index and build the
+    // exchange client once, so cancellation later is fast (~100-300ms instead
+    // of ~1.5s). Stored on the bot so cancelAllOrders can reuse them.
+    if (exchangeKey === "hyperliquid") {
+      try {
+        const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+        const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+        const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
+        const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
+        const infoClient = new hl.InfoClient({ transport });
+
+        const isSpot = (cfg.priceSource === "hyperliquid_spot");
+        const base   = cfg.symbol.split("/")[0];
+        let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
+        if (isSpot) {
+          const m = await infoClient.spotMeta();
+          for (let i = 0; i < m.universe.length; i++) {
+            const baseToken = m.tokens[m.universe[i].tokens[0]];
+            if (baseToken?.name === base) {
+              assetIndex = 10000 + m.universe[i].index;
+              szDecimals = baseToken.szDecimals ?? 4;
+              maxSig = 8; // spot allows up to 8 sig figs on price
+              // For spot, Hyperliquid's openOrders returns coin as the
+              // universe NAME (e.g. "@107" or a named pair like "PURR/USDC"),
+              // NOT the base token. Capture it for correct fill matching.
+              coinId = m.universe[i].name;
+              break;
+            }
+          }
+        } else {
+          let m;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try { m = await infoClient.meta(); break; }
+            catch (me) {
+              if (/429|too many/i.test(me.message || "") && attempt < 2) {
+                log(botId, `Pre-warm meta() rate-limited, retrying in 4s (attempt ${attempt+1}/3)`, "warn");
+                await new Promise(r => setTimeout(r, 4000));
+              } else throw me;
+            }
+          }
+          for (let i = 0; i < m.universe.length; i++) {
+            if (m.universe[i].name === base) {
+              assetIndex = i;
+              szDecimals = m.universe[i].szDecimals ?? 4;
+              maxSig = 5; // perps allow up to 5 sig figs on price
+              coinId = m.universe[i].name;  // perp coin = base name (e.g. "HYPE")
+              break;
+            }
+          }
+        }
+        if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
+        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot };
+        log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
+      } catch (e) {
+        log(botId, `Hyperliquid SDK pre-warm failed (will lookup at cancel time): ${e.message}`, "warn");
+      }
+    }
 
     // Hedge only for Binance
     if (exchangeKey === "binance" && cfg.hedgeEnabled) {
@@ -1496,11 +2751,11 @@ app.post("/api/start", async (req, res) => {
           lastCheckTs: 0, lastRebalanceTs: 0,
           symbol: `${base}/USD:${base}`, log: [],
         };
-        log("binance", `Hedge enabled: ${bot.hedge.symbol}`, "success");
+        log(botId, `Hedge enabled: ${bot.hedge.symbol}`, "success");
       }
     }
 
-    log(exchangeKey, `Cancelling leftover orders...`);
+    log(botId, `Cancelling leftover orders...`);
     try { await exchange.cancelAllOrders(cfg.symbol); }
     catch(e) {
       try {
@@ -1509,53 +2764,153 @@ app.post("/api/start", async (req, res) => {
       } catch(_){}
     }
 
-    log(exchangeKey, `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
-    log(exchangeKey, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
+    log(botId, `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
+    log(botId, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
+
+    // Spot inventory advisory
+    if (exchangeKey === "hyperliquid" && bot.hlCache?.isSpot) {
+      const recommended = (cfg.qtyPerStep * 3).toFixed(4);
+      const base = bot.hlCache.base;
+      try {
+        const bal = await bot.exchange.fetchBalance();
+        const freeBase = parseFloat(bal?.[base]?.free ?? bal?.free?.[base] ?? 0);
+        log(botId, `SPOT mode: you hold ${freeBase.toFixed(4)} ${base}. Recommended ≥ ${recommended} ${base} so all 3 sell slots can be placed.`, freeBase >= cfg.qtyPerStep ? "info" : "warn");
+      } catch(e) {
+        log(botId, `SPOT mode: hold ≥ ${recommended} ${base} so all 3 sell slots work.`, "info");
+      }
+    }
 
     const tag = EXCHANGE_TAG[exchangeKey];
     await sendTelegram(cfg.telegramToken, cfg.telegramChatId,
       `${tag} Grid Bot Started\nSymbol: ${cfg.symbol}\nEntry: $${entryPrice}\nUpper: $${upperLimit}\nLower: $${lowerLimit}\nTime: ${new Date().toLocaleString()}`
     );
 
-    await maintainGrid(exchangeKey, entryPrice);
-    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), 5000);
+    await maintainGrid(botId, entryPrice);
 
-    res.json({ success: true, exchange: exchangeKey, entryPrice, upperLimit, lowerLimit });
+    // Stagger this bot's loop phase so multiple bots don't all hit the
+    // Hyperliquid API in the same instant. Each running bot gets a
+    // different offset within the 6s window.
+    const runningCount = listBots().filter(b => b.running).length;
+    const phaseOffset  = (runningCount % 4) * 1500;  // 0,1.5s,3s,4.5s
+    setTimeout(() => {
+      if (bot.running) bot.loopTimer = setInterval(() => gridLoop(botId), 6000);
+    }, phaseOffset);
+    log(botId, `Loop scheduled with ${phaseOffset}ms phase offset (${runningCount} bots running)`, "info");
+
+    res.json({ success: true, botId, exchange: exchangeKey, label: bot.label, entryPrice, upperLimit, lowerLimit });
   } catch (err) {
-    log(exchangeKey, `Start failed: ${err.message}`, "error");
+    const is429 = (err.message || "").includes("429") || /too many requests/i.test(err.message || "");
+    const msg = is429
+      ? "Hyperliquid rate limit hit (429). Wait ~60 seconds, then try again. Running fewer bots or a slower loop reduces this."
+      : err.message;
+    log(botId, `Start failed: ${msg}`, "error");
     bot.running = false;
-    res.status(500).json({ error: err.message });
+    removeBotInstance(botId);
+    res.status(is429 ? 429 : 500).json({ error: msg });
   }
 });
 
 app.post("/api/stop", async (req, res) => {
-  const exchangeKey = req.body?.exchange || req.query?.exchange || "binance";
-  if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });
-  const bot = bots[exchangeKey];
+  const botId = req.body?.botId || req.query?.botId || req.body?.exchange || req.query?.exchange || "binance";
+  if (!bots[botId]) return res.status(400).json({ error: "Unknown bot" });
+  const bot = bots[botId];
+  const exchangeKey = bot.exchangeKey;
   if (!bot.running) return res.json({ message: "Bot was not running" });
 
-  clearInterval(bot.loopTimer);
+  // Set the flag FIRST so any in-flight gridLoop iteration sees it and bails.
   bot.running = false;
-  log(exchangeKey, `Manual stop — cancelling orders...`, "warn");
+  clearInterval(bot.loopTimer);
+  log(botId, `Manual stop — cancelling orders...`, "warn");
 
   try {
-    await cancelAllOrders(exchangeKey);
-    log(exchangeKey, `All orders cancelled.`, "success");
-  } catch (err) { log(exchangeKey, `Cancel error: ${err.message}`, "warn"); }
+    await cancelAllOrders(botId);
+    log(botId, `All orders cancelled.`, "success");
+  } catch (err) { log(botId, `Cancel error: ${err.message}`, "warn"); }
 
   const tag = EXCHANGE_TAG[exchangeKey];
   await sendTelegram(process.env.TELEGRAM_BOT_TOKEN, process.env.TELEGRAM_CHAT_ID,
     `${tag} 🛑 Grid Bot Manually Stopped\n\nSymbol: ${bot.config?.symbol||"—"}\nLast Price: $${bot.lastPrice||"—"}\nTime: ${new Date().toLocaleString()}`
   );
 
-  res.json({ success: true, exchange: exchangeKey });
+  res.json({ success: true, botId, exchange: exchangeKey });
   broadcast("state", buildStateSnapshot());
+
+  // Remove dynamic (non-legacy) bot instances after they stop, so the
+  // dashboard doesn't accumulate dead bots. Legacy slots are reset.
+  setTimeout(() => {
+    if (!bots[botId]?.running) removeBotInstance(botId);
+    broadcast("state", buildStateSnapshot());
+  }, 5000);
+});
+
+// Hyperliquid account overview as structured JSON (native SDK, fast)
+app.get("/api/hl_portfolio", async (req, res) => {
+  const walletAddr = process.env.HYPERLIQUID_WALLET_ADDRESS;
+  if (!walletAddr) return res.status(400).json({ error: "HYPERLIQUID_WALLET_ADDRESS missing" });
+  try {
+    const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+    const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
+    const info       = new hl.InfoClient({ transport });
+
+    const [perpState, spotState] = await Promise.all([
+      info.clearinghouseState({ user: walletAddr }).catch(() => null),
+      info.spotClearinghouseState({ user: walletAddr }).catch(() => null),
+    ]);
+
+    // Perps USDC
+    let perpTotal = 0, perpFree = 0;
+    if (perpState?.marginSummary) {
+      perpTotal = parseFloat(perpState.marginSummary.accountValue || 0);
+      perpFree  = parseFloat(perpState.withdrawable || perpTotal);
+    }
+
+    // Spot tokens
+    const spotTokens = [];
+    let spotUsdc = 0;
+    for (const b of (spotState?.balances || [])) {
+      const total = parseFloat(b.total || 0);
+      if (total > 0) {
+        spotTokens.push({ coin: b.coin, total, hold: parseFloat(b.hold || 0) });
+        if (b.coin === "USDC") spotUsdc += total;
+      }
+    }
+
+    // Open perp positions
+    const positions = [];
+    for (const ap of (perpState?.assetPositions || [])) {
+      const p = ap.position;
+      if (!p) continue;
+      const szi = parseFloat(p.szi || 0);
+      if (szi === 0) continue;
+      positions.push({
+        coin: p.coin,
+        side: szi > 0 ? "LONG" : "SHORT",
+        size: Math.abs(szi),
+        entryPx: parseFloat(p.entryPx || 0),
+        uPnl: parseFloat(p.unrealizedPnl || 0),
+      });
+    }
+
+    res.json({
+      env: useTestnet ? "TESTNET" : "MAINNET",
+      wallet: walletAddr,
+      perpFree, perpTotal, spotUsdc,
+      combined: perpTotal + spotUsdc,
+      spotTokens, positions,
+      ts: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get("/api/portfolio", async (req, res) => {
-  const exchangeKey = req.query.exchange || "binance";
+  const exchangeKey = req.query.botId || req.query.exchange || "binance";
   try {
-    const text = exchangeKey === "deribit" ? await tgDeribitPortfolioText() : await tgBinancePortfolioText();
+    let text;
+    if (exchangeKey === "deribit")          text = await tgDeribitPortfolioText();
+    else if (exchangeKey === "hyperliquid") text = await tgHyperliquidPortfolioText();
+    else                                    text = await tgBinancePortfolioText();
     res.json({ exchange: exchangeKey, text });
   } catch(err) { res.status(500).json({ error: err.message }); }
 });
