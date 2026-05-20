@@ -55,6 +55,7 @@ function makeFreshBot(exchangeKey, botId) {
     loopTimer           : null,
     loopCount           : 0,
     lastNotifiedRt      : 0,
+    gridAnchor          : null,
     stats               : null,
     hlCache             : null,
     hedge : {
@@ -1649,55 +1650,121 @@ async function maintainGrid(botId, currentPrice) {
   }
 
   // ---- 2. Build WANTED for each side separately ----
-  // SELL side wanted (price > currentPrice): target sells + 3 entry sells
-  // BUY side wanted  (price < currentPrice): target buys  + 3 entry buys
   const wantSell = [];   // each: {side, price, qty, type, rtId, distance}
   const wantBuy  = [];
 
-  // 2a. Targets — route by ORDER SIDE (a buy is always a buy), and clamp
-  //     any target that ended up on the wrong side of price after a fast move.
-  //     A target BUY must sit below price; a target SELL must sit above.
-  //     If price surged PAST a target buy (now above price), clamp it just
-  //     below price so it stays a valid resting buy that closes the RT.
+  // ACTIVE BAND: a target is only "active" (placed as a resting order) if it
+  // sits within this distance of current price. The band spans the 3 grid
+  // steps the bot keeps on each side. A target further out than this is
+  // "parked": its order is cancelled and a fresh ENTRY takes the slot near
+  // price (keeps the grid tight). The round trip is NOT lost — when price
+  // moves back so the target re-enters the band, it is re-placed and the
+  // RT closes at full profit. This is the hybrid you asked for.
+  const bandSpacingSell = cfg.avgSellSpacing;
+  const bandSpacingBuy  = cfg.avgBuySpacing;
+  // HYSTERESIS to stop boundary flicker:
+  //  - parkBand: distance beyond which an ACTIVE target gets parked
+  //  - keepBand: a parked target only RE-activates when it comes back inside
+  //    this tighter band. parkBand > keepBand creates a dead-zone so a target
+  //    sitting right at the edge doesn't park/unpark every loop.
+  const sellParkBand = (PER_SIDE + 1.5) * bandSpacingSell;
+  const sellKeepBand = (PER_SIDE + 0.5) * bandSpacingSell;
+  const buyParkBand  = (PER_SIDE + 1.5) * bandSpacingBuy;
+  const buyKeepBand  = (PER_SIDE + 0.5) * bandSpacingBuy;
+
+  let parkedCount = 0;
+
+  // 2a. Targets — route by ORDER SIDE. Use the RT's REAL target price (never
+  //     a currentPrice-derived value, which would change every loop and cause
+  //     endless cancel/replace churn). A target on the "wrong" side of price
+  //     just means price moved past it → it will fill as a taker, which is
+  //     correct (you wanted to sell at X, price is now above X → sell).
   for (const rt of bot.pendingRoundTrips) {
-    let p = roundPrice(rt.targetPrice, tickSize);
+    const p = roundPrice(rt.targetPrice, tickSize);
+    const dist = Math.abs(p - currentPrice);
+    const wasParked = !!rt.parked;
+
     if (rt.targetSide === "buy") {
-      // Buy target must be strictly below current price
-      if (p >= currentPrice) p = roundPrice(currentPrice - tickSize, tickSize);
-      if (isDeribit && p > maxBuyPrice) p = maxBuyPrice;
-      wantBuy.push({ side: "buy", price: p, qty: rt.qty,
-                     type: "target", rtId: rt.id, distance: Math.abs(p - currentPrice) });
+      if (isDeribit && p > maxBuyPrice) { rt.parked = true; parkedCount++; continue; }
+      // Use keepBand if currently active, parkBand if currently parked → hysteresis
+      const threshold = wasParked ? buyKeepBand : buyParkBand;
+      if (dist <= threshold) {
+        rt.parked = false;
+        wantBuy.push({ side: "buy", price: p, qty: rt.qty,
+                       type: "target", rtId: rt.id, distance: dist });
+      } else {
+        rt.parked = true; parkedCount++;
+      }
     } else {
-      // Sell target must be strictly above current price
-      if (p <= currentPrice) p = roundPrice(currentPrice + tickSize, tickSize);
-      if (isDeribit && p < minSellPrice) p = minSellPrice;
-      wantSell.push({ side: "sell", price: p, qty: rt.qty,
-                      type: "target", rtId: rt.id, distance: Math.abs(p - currentPrice) });
+      if (isDeribit && p < minSellPrice) { rt.parked = true; parkedCount++; continue; }
+      const threshold = wasParked ? sellKeepBand : sellParkBand;
+      if (dist <= threshold) {
+        rt.parked = false;
+        wantSell.push({ side: "sell", price: p, qty: rt.qty,
+                        type: "target", rtId: rt.id, distance: dist });
+      } else {
+        rt.parked = true; parkedCount++;
+      }
     }
   }
+  if (parkedCount > 0) {
+    log(botId, `${parkedCount} target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back`, "info");
+  }
 
-  // 2b. Entry candidates — 3 sells above, 3 buys below
-  const spacing      = cfg.avgSellSpacing;
-  const snappedPrice = roundPrice(Math.round(currentPrice / spacing) * spacing, tickSize);
-  for (let step = 1; step <= 40; step++) {
-    const ps = roundPrice(snappedPrice + step * cfg.avgSellSpacing, tickSize);
-    if (ps > currentPrice && ps >= minSellPrice && ps <= bot.upperLimit
+  // 2b. Entry candidates — SIMPLE SPACING from a stable anchor.
+  //   The anchor only moves when price leaves the WHOLE grid band (i.e.
+  //   price has moved past the innermost order on one side). Within the
+  //   band, the grid is completely fixed — no order is recalculated, so
+  //   nothing churns. Entry validity is judged against the ANCHOR, never
+  //   the live price, so a small wiggle can't flip an order in/out.
+  const sSpace = cfg.avgSellSpacing;
+  const bSpace = cfg.avgBuySpacing;
+  // Re-anchor only when price has moved beyond ~1 full step past the anchor
+  // on either side (i.e. it would have crossed the innermost entry). This
+  // is the band half-width. Use the SMALLER side spacing for symmetry.
+  const reanchorTol = Math.min(sSpace, bSpace) * 1.0;
+
+  if (bot.gridAnchor == null ||
+      currentPrice > bot.gridAnchor + reanchorTol ||
+      currentPrice < bot.gridAnchor - reanchorTol) {
+    // Snap to the spacing grid so the anchor is a STABLE, repeatable level.
+    // Two nearby prices that round to the same grid level produce the SAME
+    // anchor → zero order changes. Re-anchor only logs when it truly moves.
+    const gridStep = Math.min(sSpace, bSpace);
+    const snapped  = roundPrice(Math.round(currentPrice / gridStep) * gridStep, tickSize);
+    if (snapped !== bot.gridAnchor) {
+      bot.gridAnchor = snapped;
+      log(botId, `Grid re-anchored to $${bot.gridAnchor} (price $${currentPrice})`, "info");
+    }
+  }
+  const anchor = bot.gridAnchor;
+
+  // Generate entries purely from the anchor (NOT compared to currentPrice,
+  // which moves and would cause flicker). Bounds checks use the static
+  // upper/lower limits and the exchange post-only floors only.
+  for (let i = 1; i <= PER_SIDE + 3; i++) {
+    const ps = roundPrice(anchor + i * sSpace, tickSize);
+    if (ps >= minSellPrice && ps <= bot.upperLimit
         && !reservedEntryPrices.has(`sell_${ps}`)) {
       wantSell.push({ side: "sell", price: ps, qty, type: "entry", rtId: null,
                       distance: Math.abs(ps - currentPrice) });
     }
-    const pb = roundPrice(snappedPrice - step * cfg.avgBuySpacing, tickSize);
-    if (pb < currentPrice && pb <= maxBuyPrice && pb >= bot.lowerLimit
+    const pb = roundPrice(anchor - i * bSpace, tickSize);
+    if (pb <= maxBuyPrice && pb >= bot.lowerLimit
         && !reservedEntryPrices.has(`buy_${pb}`)) {
       wantBuy.push({ side: "buy", price: pb, qty, type: "entry", rtId: null,
                      distance: Math.abs(pb - currentPrice) });
     }
-    // Stop once we have plenty of candidates on both sides
-    if (wantSell.length >= 12 && wantBuy.length >= 12) break;
   }
 
   // ---- 3. Dedupe per side by price; prefer target over entry ----
-  const dedupeSide = (arr) => {
+  //   CRITICAL: sort by PRICE, not distance-to-currentPrice. Distance sort
+  //   makes the chosen 3 flip every time price wiggles across a midpoint
+  //   → endless cancel/replace churn. Price sort is stable: the SELL side
+  //   is always the 3 LOWEST sells (nearest above), the BUY side the 3
+  //   HIGHEST buys (nearest below). These don't change as price moves
+  //   within the grid, so orders stay put.
+  const dedupeSide = (arr, ascending) => {
     const m = new Map();
     for (const w of arr) {
       const k = w.price;
@@ -1706,10 +1773,12 @@ async function maintainGrid(botId, currentPrice) {
       if (prev.type === "target" && w.type === "entry") continue;
       if (prev.type === "entry"  && w.type === "target") m.set(k, w);
     }
-    return [...m.values()].sort((a, b) => a.distance - b.distance);
+    const list = [...m.values()];
+    list.sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
+    return list;
   };
-  const sellDesired = dedupeSide(wantSell).slice(0, PER_SIDE);
-  const buyDesired  = dedupeSide(wantBuy).slice(0, PER_SIDE);
+  const sellDesired = dedupeSide(wantSell, true ).slice(0, PER_SIDE);  // 3 lowest sells
+  const buyDesired  = dedupeSide(wantBuy,  false).slice(0, PER_SIDE);  // 3 highest buys
   const desired = [...sellDesired, ...buyDesired];
 
   // ---- 4. Diff against current open orders ----
@@ -2191,10 +2260,48 @@ async function syncOrdersFromExchange(botId) {
   if (!bot) return;
   const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
-  // Hyperliquid's fetchOpenOrders AND fetchOrder both return broken data
-  // (CCXT bugs #26655 + #27113). Local tracking is the source of truth for
-  // Hyperliquid; skip the sync entirely.
-  if (exchangeKey === "hyperliquid") return;
+
+  // ── HYPERLIQUID: native orphan cleanup ──
+  // CCXT's fetchOpenOrders is broken, but the native SDK works. Any order
+  // LIVE on the exchange that we are NOT tracking locally is an orphan
+  // (lost-track order) — cancel it so they can't pile up and exhaust margin.
+  if (exchangeKey === "hyperliquid") {
+    const cache = bot.hlCache;
+    if (!cache?.infoClient) return;
+    const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+    let exchangeOrders;
+    try {
+      exchangeOrders = await Promise.race([
+        cache.infoClient.openOrders({ user: wallet }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("openOrders timeout 5s")), 5000)),
+      ]);
+    } catch (e) {
+      log(botId, `Orphan check skipped: ${e.message}`, "warn");
+      return;
+    }
+    const ourCoinId = cache.coinId;
+    const ours = exchangeOrders.filter(o => o.coin === ourCoinId);
+    const trackedIds = new Set(bot.openOrders.map(o => String(o.id)));
+
+    // Don't flag orphans right after we placed orders — the exchange may
+    // not have indexed our newest orders yet, and they'd look "untracked".
+    const lastPlace = Math.max(0, ...bot.openOrders.map(o => o.placedAt || 0));
+    if (Date.now() - lastPlace < 15000) return;
+
+    const orphans = ours.filter(o => !trackedIds.has(String(o.oid)));
+    if (orphans.length > 0) {
+      log(botId, `Found ${orphans.length} orphan order(s) on exchange — cancelling to prevent pile-up`, "warn");
+      const ids = orphans.map(o => o.oid);
+      const result = await hyperliquidNativeCancel(bot, ids);
+      if (result.ok) {
+        log(botId, `Cleared ${orphans.length} orphan(s)`, "success");
+      } else {
+        log(botId, `Orphan cancel failed: ${result.error}`, "warn");
+      }
+    }
+    return;
+  }
+
   const GRACE_MS = 30_000;       // ignore orphan-style mismatches for orders this fresh
   const now      = Date.now();
   try {
@@ -2669,7 +2776,7 @@ app.post("/api/start", async (req, res) => {
       bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true,
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
-      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0,
+      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
 
     // Pre-warm the Hyperliquid native SDK: resolve asset index and build the
@@ -2787,15 +2894,24 @@ app.post("/api/start", async (req, res) => {
 
     await maintainGrid(botId, entryPrice);
 
-    // Stagger this bot's loop phase so multiple bots don't all hit the
-    // Hyperliquid API in the same instant. Each running bot gets a
-    // different offset within the 6s window.
+    // Stagger startup AND scale the loop interval with how many bots run.
+    // More bots → slower per-bot loop so aggregate API weight stays under
+    // Hyperliquid's 1200/min limit. Also delay this bot's first loop so its
+    // startup burst (meta + ticker + initial grid placement) doesn't collide
+    // with other bots' in-flight loops.
     const runningCount = listBots().filter(b => b.running).length;
-    const phaseOffset  = (runningCount % 4) * 1500;  // 0,1.5s,3s,4.5s
+    // Churn is fixed (orders no longer re-placed every loop), so steady-state
+    // API weight is low: ticker (w2) + fill-check (w20, every 2nd loop).
+    // We can run tighter loops for faster order placement.
+    const loopMs = runningCount <= 1 ? 4000
+                 : runningCount === 2 ? 5000
+                 : runningCount === 3 ? 7000
+                 : 9000;
+    const startupDelay = 2000 + (runningCount % 5) * 1500;  // 2s..8s
     setTimeout(() => {
-      if (bot.running) bot.loopTimer = setInterval(() => gridLoop(botId), 6000);
-    }, phaseOffset);
-    log(botId, `Loop scheduled with ${phaseOffset}ms phase offset (${runningCount} bots running)`, "info");
+      if (bot.running) bot.loopTimer = setInterval(() => gridLoop(botId), loopMs);
+    }, startupDelay);
+    log(botId, `Loop: ${loopMs}ms interval, first run in ${startupDelay}ms (${runningCount} bot(s) running)`, "info");
 
     res.json({ success: true, botId, exchange: exchangeKey, label: bot.label, entryPrice, upperLimit, lowerLimit });
   } catch (err) {
