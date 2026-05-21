@@ -14,10 +14,36 @@ const WebSocket = require("ws");
 const ccxt      = require("ccxt");
 const https     = require("https");
 const crypto    = require("crypto");
+const fs        = require("fs");
+const path      = require("path");
 // Native Hyperliquid SDK — used as fallback because CCXT's Hyperliquid
 // integration has known bugs with fetchOpenOrders and cancelOrder.
 const hl        = require("@nktkas/hyperliquid");
 const { privateKeyToAccount } = require("viem/accounts");
+
+// ─────────────────────────────────────────────────────────────
+// Per-bot log files. Each bot writes to logs/<botId>.log so you
+// can `tail -f` any single bot in its own terminal. The single
+// server process still runs all bots; only the log STREAM is split.
+// ─────────────────────────────────────────────────────────────
+const LOG_DIR = path.join(__dirname, "logs");
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch(e) {}
+const logStreams = {};   // { botId: WriteStream }
+function getLogStream(botId) {
+  if (!logStreams[botId]) {
+    const fp = path.join(LOG_DIR, `${botId}.log`);
+    logStreams[botId] = fs.createWriteStream(fp, { flags: "a" });
+    // Header for new sessions
+    logStreams[botId].write(`\n${"=".repeat(60)}\n=== Session start: ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
+  }
+  return logStreams[botId];
+}
+function closeLogStream(botId) {
+  if (logStreams[botId]) {
+    try { logStreams[botId].end(); } catch(e) {}
+    delete logStreams[botId];
+  }
+}
 
 const app    = express();
 const server = http.createServer(app);
@@ -93,8 +119,10 @@ function createBotInstance(exchangeKey, label) {
 function removeBotInstance(botId) {
   if (botId === "binance" || botId === "deribit" || botId === "hyperliquid") {
     bots[botId] = makeFreshBot(botId, botId);
+    // Keep the legacy slot's log stream open — it's reusable
   } else {
     delete bots[botId];
+    closeLogStream(botId);  // dynamic bot gone; release file handle
   }
 }
 function listBots() { return Object.values(bots); }
@@ -984,13 +1012,18 @@ function log(botId, msg, level = "info") {
   const baseTag = EXCHANGE_TAG[exch] || exch;
   const isLegacy = (botId === "binance" || botId === "deribit" || botId === "hyperliquid");
   const tag = isLegacy ? baseTag : `${baseTag}#${botId}`;
-  const entry = { exchangeKey: bot?.exchangeKey || botId, botId, msg: `[${tag}] ${msg}`, level, ts: new Date().toISOString() };
+  const ts = new Date().toISOString();
+  const entry = { exchangeKey: bot?.exchangeKey || botId, botId, msg: `[${tag}] ${msg}`, level, ts };
   if (bot) {
     bot.logs.unshift(entry);
     if (bot.logs.length > 200) bot.logs.pop();
   }
   broadcast("log", entry);
   console.log(`[${String(botId).toUpperCase()}/${level.toUpperCase()}] ${msg}`);
+  // Per-bot log file (so `tail -f logs/<botId>.log` shows only this bot)
+  try {
+    getLogStream(botId).write(`${ts}  [${level.toUpperCase().padEnd(7)}] ${msg}\n`);
+  } catch (e) { /* never let logging break the bot */ }
 }
 
 // ============================================================
@@ -1152,8 +1185,37 @@ async function getCurrentPrice(exchange, symbol) {
 // Returns { last, bid, ask } in one shot.
 // We use bid/ask to clamp post_only orders (Deribit rejects post-only orders
 // that would cross the spread with code 11054 "post_only_reject").
-async function getTickerSnapshot(exchange, symbol) {
-  const ticker = await exchange.fetchTicker(symbol);
+// Native Hyperliquid ticker — bypasses CCXT's broken fetchTicker for Hyperliquid.
+// Uses l2Book (weight 2, fast). bot.hlCache must be pre-warmed.
+async function hyperliquidNativeTicker(bot, timeoutMs = 5000) {
+  const cache = bot.hlCache;
+  if (!cache?.infoClient || !cache.coinId) {
+    throw new Error("Hyperliquid SDK not initialized");
+  }
+  const book = await Promise.race([
+    cache.infoClient.l2Book({ coin: cache.coinId }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`l2Book timeout ${timeoutMs/1000}s`)), timeoutMs)),
+  ]);
+  // book.levels = [bids[], asks[]]; each level = { px, sz, n }
+  const bids = book?.levels?.[0] || [];
+  const asks = book?.levels?.[1] || [];
+  const bestBid = bids.length ? parseFloat(bids[0].px) : null;
+  const bestAsk = asks.length ? parseFloat(asks[0].px) : null;
+  if (bestBid == null && bestAsk == null) throw new Error("l2Book empty book");
+  const mid = (bestBid != null && bestAsk != null) ? (bestBid + bestAsk) / 2
+            : (bestBid ?? bestAsk);
+  return { last: mid, bid: bestBid ?? mid, ask: bestAsk ?? mid };
+}
+
+async function getTickerSnapshot(exchange, symbol, timeoutMs = 15000, bot = null) {
+  // Hyperliquid fast path: use native SDK (CCXT's fetchTicker is broken for HL)
+  if (bot && bot.exchangeKey === "hyperliquid" && bot.hlCache) {
+    return await hyperliquidNativeTicker(bot, Math.min(timeoutMs, 6000));
+  }
+  const ticker = await Promise.race([
+    exchange.fetchTicker(symbol),
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`fetchTicker timeout ${timeoutMs/1000}s`)), timeoutMs)),
+  ]);
   return {
     last: ticker.last,
     bid : ticker.bid || ticker.last,
@@ -1200,14 +1262,30 @@ async function gridLoop(botId) {
   if (!bot || !bot.running) return;
   const exchangeKey = bot.exchangeKey;
 
+  // ── RE-ENTRANCY GUARD ──
+  // If a previous loop iteration is still running (e.g. an API call is
+  // hanging), DROP this iteration. Without this, setInterval keeps firing
+  // new loops while old ones are stuck waiting for HTTP responses — each
+  // holding promises and request buffers → memory leak → OOM crash.
+  if (bot._loopBusy) {
+    bot._missedLoops = (bot._missedLoops || 0) + 1;
+    if (bot._missedLoops === 1 || bot._missedLoops % 10 === 0) {
+      log(botId, `⚠ Previous loop still running — skipping this tick (${bot._missedLoops} skipped total)`, "warn");
+    }
+    return;
+  }
+  bot._loopBusy = true;
+
   // Rate-limit backoff: if we recently hit 429, skip this cycle entirely
   if (bot.rateLimitUntil && Date.now() < bot.rateLimitUntil) {
+    bot._loopBusy = false;
     return;
   }
 
   try {
-    // One ticker fetch per loop — gives us last + bid + ask for post_only safety
-    const tick = await getTickerSnapshot(bot.exchange, bot.config.symbol);
+    // One ticker fetch per loop — 8s timeout (re-entrancy guard handles stacking)
+    // Pass bot so Hyperliquid uses native SDK (CCXT fetchTicker is broken for HL)
+    const tick = await getTickerSnapshot(bot.exchange, bot.config.symbol, 8000, bot);
     const currentPrice = tick.last;
     bot.lastPrice = currentPrice;
     bot.bestBid   = tick.bid;
@@ -1223,6 +1301,19 @@ async function gridLoop(botId) {
     }
 
     bot.loopCount = (bot.loopCount || 0) + 1;
+
+    // ── MEMORY CAP ── Trim long-running arrays so multi-hour sessions
+    // don't accumulate unbounded data and crash with OOM (heap ~2GB).
+    if (bot.fillHistory.length > 500)         bot.fillHistory.length = 500;
+    if (bot.completedRoundTrips.length > 500) bot.completedRoundTrips.length = 500;
+    if (bot.logs.length > 200)                bot.logs.length = 200;
+    if (bot.recentlyCancelled) {
+      // Purge entries older than 5 minutes
+      const cutoff = Date.now() - 5 * 60_000;
+      for (const id of Object.keys(bot.recentlyCancelled)) {
+        if (bot.recentlyCancelled[id] < cutoff) delete bot.recentlyCancelled[id];
+      }
+    }
 
     // Fill detection uses openOrders (weight 20 on Hyperliquid — expensive).
     // Only check every OTHER loop to halve the rate-limit cost. Order fills
@@ -1259,6 +1350,12 @@ async function gridLoop(botId) {
     } else {
       log(botId, `Loop error: ${err.message}`, "error");
     }
+  } finally {
+    // Critical: always release the loop lock so the NEXT tick can run.
+    // Without this, an exception would leave _loopBusy=true forever and
+    // the bot would silently stop processing.
+    bot._loopBusy = false;
+    bot._missedLoops = 0;
   }
 }
 
@@ -1854,6 +1951,23 @@ async function maintainGrid(botId, currentPrice) {
   // 4c. Place desired orders not yet open
   const existingKeys = new Set(bot.openOrders.map(o => `${o.side}_${o.price}`));
   let toPlace = desired.filter(d => !existingKeys.has(`${d.side}_${d.price}`));
+
+  // ── PER-SIDE COUNT CAP ──
+  // If a cancel failed last loop, that side may already have PER_SIDE
+  // open orders. Don't add MORE — wait for the failed cancel to clear
+  // next loop. Without this, sides can grow to 4+ orders.
+  {
+    const sellOpen = bot.openOrders.filter(o => o.side === "sell").length;
+    const buyOpen  = bot.openOrders.filter(o => o.side === "buy").length;
+    const sellRoom = Math.max(0, PER_SIDE - sellOpen);
+    const buyRoom  = Math.max(0, PER_SIDE - buyOpen);
+    let placedSells = 0, placedBuys = 0;
+    toPlace = toPlace.filter(d => {
+      if (d.side === "sell" && placedSells < sellRoom) { placedSells++; return true; }
+      if (d.side === "buy"  && placedBuys  < buyRoom ) { placedBuys++;  return true; }
+      return false;
+    });
+  }
 
   // ── SPOT INVENTORY GATE ────────────────────────────────────────────
   // On Hyperliquid SPOT you can only sell base token you actually hold.
@@ -2628,8 +2742,27 @@ app.get("/api/bots", (req, res) => {
     symbol      : b.config?.symbol || null,
     priceSource : b.config?.priceSource || null,
     isLegacy    : (b.botId === "binance" || b.botId === "deribit" || b.botId === "hyperliquid"),
+    logFile     : `logs/${b.botId}.log`,
+    tailCmd     : `tail -f logs/${b.botId}.log`,
   }));
   res.json(list);
+});
+
+// List existing per-bot log files (helps users find what to tail)
+app.get("/api/logs/files", (req, res) => {
+  try {
+    const files = fs.readdirSync(LOG_DIR)
+      .filter(f => f.endsWith(".log"))
+      .map(f => ({
+        botId: f.replace(/\.log$/, ""),
+        path: `logs/${f}`,
+        tailCmd: `tail -f logs/${f}`,
+        sizeBytes: (fs.statSync(path.join(LOG_DIR, f)).size) || 0,
+      }));
+    res.json({ logDir: LOG_DIR, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Delete a stopped bot instance
@@ -2765,23 +2898,9 @@ app.post("/api/start", async (req, res) => {
     await exchange.loadMarkets();
     if (exchangeKey === "binance") await syncExchangeTime(exchange);
 
-    const tick       = await getTickerSnapshot(exchange, cfg.symbol);
-    const entryPrice = tick.last;
-    const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
-    const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
-
-    Object.assign(bot, {
-      botId, exchangeKey,
-      config: cfg, exchange, entryPrice, lastPrice: entryPrice,
-      bestBid: tick.bid, bestAsk: tick.ask,
-      upperLimit, lowerLimit, running: true,
-      openOrders: [], fillHistory: [], pendingRoundTrips: [],
-      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
-    });
-
-    // Pre-warm the Hyperliquid native SDK: resolve asset index and build the
-    // exchange client once, so cancellation later is fast (~100-300ms instead
-    // of ~1.5s). Stored on the bot so cancelAllOrders can reuse them.
+    // For Hyperliquid: pre-warm the native SDK BEFORE the startup ticker,
+    // because CCXT's fetchTicker is broken for Hyperliquid (consistent
+    // timeouts). Once hlCache exists, getTickerSnapshot uses native l2Book.
     if (exchangeKey === "hyperliquid") {
       try {
         const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
@@ -2800,10 +2919,7 @@ app.post("/api/start", async (req, res) => {
             if (baseToken?.name === base) {
               assetIndex = 10000 + m.universe[i].index;
               szDecimals = baseToken.szDecimals ?? 4;
-              maxSig = 8; // spot allows up to 8 sig figs on price
-              // For spot, Hyperliquid's openOrders returns coin as the
-              // universe NAME (e.g. "@107" or a named pair like "PURR/USDC"),
-              // NOT the base token. Capture it for correct fill matching.
+              maxSig = 8;
               coinId = m.universe[i].name;
               break;
             }
@@ -2823,19 +2939,44 @@ app.post("/api/start", async (req, res) => {
             if (m.universe[i].name === base) {
               assetIndex = i;
               szDecimals = m.universe[i].szDecimals ?? 4;
-              maxSig = 5; // perps allow up to 5 sig figs on price
-              coinId = m.universe[i].name;  // perp coin = base name (e.g. "HYPE")
+              maxSig = 5;
+              coinId = m.universe[i].name;
               break;
             }
           }
         }
         if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
         bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot };
+        bot.exchange = exchange;  // also needed for non-HL paths
         log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
       } catch (e) {
-        log(botId, `Hyperliquid SDK pre-warm failed (will lookup at cancel time): ${e.message}`, "warn");
+        log(botId, `Hyperliquid SDK pre-warm failed: ${e.message}`, "warn");
       }
     }
+
+    // Startup ticker. For Hyperliquid uses native l2Book (CCXT fetchTicker
+    // is broken). Retry once if it times out.
+    let tick;
+    try {
+      tick = await getTickerSnapshot(exchange, cfg.symbol, 15000, bot);
+    } catch (e) {
+      if (/timeout/i.test(e.message)) {
+        log(botId, `First ticker fetch timed out, retrying once...`, "warn");
+        tick = await getTickerSnapshot(exchange, cfg.symbol, 20000, bot);
+      } else throw e;
+    }
+    const entryPrice = tick.last;
+    const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
+    const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
+
+    Object.assign(bot, {
+      botId, exchangeKey,
+      config: cfg, exchange, entryPrice, lastPrice: entryPrice,
+      bestBid: tick.bid, bestAsk: tick.ask,
+      upperLimit, lowerLimit, running: true,
+      openOrders: [], fillHistory: [], pendingRoundTrips: [],
+      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
+    });
 
     // Hedge only for Binance
     if (exchangeKey === "binance" && cfg.hedgeEnabled) {
@@ -2873,6 +3014,7 @@ app.post("/api/start", async (req, res) => {
 
     log(botId, `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
     log(botId, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
+    log(botId, `📄 Per-bot log: tail -f logs/${botId}.log`, "info");
 
     // Spot inventory advisory
     if (exchangeKey === "hyperliquid" && bot.hlCache?.isSpot) {
@@ -3091,5 +3233,17 @@ wss.on("connection", (ws) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`\n  Grid Bot (Multi-Exchange) running on port ${PORT}\n`);
+  console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
+  console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
 });
+
+// Flush per-bot log streams on shutdown so the tail of each file is written
+function flushLogs(reason) {
+  console.log(`\n  Shutting down (${reason}). Flushing log streams...`);
+  for (const id of Object.keys(logStreams)) {
+    try { logStreams[id].end(); } catch(e) {}
+  }
+}
+process.on("SIGINT",  () => { flushLogs("SIGINT");  setTimeout(() => process.exit(0), 100); });
+process.on("SIGTERM", () => { flushLogs("SIGTERM"); setTimeout(() => process.exit(0), 100); });
