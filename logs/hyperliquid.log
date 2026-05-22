@@ -3601,3 +3601,735 @@
 2026-05-22T03:03:50.589Z  [INFO   ]   ↳ Cancelled SELL @ $57.75
 2026-05-22T03:03:50.590Z  [SUCCESS] ✅ All 6 order(s) cancelled via native SDK
 2026-05-22T03:03:50.591Z  [SUCCESS] All orders cancelled.
+
+============================================================
+=== Session start: 2026-05-22T10:11:52.815Z
+============================================================
+2026-05-22T10:11:52.814Z  [INFO   ] Hyperliquid SDK pre-warmed: HYPE idx=159 coin=HYPE szDec=2 sig=5 [PERP]
+2026-05-22T10:11:52.985Z  [INFO   ] Cancelling leftover orders...
+2026-05-22T10:11:54.187Z  [SUCCESS] Bot started! Entry: $59.464 | HYPE/USDC:USDC
+2026-05-22T10:11:54.188Z  [INFO   ] Upper: $61.464  |  Lower: $57.464
+2026-05-22T10:11:54.189Z  [INFO   ] 📄 Per-bot log: tail -f logs/hyperliquid.log
+2026-05-22T10:11:54.767Z  [INFO   ] Grid re-anchored to $59.45 (price $59.464)
+2026-05-22T10:11:55.317Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.318Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.319Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.320Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.321Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.322Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:11:55.324Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:11:55.325Z  [INFO   ] Loop: 4000ms interval, first run in 3500ms (1 bot(s) running)
+2026-05-22T10:12:03.572Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.4 — far from price
+2026-05-22T10:12:04.034Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:12:04.035Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:12:07.941Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.25 — far from price
+2026-05-22T10:12:08.546Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:12:08.547Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:12:11.175Z  [INFO   ] Grid re-anchored to $59.4 (price $59.397000000000006)
+2026-05-22T10:12:11.672Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:12:11.674Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.4 — far from price
+2026-05-22T10:12:12.928Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:12:12.930Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:12:12.931Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:12:23.215Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.45  qty:0.3  fee≈$0.0026
+2026-05-22T10:12:23.217Z  [INFO   ] 📌 Pending RT: SELL @ $59.45 → target BUY @ $59.4 (1 pending)
+2026-05-22T10:12:23.218Z  [INFO   ] Grid re-anchored to $59.45 (price $59.451)
+2026-05-22T10:12:23.701Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.25 — far from price
+2026-05-22T10:12:24.174Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:12:24.175Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:12:24.176Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:12:59.233Z  [INFO   ] Grid re-anchored to $59.4 (price $59.3825)
+2026-05-22T10:13:03.216Z  [SUCCESS] FILLED [TARGET] BUY @ $59.4  qty:0.3  fee≈$0.0026
+2026-05-22T10:13:03.217Z  [SUCCESS] ✅ ROUND TRIP #1  Buy@$59.4000 → Sell@$59.4500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:13:03.754Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:13:04.165Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:13:04.166Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:13:04.166Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:13:04.534Z  [INFO   ] 📲 Telegram summary  RTs: 1  Net: +$0.0099  Runtime: 1m 11s
+2026-05-22T10:13:19.373Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.35  qty:0.3  fee≈$0.0026
+2026-05-22T10:13:19.374Z  [INFO   ] 📌 Pending RT: BUY @ $59.35 → target SELL @ $59.4 (1 pending)
+2026-05-22T10:13:19.509Z  [INFO   ] Grid re-anchored to $59.35 (price $59.3395)
+2026-05-22T10:13:19.940Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.55 — far from price
+2026-05-22T10:13:20.402Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:13:20.403Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:13:20.404Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:14:31.466Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.3  qty:0.3  fee≈$0.0026
+2026-05-22T10:14:31.467Z  [INFO   ] 📌 Pending RT: BUY @ $59.3 → target SELL @ $59.35 (2 pending)
+2026-05-22T10:14:31.875Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.5 — far from price
+2026-05-22T10:14:32.407Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:14:32.408Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:14:32.409Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:14:35.367Z  [INFO   ] Grid re-anchored to $59.3 (price $59.292500000000004)
+2026-05-22T10:14:39.391Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.25  qty:0.3  fee≈$0.0026
+2026-05-22T10:14:39.392Z  [INFO   ] 📌 Pending RT: BUY @ $59.25 → target SELL @ $59.3 (3 pending)
+2026-05-22T10:14:39.392Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.2  qty:0.3  fee≈$0.0026
+2026-05-22T10:14:39.392Z  [INFO   ] 📌 Pending RT: BUY @ $59.2 → target SELL @ $59.25 (4 pending)
+2026-05-22T10:14:39.526Z  [INFO   ] Grid re-anchored to $59.2 (price $59.2025)
+2026-05-22T10:14:40.183Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.45 — far from price
+2026-05-22T10:14:40.187Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.4 — far from price
+2026-05-22T10:14:40.710Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:14:40.711Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:14:40.712Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:14:40.713Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.05  qty:0.3 [post-only Alo]
+2026-05-22T10:14:40.714Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:14:47.466Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:14:51.379Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:14:51.380Z  [INFO   ] Grid re-anchored to $59.15 (price $59.138000000000005)
+2026-05-22T10:14:51.792Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.35 — far from price
+2026-05-22T10:14:51.793Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.15 — far from price
+2026-05-22T10:14:52.171Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:14:52.172Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59  qty:0.3 [post-only Alo]
+2026-05-22T10:14:52.173Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:14:55.421Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:14:59.490Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:03.743Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:07.293Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:07.294Z  [INFO   ] Grid re-anchored to $59.05 (price $59.072500000000005)
+2026-05-22T10:15:07.770Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.25 — far from price
+2026-05-22T10:15:07.771Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.3 — far from price
+2026-05-22T10:15:07.772Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.1 — far from price
+2026-05-22T10:15:07.773Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.05 — far from price
+2026-05-22T10:15:08.357Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:15:08.360Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:15:08.361Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.95  qty:0.3 [post-only Alo]
+2026-05-22T10:15:08.365Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.9  qty:0.3 [post-only Alo]
+2026-05-22T10:15:08.368Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:15:11.538Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:15.299Z  [INFO   ] 4 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:19.529Z  [SUCCESS] FILLED [ENTRY] BUY @ $59  qty:0.3  fee≈$0.0025
+2026-05-22T10:15:19.530Z  [INFO   ] 📌 Pending RT: BUY @ $59 → target SELL @ $59.05 (5 pending)
+2026-05-22T10:15:19.665Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:20.115Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.2 — far from price
+2026-05-22T10:15:20.609Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:20.609Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.85  qty:0.3 [post-only Alo]
+2026-05-22T10:15:20.610Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:15:23.314Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:23.315Z  [INFO   ] Grid re-anchored to $59.1 (price $59.1175)
+2026-05-22T10:15:23.974Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.1 — far from price
+2026-05-22T10:15:23.976Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.85 — far from price
+2026-05-22T10:15:24.411Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:24.412Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:15:24.413Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.05  qty:0.3 [post-only Alo]
+2026-05-22T10:15:24.414Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:15:27.467Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:27.922Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:27.923Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:15:31.322Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:31.810Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:31.811Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:15:35.798Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.15  qty:0.3  fee≈$0.0026
+2026-05-22T10:15:35.799Z  [INFO   ] 📌 Pending RT: SELL @ $59.15 → target BUY @ $59.1 (6 pending)
+2026-05-22T10:15:35.800Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:36.365Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.9 — far from price
+2026-05-22T10:15:36.839Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:36.840Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:15:36.841Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:15:36.842Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:39.554Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:39.555Z  [INFO   ] Grid re-anchored to $59.15 (price $59.174499999999995)
+2026-05-22T10:15:40.117Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:40.117Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:43.483Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:44.670Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:44.672Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:47.355Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:47.926Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:47.927Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:51.494Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:51.952Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:51.953Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:55.380Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:15:56.029Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:15:56.030Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:15:59.641Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:00.153Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:00.154Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:16:03.387Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:04.473Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:04.474Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:16:07.591Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.05  qty:0.3  fee≈$0.0026
+2026-05-22T10:16:07.592Z  [INFO   ] 📌 Pending RT: BUY @ $59.05 → target SELL @ $59.1 (7 pending)
+2026-05-22T10:16:07.592Z  [SUCCESS] FILLED [TARGET] BUY @ $59.1  qty:0.3  fee≈$0.0026
+2026-05-22T10:16:07.592Z  [SUCCESS] ✅ ROUND TRIP #2  Buy@$59.1000 → Sell@$59.1500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:16:07.594Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:07.594Z  [INFO   ] Grid re-anchored to $59.05 (price $59.055)
+2026-05-22T10:16:08.162Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.2 — far from price
+2026-05-22T10:16:08.164Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.25 — far from price
+2026-05-22T10:16:09.135Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:09.136Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:16:09.136Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:16:09.137Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.9  qty:0.3 [post-only Alo]
+2026-05-22T10:16:09.138Z  [ERROR  ] Place ENTRY BUY failed @ $58.85: Insufficient margin to place order. asset=159
+2026-05-22T10:16:09.138Z  [INFO   ] Grid: 2 above + 2 below = 4 (3 entries, 1 targets)
+2026-05-22T10:16:09.494Z  [INFO   ] 📲 Telegram summary  RTs: 2  Net: +$0.0198  Runtime: 4m 16s
+2026-05-22T10:16:11.453Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:11.893Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:11.894Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.85  qty:0.3 [post-only Alo]
+2026-05-22T10:16:11.895Z  [INFO   ] Grid: 2 above + 3 below = 5 (4 entries, 1 targets)
+2026-05-22T10:16:15.585Z  [SUCCESS] FILLED [TARGET] SELL @ $59.1  qty:0.3  fee≈$0.0026
+2026-05-22T10:16:15.586Z  [SUCCESS] ✅ ROUND TRIP #3  Buy@$59.0500 → Sell@$59.1000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:16:15.587Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:15.588Z  [INFO   ] Grid re-anchored to $59.1 (price $59.1085)
+2026-05-22T10:16:15.993Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.85 — far from price
+2026-05-22T10:16:16.512Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:16.513Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:16:16.513Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.05  qty:0.3 [post-only Alo]
+2026-05-22T10:16:16.514Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:16.924Z  [INFO   ] 📲 Telegram summary  RTs: 3  Net: +$0.0297  Runtime: 4m 23s
+2026-05-22T10:16:20.015Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:20.524Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:20.525Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:23.545Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:24.290Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:24.291Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:27.403Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:27.925Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:27.926Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:31.533Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:31.963Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:31.964Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:35.459Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:35.882Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:35.883Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:39.790Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:40.346Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:40.346Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:43.438Z  [INFO   ] 3 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:43.834Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:43.835Z  [INFO   ] Grid: 2 above + 3 below = 5 (5 entries, 0 targets)
+2026-05-22T10:16:47.632Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.15  qty:0.3  fee≈$0.0026
+2026-05-22T10:16:47.633Z  [INFO   ] 📌 Pending RT: SELL @ $59.15 → target BUY @ $59.1 (6 pending)
+2026-05-22T10:16:47.633Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:48.053Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.9 — far from price
+2026-05-22T10:16:48.473Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:48.473Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:16:48.474Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:16:48.475Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:16:51.434Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:51.435Z  [INFO   ] Grid re-anchored to $59.15 (price $59.1545)
+2026-05-22T10:16:51.874Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:51.874Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:16:55.569Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:16:55.988Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:16:55.988Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:16:59.819Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:00.261Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:00.262Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:03.638Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:04.324Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:04.325Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:07.492Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:08.005Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:08.006Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:11.590Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:12.236Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:12.237Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:15.461Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:15.966Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:15.967Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:20.072Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:20.481Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:20.481Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:23.463Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:23.962Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:23.963Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:17:27.603Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.2  qty:0.3  fee≈$0.0026
+2026-05-22T10:17:27.604Z  [INFO   ] 📌 Pending RT: SELL @ $59.2 → target BUY @ $59.15 (7 pending)
+2026-05-22T10:17:27.604Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:27.605Z  [INFO   ] Grid re-anchored to $59.2 (price $59.2085)
+2026-05-22T10:17:28.115Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.95 — far from price
+2026-05-22T10:17:28.633Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:28.634Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:17:28.635Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:17:28.636Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:31.482Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:31.923Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:31.924Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:35.651Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:36.160Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:36.160Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:39.725Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:40.472Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:40.474Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:43.881Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:44.805Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:44.806Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:47.521Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:48.012Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:48.012Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:51.703Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:52.205Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:52.206Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:17:55.533Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:17:55.935Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:17:55.936Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:00.357Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:00.750Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:00.751Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:03.683Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:04.215Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:04.216Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:07.695Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:08.155Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:08.156Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:11.558Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:11.559Z  [INFO   ] Grid re-anchored to $59.15 (price $59.1365)
+2026-05-22T10:18:12.153Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:12.154Z  [INFO   ] Grid: 3 above + 2 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:15.922Z  [SUCCESS] FILLED [TARGET] BUY @ $59.15  qty:0.3  fee≈$0.0026
+2026-05-22T10:18:15.923Z  [SUCCESS] ✅ ROUND TRIP #4  Buy@$59.1500 → Sell@$59.2000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:18:15.925Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:16.562Z  [INFO   ] ↓ Cancelled TARGET SELL @ $59.3 — far from price
+2026-05-22T10:18:17.257Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:17.258Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:18:17.258Z  [INFO   ] ↑ 📥 ENTRY BUY @ $58.95  qty:0.3 [post-only Alo]
+2026-05-22T10:18:17.259Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:18:18.054Z  [INFO   ] 📲 Telegram summary  RTs: 4  Net: +$0.0395  Runtime: 6m 24s
+2026-05-22T10:18:20.238Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:20.669Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:20.670Z  [INFO   ] Grid: 2 above + 3 below = 5 (3 entries, 2 targets)
+2026-05-22T10:18:23.897Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.2  qty:0.3  fee≈$0.0026
+2026-05-22T10:18:23.898Z  [INFO   ] 📌 Pending RT: SELL @ $59.2 → target BUY @ $59.15 (7 pending)
+2026-05-22T10:18:23.899Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:23.900Z  [INFO   ] Grid re-anchored to $59.2 (price $59.216499999999996)
+2026-05-22T10:18:24.772Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $58.95 — far from price
+2026-05-22T10:18:25.374Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:25.375Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:18:25.376Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:18:25.377Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:27.609Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:28.146Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:28.147Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:31.953Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:32.395Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:32.396Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:35.617Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:36.096Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:36.097Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:40.225Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:40.642Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:40.643Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:43.754Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:44.176Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:44.176Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:47.765Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:18:48.217Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:48.217Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:52.151Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:52.152Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:18:56.214Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:18:56.215Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:00.314Z  [INFO   ] Grid re-anchored to $59.25 (price $59.259)
+2026-05-22T10:19:01.085Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:01.085Z  [INFO   ] Grid: 1 above + 4 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:03.825Z  [SUCCESS] FILLED [TARGET] SELL @ $59.25  qty:0.3  fee≈$0.0026
+2026-05-22T10:19:03.826Z  [SUCCESS] ✅ ROUND TRIP #5  Buy@$59.2000 → Sell@$59.2500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:19:04.254Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.05 — far from price
+2026-05-22T10:19:05.160Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:05.161Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:19:05.163Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:19:05.163Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:05.889Z  [INFO   ] 📲 Telegram summary  RTs: 5  Net: +$0.0494  Runtime: 7m 12s
+2026-05-22T10:19:08.119Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:08.121Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:12.299Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:12.299Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:16.137Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:16.138Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:20.670Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:20.671Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:24.245Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:24.246Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:28.292Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:28.293Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:32.163Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:32.165Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:36.341Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:36.342Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:40.285Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:40.286Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:44.375Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:44.376Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:48.428Z  [WARN   ] SELL @ $59.05 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:19:48.429Z  [INFO   ] Grid: 2 above + 3 below = 5 (1 entries, 4 targets)
+2026-05-22T10:19:51.944Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:19:52.404Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:19:52.405Z  [INFO   ] Grid: 3 above + 3 below = 6 (1 entries, 5 targets)
+2026-05-22T10:19:55.857Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:00.517Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:03.831Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:08.082Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:11.824Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:16.080Z  [SUCCESS] FILLED [TARGET] SELL @ $59.3  qty:0.3  fee≈$0.0026
+2026-05-22T10:20:16.081Z  [SUCCESS] ✅ ROUND TRIP #6  Buy@$59.2500 → Sell@$59.3000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:20:16.082Z  [INFO   ] 2 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:20:16.082Z  [INFO   ] Grid re-anchored to $59.35 (price $59.325500000000005)
+2026-05-22T10:20:16.597Z  [INFO   ] ↓ Cancelled TARGET BUY @ $59.1 — far from price
+2026-05-22T10:20:17.152Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:20:17.156Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:20:17.158Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:20:17.891Z  [INFO   ] 📲 Telegram summary  RTs: 6  Net: +$0.0593  Runtime: 8m 24s
+2026-05-22T10:20:19.758Z  [WARN   ] Manual stop — cancelling orders...
+2026-05-22T10:20:19.761Z  [INFO   ] Starting cancel: 6 locally-tracked order(s)
+2026-05-22T10:20:19.762Z  [INFO   ] Using native Hyperliquid SDK for cancellation (bypass CCXT)
+2026-05-22T10:20:20.565Z  [INFO   ]   ↳ Cancelled BUY @ $59.15
+2026-05-22T10:20:20.566Z  [INFO   ]   ↳ Cancelled SELL @ $59.35
+2026-05-22T10:20:20.567Z  [INFO   ]   ↳ Cancelled BUY @ $59.2
+2026-05-22T10:20:20.568Z  [INFO   ]   ↳ Cancelled SELL @ $59.4
+2026-05-22T10:20:20.569Z  [INFO   ]   ↳ Cancelled SELL @ $59.45
+2026-05-22T10:20:20.570Z  [INFO   ]   ↳ Cancelled BUY @ $59.25
+2026-05-22T10:20:20.571Z  [SUCCESS] ✅ All 6 order(s) cancelled via native SDK
+2026-05-22T10:20:20.573Z  [SUCCESS] All orders cancelled.
+
+============================================================
+=== Session start: 2026-05-22T10:25:23.317Z
+============================================================
+2026-05-22T10:25:23.315Z  [INFO   ] Hyperliquid SDK pre-warmed: HYPE idx=159 coin=HYPE szDec=2 sig=5 [PERP]
+2026-05-22T10:25:23.494Z  [INFO   ] Cancelling leftover orders...
+2026-05-22T10:25:24.647Z  [SUCCESS] Bot started! Entry: $59.560500000000005 | HYPE/USDC:USDC
+2026-05-22T10:25:24.648Z  [INFO   ] Upper: $61.5605  |  Lower: $57.5605
+2026-05-22T10:25:24.648Z  [INFO   ] 📄 Per-bot log: tail -f logs/hyperliquid.log
+2026-05-22T10:25:25.435Z  [INFO   ] Grid re-anchored to $59.55 (price $59.560500000000005)
+2026-05-22T10:25:26.055Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.056Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.65  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.057Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.057Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.058Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.058Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:25:26.059Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:25:26.059Z  [INFO   ] Loop: 4000ms interval, first run in 3500ms (1 bot(s) running)
+2026-05-22T10:25:37.981Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.6  qty:0.3  fee≈$0.0026
+2026-05-22T10:25:37.982Z  [INFO   ] 📌 Pending RT: SELL @ $59.6 → target BUY @ $59.55 (1 pending)
+2026-05-22T10:25:38.376Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.4 — far from price
+2026-05-22T10:25:38.844Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.75  qty:0.3 [post-only Alo]
+2026-05-22T10:25:38.846Z  [WARN   ] BUY @ $59.55 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:25:38.847Z  [INFO   ] Grid: 3 above + 2 below = 5 (5 entries, 0 targets)
+2026-05-22T10:25:42.877Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:25:42.878Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:26:01.884Z  [SUCCESS] FILLED [TARGET] BUY @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:26:01.885Z  [SUCCESS] ✅ ROUND TRIP #1  Buy@$59.5500 → Sell@$59.6000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:26:02.633Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.75 — far from price
+2026-05-22T10:26:03.178Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:26:03.179Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:26:03.180Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:26:03.914Z  [INFO   ] 📲 Telegram summary  RTs: 1  Net: +$0.0099  Runtime: 39s
+2026-05-22T10:26:14.234Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.5 — far from price
+2026-05-22T10:26:14.719Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:26:14.720Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:26:17.997Z  [INFO   ] Grid re-anchored to $59.45 (price $59.4735)
+2026-05-22T10:26:18.596Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.65 — far from price
+2026-05-22T10:26:18.597Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.7 — far from price
+2026-05-22T10:26:18.598Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.45 — far from price
+2026-05-22T10:26:19.213Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:26:19.214Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:26:19.214Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:26:19.215Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:26:21.766Z  [INFO   ] Grid re-anchored to $59.5 (price $59.5055)
+2026-05-22T10:26:22.262Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.5 — far from price
+2026-05-22T10:26:22.263Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.3 — far from price
+2026-05-22T10:26:22.761Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.65  qty:0.3 [post-only Alo]
+2026-05-22T10:26:22.761Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:26:22.762Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:26:33.943Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.45  qty:0.3  fee≈$0.0026
+2026-05-22T10:26:33.944Z  [INFO   ] 📌 Pending RT: BUY @ $59.45 → target SELL @ $59.5 (1 pending)
+2026-05-22T10:26:34.449Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.65 — far from price
+2026-05-22T10:26:34.871Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:26:34.872Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:26:34.872Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:26:49.957Z  [SUCCESS] FILLED [TARGET] SELL @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:26:49.958Z  [SUCCESS] ✅ ROUND TRIP #2  Buy@$59.4500 → Sell@$59.5000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:26:50.531Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.3 — far from price
+2026-05-22T10:26:50.940Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.65  qty:0.3 [post-only Alo]
+2026-05-22T10:26:50.941Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:26:50.941Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:26:51.713Z  [INFO   ] 📲 Telegram summary  RTs: 2  Net: +$0.0197  Runtime: 1m 27s
+2026-05-22T10:26:58.447Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:26:58.447Z  [INFO   ] 📌 Pending RT: SELL @ $59.55 → target BUY @ $59.5 (1 pending)
+2026-05-22T10:26:58.885Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:26:59.310Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:26:59.311Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:26:59.311Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:27:06.014Z  [INFO   ] Grid re-anchored to $59.55 (price $59.5625)
+2026-05-22T10:27:13.985Z  [SUCCESS] FILLED [TARGET] BUY @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:27:13.986Z  [SUCCESS] ✅ ROUND TRIP #3  Buy@$59.5000 → Sell@$59.5500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:27:14.438Z  [WARN   ] BUY @ $59.5 would be TAKER — skipped (post-only). Retry next loop.
+2026-05-22T10:27:14.439Z  [INFO   ] Grid: 3 above + 2 below = 5 (5 entries, 0 targets)
+2026-05-22T10:27:14.845Z  [INFO   ] 📲 Telegram summary  RTs: 3  Net: +$0.0296  Runtime: 1m 50s
+2026-05-22T10:27:18.574Z  [INFO   ] Grid re-anchored to $59.5 (price $59.4835)
+2026-05-22T10:27:19.087Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.7 — far from price
+2026-05-22T10:27:19.655Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:27:19.656Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:27:19.656Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:27:54.300Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:27:54.301Z  [INFO   ] 📌 Pending RT: SELL @ $59.55 → target BUY @ $59.5 (1 pending)
+2026-05-22T10:27:54.797Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:27:55.287Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:27:55.288Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:27:55.288Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:28:10.153Z  [SUCCESS] FILLED [TARGET] BUY @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:28:10.154Z  [SUCCESS] ✅ ROUND TRIP #4  Buy@$59.5000 → Sell@$59.5500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:28:10.781Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.7 — far from price
+2026-05-22T10:28:11.237Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:28:11.238Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:28:11.239Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:28:11.710Z  [INFO   ] 📲 Telegram summary  RTs: 4  Net: +$0.0394  Runtime: 2m 47s
+2026-05-22T10:28:14.353Z  [INFO   ] Grid re-anchored to $59.4 (price $59.421499999999995)
+2026-05-22T10:28:14.930Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:28:14.931Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.4 — far from price
+2026-05-22T10:28:14.932Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.65 — far from price
+2026-05-22T10:28:14.932Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.45 — far from price
+2026-05-22T10:28:15.391Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:28:15.392Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:28:15.392Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:28:15.393Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:28:15.393Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:28:26.210Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.45  qty:0.3  fee≈$0.0026
+2026-05-22T10:28:26.211Z  [INFO   ] 📌 Pending RT: SELL @ $59.45 → target BUY @ $59.4 (1 pending)
+2026-05-22T10:28:26.212Z  [INFO   ] Grid re-anchored to $59.45 (price $59.457)
+2026-05-22T10:28:26.635Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.25 — far from price
+2026-05-22T10:28:27.090Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:28:27.091Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:28:27.091Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:28:58.249Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:28:58.250Z  [INFO   ] 📌 Pending RT: SELL @ $59.5 → target BUY @ $59.45 (2 pending)
+2026-05-22T10:28:58.250Z  [INFO   ] Grid re-anchored to $59.5 (price $59.510999999999996)
+2026-05-22T10:28:58.693Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.3 — far from price
+2026-05-22T10:28:59.424Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.65  qty:0.3 [post-only Alo]
+2026-05-22T10:28:59.425Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:28:59.426Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:29:06.272Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:29:06.273Z  [INFO   ] 📌 Pending RT: SELL @ $59.55 → target BUY @ $59.5 (3 pending)
+2026-05-22T10:29:06.273Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.6  qty:0.3  fee≈$0.0026
+2026-05-22T10:29:06.274Z  [INFO   ] 📌 Pending RT: SELL @ $59.6 → target BUY @ $59.55 (4 pending)
+2026-05-22T10:29:06.274Z  [INFO   ] Grid re-anchored to $59.6 (price $59.5995)
+2026-05-22T10:29:06.741Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:29:06.742Z  [INFO   ] ↓ Cancelled TARGET BUY @ $59.4 — far from price
+2026-05-22T10:29:07.274Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:29:07.274Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.75  qty:0.3 [post-only Alo]
+2026-05-22T10:29:07.275Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:29:07.275Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:29:07.276Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:29:18.139Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:22.306Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:26.145Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:30.502Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:34.157Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:38.326Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:29:42.168Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:30:50.421Z  [SUCCESS] FILLED [TARGET] BUY @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:30:50.423Z  [SUCCESS] ✅ ROUND TRIP #5  Buy@$59.5500 → Sell@$59.6000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:30:50.560Z  [INFO   ] Grid re-anchored to $59.55 (price $59.546)
+2026-05-22T10:30:51.141Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.75 — far from price
+2026-05-22T10:30:51.560Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:30:51.561Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:30:51.562Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:30:51.947Z  [INFO   ] 📲 Telegram summary  RTs: 5  Net: +$0.0493  Runtime: 5m 28s
+2026-05-22T10:31:38.969Z  [SUCCESS] FILLED [TARGET] BUY @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:31:38.970Z  [SUCCESS] ✅ ROUND TRIP #6  Buy@$59.5000 → Sell@$59.5500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:31:38.973Z  [INFO   ] Grid re-anchored to $59.5 (price $59.4995)
+2026-05-22T10:31:39.562Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.7 — far from price
+2026-05-22T10:31:40.290Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:31:40.290Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:31:40.291Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:31:40.658Z  [INFO   ] 📲 Telegram summary  RTs: 6  Net: +$0.0591  Runtime: 6m 16s
+2026-05-22T10:32:42.716Z  [SUCCESS] FILLED [TARGET] BUY @ $59.45  qty:0.3  fee≈$0.0026
+2026-05-22T10:32:42.717Z  [SUCCESS] ✅ ROUND TRIP #7  Buy@$59.4500 → Sell@$59.5000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:32:42.719Z  [INFO   ] Grid re-anchored to $59.45 (price $59.433499999999995)
+2026-05-22T10:32:43.254Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.65 — far from price
+2026-05-22T10:32:43.760Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:32:43.761Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:32:43.761Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:32:44.140Z  [INFO   ] 📲 Telegram summary  RTs: 7  Net: +$0.0690  Runtime: 7m 20s
+2026-05-22T10:33:06.798Z  [SUCCESS] FILLED [TARGET] BUY @ $59.4  qty:0.3  fee≈$0.0026
+2026-05-22T10:33:06.799Z  [SUCCESS] ✅ ROUND TRIP #8  Buy@$59.4000 → Sell@$59.4500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:33:06.802Z  [INFO   ] Grid re-anchored to $59.4 (price $59.3935)
+2026-05-22T10:33:07.278Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:33:07.703Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:33:07.704Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:33:07.705Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:33:08.111Z  [INFO   ] 📲 Telegram summary  RTs: 8  Net: +$0.0789  Runtime: 7m 44s
+2026-05-22T10:35:15.543Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:35:16.006Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:35:16.007Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:35:23.104Z  [INFO   ] Grid re-anchored to $59.3 (price $59.317499999999995)
+2026-05-22T10:35:23.616Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.55 — far from price
+2026-05-22T10:35:23.617Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.5 — far from price
+2026-05-22T10:35:23.618Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.3 — far from price
+2026-05-22T10:35:24.298Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:35:24.299Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:35:24.300Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:35:24.300Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:35:31.062Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.35  qty:0.3  fee≈$0.0026
+2026-05-22T10:35:31.063Z  [INFO   ] 📌 Pending RT: SELL @ $59.35 → target BUY @ $59.3 (1 pending)
+2026-05-22T10:35:32.042Z  [INFO   ] Grid re-anchored to $59.4 (price $59.3805)
+2026-05-22T10:35:32.482Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.2 — far from price
+2026-05-22T10:35:32.483Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.4 — far from price
+2026-05-22T10:35:32.483Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.15 — far from price
+2026-05-22T10:35:32.923Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:35:32.924Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:35:32.925Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:35:32.925Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:35:32.926Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:36:03.132Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.35  qty:0.3  fee≈$0.0026
+2026-05-22T10:36:03.133Z  [INFO   ] 📌 Pending RT: BUY @ $59.35 → target SELL @ $59.4 (2 pending)
+2026-05-22T10:36:03.134Z  [INFO   ] Grid re-anchored to $59.35 (price $59.337)
+2026-05-22T10:36:03.569Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.55 — far from price
+2026-05-22T10:36:03.969Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:36:03.970Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:36:03.970Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:36:27.179Z  [SUCCESS] FILLED [TARGET] BUY @ $59.3  qty:0.3  fee≈$0.0026
+2026-05-22T10:36:27.180Z  [SUCCESS] ✅ ROUND TRIP #9  Buy@$59.3000 → Sell@$59.3500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:36:27.183Z  [INFO   ] Grid re-anchored to $59.25 (price $59.2625)
+2026-05-22T10:36:27.740Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.45 — far from price
+2026-05-22T10:36:27.741Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.25 — far from price
+2026-05-22T10:36:27.741Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.5 — far from price
+2026-05-22T10:36:28.238Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:36:28.239Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:36:28.239Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.15  qty:0.3 [post-only Alo]
+2026-05-22T10:36:28.239Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.1  qty:0.3 [post-only Alo]
+2026-05-22T10:36:28.240Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:36:28.609Z  [INFO   ] 📲 Telegram summary  RTs: 9  Net: +$0.0887  Runtime: 11m 4s
+2026-05-22T10:37:15.382Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.3  qty:0.3  fee≈$0.0026
+2026-05-22T10:37:15.383Z  [INFO   ] 📌 Pending RT: SELL @ $59.3 → target BUY @ $59.25 (2 pending)
+2026-05-22T10:37:15.871Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.1 — far from price
+2026-05-22T10:37:16.267Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:37:16.267Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:37:16.268Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:37:19.146Z  [INFO   ] Grid re-anchored to $59.35 (price $59.33)
+2026-05-22T10:37:19.657Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.35 — far from price
+2026-05-22T10:37:19.658Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.15 — far from price
+2026-05-22T10:37:20.144Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:37:20.145Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.3  qty:0.3 [post-only Alo]
+2026-05-22T10:37:20.146Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:37:35.202Z  [INFO   ] Grid re-anchored to $59.45 (price $59.4345)
+2026-05-22T10:37:35.726Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.2 — far from price
+2026-05-22T10:37:35.727Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.45 — far from price
+2026-05-22T10:37:36.191Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:37:36.191Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:37:36.192Z  [INFO   ] Grid: 2 above + 4 below = 6 (4 entries, 2 targets)
+2026-05-22T10:37:39.314Z  [SUCCESS] FILLED [TARGET] SELL @ $59.4  qty:0.3  fee≈$0.0026
+2026-05-22T10:37:39.315Z  [SUCCESS] ✅ ROUND TRIP #10  Buy@$59.3500 → Sell@$59.4000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:37:39.894Z  [INFO   ] ↓ Cancelled TARGET BUY @ $59.25 — far from price
+2026-05-22T10:37:40.317Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:37:40.318Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:37:40.318Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T10:37:40.692Z  [INFO   ] 📲 Telegram summary  RTs: 10  Net: +$0.0986  Runtime: 12m 16s
+2026-05-22T10:37:48.057Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:37:51.524Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:37:55.342Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:37:59.417Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:38:03.440Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:38:11.347Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.4  qty:0.3  fee≈$0.0026
+2026-05-22T10:38:11.348Z  [INFO   ] 📌 Pending RT: BUY @ $59.4 → target SELL @ $59.45 (2 pending)
+2026-05-22T10:38:11.638Z  [INFO   ] Grid re-anchored to $59.4 (price $59.3825)
+2026-05-22T10:38:12.188Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:38:13.367Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:38:13.368Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.25  qty:0.3 [post-only Alo]
+2026-05-22T10:38:13.369Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:38:59.406Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.35  qty:0.3  fee≈$0.0026
+2026-05-22T10:38:59.407Z  [INFO   ] 📌 Pending RT: BUY @ $59.35 → target SELL @ $59.4 (3 pending)
+2026-05-22T10:38:59.407Z  [INFO   ] Grid re-anchored to $59.35 (price $59.3465)
+2026-05-22T10:38:59.810Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.55 — far from price
+2026-05-22T10:39:00.271Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:39:00.271Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.2  qty:0.3 [post-only Alo]
+2026-05-22T10:39:00.272Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:39:23.592Z  [SUCCESS] FILLED [TARGET] SELL @ $59.4  qty:0.3  fee≈$0.0026
+2026-05-22T10:39:23.593Z  [SUCCESS] ✅ ROUND TRIP #11  Buy@$59.3500 → Sell@$59.4000  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:39:23.597Z  [INFO   ] Grid re-anchored to $59.45 (price $59.4345)
+2026-05-22T10:39:24.152Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.2 — far from price
+2026-05-22T10:39:24.567Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:39:24.568Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:39:24.568Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:39:24.932Z  [INFO   ] 📲 Telegram summary  RTs: 11  Net: +$0.1085  Runtime: 14m 1s
+2026-05-22T10:39:31.553Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:39:31.554Z  [INFO   ] 📌 Pending RT: SELL @ $59.5 → target BUY @ $59.45 (3 pending)
+2026-05-22T10:39:31.554Z  [SUCCESS] FILLED [TARGET] SELL @ $59.45  qty:0.3  fee≈$0.0026
+2026-05-22T10:39:31.555Z  [SUCCESS] ✅ ROUND TRIP #12  Buy@$59.4000 → Sell@$59.4500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:39:31.695Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:32.179Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.3 — far from price
+2026-05-22T10:39:32.180Z  [INFO   ] ↓ Cancelled TARGET BUY @ $59.25 — far from price
+2026-05-22T10:39:32.665Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:39:32.665Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.65  qty:0.3 [post-only Alo]
+2026-05-22T10:39:32.666Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.45  qty:0.3 [post-only Alo]
+2026-05-22T10:39:32.666Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:39:32.666Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:39:33.043Z  [INFO   ] 📲 Telegram summary  RTs: 12  Net: +$0.1183  Runtime: 14m 9s
+2026-05-22T10:39:35.264Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:39.433Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:43.272Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:43.273Z  [INFO   ] Grid re-anchored to $59.5 (price $59.519499999999994)
+2026-05-22T10:39:47.418Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:39:47.419Z  [INFO   ] 📌 Pending RT: SELL @ $59.55 → target BUY @ $59.5 (3 pending)
+2026-05-22T10:39:47.420Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:47.833Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:39:48.340Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:39:48.341Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:39:48.341Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:39:51.412Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:51.413Z  [INFO   ] Grid re-anchored to $59.55 (price $59.552499999999995)
+2026-05-22T10:39:55.413Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:59.292Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:39:59.293Z  [INFO   ] Grid re-anchored to $59.5 (price $59.4855)
+2026-05-22T10:40:04.193Z  [SUCCESS] FILLED [TARGET] BUY @ $59.5  qty:0.3  fee≈$0.0026
+2026-05-22T10:40:04.194Z  [SUCCESS] ✅ ROUND TRIP #13  Buy@$59.5000 → Sell@$59.5500  qty:0.3  Gross:+$0.0150  Fee:-$0.0051  Net:+$0.0099
+2026-05-22T10:40:04.197Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:04.651Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.7 — far from price
+2026-05-22T10:40:05.105Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:40:05.106Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.35  qty:0.3 [post-only Alo]
+2026-05-22T10:40:05.106Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T10:40:05.470Z  [INFO   ] 📲 Telegram summary  RTs: 13  Net: +$0.1282  Runtime: 14m 41s
+2026-05-22T10:40:07.311Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:11.558Z  [SUCCESS] FILLED [ENTRY] SELL @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:40:11.559Z  [INFO   ] 📌 Pending RT: SELL @ $59.55 → target BUY @ $59.5 (3 pending)
+2026-05-22T10:40:11.721Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:11.722Z  [INFO   ] Grid re-anchored to $59.55 (price $59.557500000000005)
+2026-05-22T10:40:12.148Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.35 — far from price
+2026-05-22T10:40:12.618Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.7  qty:0.3 [post-only Alo]
+2026-05-22T10:40:12.619Z  [INFO   ] ↑ 🎯 TARGET BUY @ $59.5  qty:0.3 [post-only Alo]
+2026-05-22T10:40:12.620Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:40:15.342Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:19.491Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:23.356Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:23.357Z  [INFO   ] Grid re-anchored to $59.6 (price $59.6065)
+2026-05-22T10:40:24.383Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.6 — far from price
+2026-05-22T10:40:24.383Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $59.4 — far from price
+2026-05-22T10:40:24.785Z  [INFO   ] ↑ 📥 ENTRY SELL @ $59.75  qty:0.3 [post-only Alo]
+2026-05-22T10:40:24.786Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.55  qty:0.3 [post-only Alo]
+2026-05-22T10:40:24.786Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T10:40:27.577Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:31.494Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:35.563Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:39.386Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:43.578Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:47.452Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:51.836Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:55.627Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:40:59.593Z  [SUCCESS] FILLED [ENTRY] BUY @ $59.55  qty:0.3  fee≈$0.0026
+2026-05-22T10:40:59.594Z  [INFO   ] 📌 Pending RT: BUY @ $59.55 → target SELL @ $59.6 (4 pending)
+2026-05-22T10:40:59.594Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:00.009Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $59.75 — far from price
+2026-05-22T10:41:00.524Z  [INFO   ] ↑ 🎯 TARGET SELL @ $59.6  qty:0.3 [post-only Alo]
+2026-05-22T10:41:00.525Z  [INFO   ] ↑ 📥 ENTRY BUY @ $59.4  qty:0.3 [post-only Alo]
+2026-05-22T10:41:00.526Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T10:41:03.565Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:03.566Z  [INFO   ] Grid re-anchored to $59.55 (price $59.5305)
+2026-05-22T10:41:07.621Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:11.589Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:15.770Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:19.484Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:23.814Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:27.527Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:32.027Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:35.646Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:39.693Z  [INFO   ] 1 target(s) parked (too far from price) — entries fill the grid; targets auto-return when price comes back
+2026-05-22T10:41:43.027Z  [WARN   ] Manual stop — cancelling orders...
+2026-05-22T10:41:43.031Z  [INFO   ] Starting cancel: 6 locally-tracked order(s)
+2026-05-22T10:41:43.032Z  [INFO   ] Using native Hyperliquid SDK for cancellation (bypass CCXT)
+2026-05-22T10:41:43.508Z  [INFO   ]   ↳ Cancelled SELL @ $59.65
+2026-05-22T10:41:43.509Z  [INFO   ]   ↳ Cancelled BUY @ $59.45
+2026-05-22T10:41:43.510Z  [INFO   ]   ↳ Cancelled SELL @ $59.7
+2026-05-22T10:41:43.511Z  [INFO   ]   ↳ Cancelled BUY @ $59.5
+2026-05-22T10:41:43.512Z  [INFO   ]   ↳ SELL @ $59.6 already gone (Order was never placed, already canceled, or filled. asset=159)
+2026-05-22T10:41:43.513Z  [INFO   ]   ↳ Cancelled BUY @ $59.4
+2026-05-22T10:41:43.514Z  [SUCCESS] ✅ All 6 order(s) cancelled via native SDK
+2026-05-22T10:41:43.515Z  [SUCCESS] All orders cancelled.

@@ -82,6 +82,7 @@ function makeFreshBot(exchangeKey, botId) {
     loopCount           : 0,
     lastNotifiedRt      : 0,
     gridAnchor          : null,
+    startedAt           : null,   // ms timestamp when bot was started (for runtime display)
     stats               : null,
     hlCache             : null,
     hedge : {
@@ -133,6 +134,31 @@ const EXCHANGE_TAG = {
   deribit     : "🟧 Deribit",
   hyperliquid : "🟣 Hyperliquid",
 };
+
+// ============================================================
+//  MAKER FEE RATES (post-only guarantees maker, so we use these)
+//  Keyed by priceSource (perp vs spot fee schedules differ).
+//  Values are decimal rates (0.00015 = 0.015% = 1.5 bps).
+//  Update these if the user gets a discount tier / stakes HYPE / etc.
+// ============================================================
+const MAKER_FEE_RATE = {
+  // Hyperliquid
+  hyperliquid       : 0.000144,  // perps maker (your tier shows 0.0144%)
+  hyperliquid_spot  : 0.000384,  // spot maker (your tier shows 0.0384%)
+  // Binance
+  binance_spot      : 0.001000,  // 0.10% standard spot maker (BNB pays 0.075%)
+  binance_usdm      : 0.000200,  // 0.02% USDM futures maker
+  binance_coinm     : 0.000100,  // 0.01% COIN-M futures maker
+  // Deribit
+  deribit           : -0.000010, // -0.01% maker REBATE on options (yes, you get paid)
+  deribit_spot      :  0.000000, // spot maker = 0
+};
+function feeRateFor(priceSource) {
+  return MAKER_FEE_RATE[priceSource] ?? 0.0005;   // 0.05% conservative default
+}
+function estimateFee(priceSource, price, qty) {
+  return Math.abs(feeRateFor(priceSource) * price * qty);
+}
 
 // ============================================================
 //  TELEGRAM ENGINE
@@ -278,9 +304,13 @@ function tgStatusText(exchangeKey) {
   const cfg = s.config;
   if (!s.running) return `<b>${tag} — 🔴 STOPPED</b>\n\nBot is not running.\nTap 🔄 Restart to bring it back.`;
   const st = s.stats || {};
+  const runtime = s.startedAt ? formatDuration(Date.now() - s.startedAt) : "—";
+  const netPnl  = st.netPnl ?? st.totalPnl ?? 0;
+  const netSign = netPnl >= 0 ? "+" : "";
   return `<b>${tag} — 🟢 RUNNING</b>
 
 📌 <b>Symbol :</b> <code>${cfg?.symbol||"—"}</code>
+⏱ <b>Runtime:</b> <code>${runtime}</code>
 💵 <b>Price  :</b> <code>$${(s.lastPrice||0).toFixed(4)}</code>
 🎯 <b>Entry  :</b> <code>$${(s.entryPrice||0).toFixed(4)}</code>
 🔼 <b>Upper  :</b> <code>$${(s.upperLimit||0).toFixed(4)}</code>
@@ -288,7 +318,9 @@ function tgStatusText(exchangeKey) {
 
 📦 <b>Open Orders :</b> <code>${s.openOrders.length}</code>
 ✅ <b>Round Trips :</b> <code>${st.totalRoundTrips||0}</code>
-💰 <b>Live PnL    :</b> <code>$${(st.totalPnl||0).toFixed(4)}</code>
+💰 <b>Gross PnL   :</b> <code>+$${(st.grossPnl||0).toFixed(4)}</code>
+💸 <b>Fees        :</b> <code>-$${(st.rtFees||0).toFixed(4)}</code>
+💵 <b>Net PnL     :</b> <code>${netSign}$${netPnl.toFixed(4)}</code>
 📊 <b>Buys / Sells:</b> <code>${st.totalBuys||0} / ${st.totalSells||0}</code>
 
 ⚙️ <b>Sell spacing :</b> <code>$${cfg?.avgSellSpacing||"—"}</code>
@@ -919,7 +951,7 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
       botId: exchangeKey, exchangeKey,
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
       bestBid: tick.bid, bestAsk: tick.ask,
-      upperLimit, lowerLimit, running: true, openOrders: [],
+      upperLimit, lowerLimit, running: true, startedAt: Date.now(), openOrders: [],
       fillHistory: [], pendingRoundTrips: [], completedRoundTrips: [],
       logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
@@ -1230,6 +1262,20 @@ function roundQty(qty, stepSize) {
   return parseFloat(qty.toFixed(decimals));
 }
 
+// Format milliseconds → "1d 3h 24m" / "2h 18m" / "47m 13s" / "9s"
+function formatDuration(ms) {
+  if (!ms || ms < 0) return "—";
+  const s  = Math.floor(ms / 1000);
+  const d  = Math.floor(s / 86400);
+  const h  = Math.floor((s % 86400) / 3600);
+  const m  = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${ss}s`;
+  return `${ss}s`;
+}
+
 // ============================================================
 //  EXCHANGE BUILDER
 // ============================================================
@@ -1523,13 +1569,22 @@ async function gridLoop(botId) {
     const completedCount = bot.completedRoundTrips.length;
     if (completedCount > (bot.lastNotifiedRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
       const newlyCompleted = completedCount - (bot.lastNotifiedRt || 0);
-      const totalPnl = parseFloat(bot.completedRoundTrips.reduce((s, r) => s + (r.pnl || 0), 0).toFixed(4));
-      const tag      = EXCHANGE_TAG[exchangeKey];
+      const totalGross = bot.completedRoundTrips.reduce((s, r) => s + (r.grossPnl ?? r.pnl ?? 0), 0);
+      const totalFees  = bot.completedRoundTrips.reduce((s, r) => s + (r.totalFee || 0), 0);
+      const totalNet   = totalGross - totalFees;
+      const tag        = EXCHANGE_TAG[exchangeKey];
+      const runtimeStr = bot.startedAt ? formatDuration(Date.now() - bot.startedAt) : "—";
+      const netSign    = totalNet >= 0 ? "+" : "";
       await sendTelegram(cfg2.telegramToken, cfg2.telegramChatId,
-        `${tag} 📊 Total: ${completedCount} round trips  |  PnL: +$${totalPnl}\n${newlyCompleted > 1 ? `(${newlyCompleted} new since last update)` : ""}`
+        `${tag} 📊 RT #${completedCount}\n` +
+        `Runtime: ${runtimeStr}\n` +
+        `Gross:   +$${totalGross.toFixed(4)}\n` +
+        `Fees:    -$${totalFees.toFixed(4)}\n` +
+        `<b>Net:    ${netSign}$${totalNet.toFixed(4)}</b>` +
+        (newlyCompleted > 1 ? `\n(${newlyCompleted} new since last update)` : "")
       );
       bot.lastNotifiedRt = completedCount;
-      log(botId, `📲 Telegram summary  RTs: ${completedCount}  PnL: +$${totalPnl}`);
+      log(botId, `📲 Telegram summary  RTs: ${completedCount}  Net: ${netSign}$${totalNet.toFixed(4)}  Runtime: ${runtimeStr}`);
     }
 
     broadcast("state", buildStateSnapshot());
@@ -1627,12 +1682,14 @@ async function checkAndHandleFills(botId, currentPrice) {
       const fillTs    = new Date().toISOString();
       const fillPrice = tracked.price;
       const fillQty   = tracked.qty;
-      log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
+      // Estimate maker fee for this fill (post-only ensures maker rate)
+      const feeEst    = estimateFee(cfg.priceSource, fillPrice, fillQty);
+      log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee≈$${feeEst.toFixed(4)}`, "success");
 
       bot.fillHistory.unshift({
         side: tracked.side, price: fillPrice, qty: fillQty,
         type: tracked.type, ts: fillTs,
-        fee: 0, feeCcy: "", orderId: tracked.id,
+        fee: feeEst, feeCcy: "USDC", orderId: tracked.id,
       });
 
       if (tracked.type === "entry") {
@@ -1671,19 +1728,28 @@ async function checkAndHandleFills(botId, currentPrice) {
         for (const rt of matched) {
           const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
           const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
-          const pnl       = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+          const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+          // Estimate fees for BOTH fills of this round trip (entry + close).
+          // Post-only is enforced, so both are maker rate.
+          const openFee   = estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
+          const closeFee  = estimateFee(cfg.priceSource, fillPrice,     rt.qty);
+          const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
+          const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
           bot.completedRoundTrips.unshift({
             id: rt.id, openSide: rt.openSide,
             openPrice: rt.openPrice, closePrice: fillPrice,
-            buyPrice, sellPrice, qty: rt.qty, pnl,
+            buyPrice, sellPrice, qty: rt.qty,
+            pnl: grossPnl,           // gross (kept for backward compat)
+            grossPnl, totalFee, netPnl,
             openTs: rt.openTs, closeTs: fillTs,
             durationMs: Date.now() - new Date(rt.openTs).getTime(),
           });
-          log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  PnL:+$${pnl.toFixed(4)}`, "success");
+          const netSign = netPnl >= 0 ? "+" : "";
+          log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
           if (cfg?.telegramToken && cfg?.telegramChatId) {
             const tag = EXCHANGE_TAG[exchangeKey];
             sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-              `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nPnL: +$${pnl.toFixed(4)}`
+              `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
             );
           }
         }
@@ -1765,22 +1831,31 @@ async function checkAndHandleFills(botId, currentPrice) {
           for (const rt of matched) {
             const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
             const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
-            const pnl       = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+            const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+            // Prefer real fee from THIS close fill (we have it from order data);
+            // estimate fee for the OPEN fill (it was recorded earlier).
+            const openFee   = estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
+            const closeFee  = feeCost > 0 ? feeCost : estimateFee(cfg.priceSource, fillPrice, rt.qty);
+            const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
+            const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
 
             bot.completedRoundTrips.unshift({
               id: rt.id, openSide: rt.openSide,
               openPrice: rt.openPrice, closePrice: fillPrice,
               buyPrice, sellPrice,
-              qty: rt.qty, pnl,
+              qty: rt.qty,
+              pnl: grossPnl,         // gross (kept for backward compat)
+              grossPnl, totalFee, netPnl,
               openTs: rt.openTs, closeTs: fillTs,
               durationMs: Date.now() - new Date(rt.openTs).getTime(),
             });
-            log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  PnL:+$${pnl.toFixed(4)}`, "success");
+            const netSign = netPnl >= 0 ? "+" : "";
+            log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
 
             if (cfg?.telegramToken && cfg?.telegramChatId) {
               const tag = EXCHANGE_TAG[exchangeKey];
               sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-                `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nPnL: +$${pnl.toFixed(4)}`
+                `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
               );
             }
           }
@@ -2725,7 +2800,9 @@ function calcLiveStats(exchangeKey) {
   // so this is the ACTUAL count and PnL — not an estimate based on min(buys, sells).
   const completed = bot.completedRoundTrips || [];
   const rt        = completed.length;
-  const realPnl   = completed.reduce((s, x) => s + (x.pnl || 0), 0);
+  const grossPnl  = completed.reduce((s, x) => s + (x.grossPnl ?? x.pnl ?? 0), 0);
+  const rtFees    = completed.reduce((s, x) => s + (x.totalFee || 0), 0);
+  const netPnl    = grossPnl - rtFees;
 
   const qty = bot.config?.qtyPerStep    || 0;
   const tsp = bot.config?.targetSpread  || 0;
@@ -2734,7 +2811,10 @@ function calcLiveStats(exchangeKey) {
   for (const f of fills) totalFees += (f.fee || 0);
 
   return {
-    totalPnl       : parseFloat(realPnl.toFixed(4)),
+    totalPnl       : parseFloat(grossPnl.toFixed(4)),   // gross (kept for backward compat)
+    grossPnl       : parseFloat(grossPnl.toFixed(4)),
+    rtFees         : parseFloat(rtFees.toFixed(4)),
+    netPnl         : parseFloat(netPnl.toFixed(4)),
     buyAvg         : buyAvg  ? parseFloat(buyAvg.toFixed(4))  : null,
     sellAvg        : sellAvg ? parseFloat(sellAvg.toFixed(4)) : null,
     totalRoundTrips: rt,
@@ -2933,6 +3013,9 @@ function buildStateSnapshot() {
       exchangeKey         : b.exchangeKey,
       label               : b.label || key,
       running             : b.running,
+      startedAt           : b.startedAt || null,
+      runtimeMs           : b.startedAt && b.running ? Date.now() - b.startedAt : 0,
+      runtimeStr          : b.startedAt && b.running ? formatDuration(Date.now() - b.startedAt) : "—",
       lastPrice           : b.lastPrice,
       entryPrice          : b.entryPrice,
       upperLimit          : b.upperLimit,
@@ -3206,7 +3289,7 @@ app.post("/api/start", async (req, res) => {
       botId, exchangeKey,
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
       bestBid: tick.bid, bestAsk: tick.ask,
-      upperLimit, lowerLimit, running: true,
+      upperLimit, lowerLimit, running: true, startedAt: Date.now(),
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
       completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
