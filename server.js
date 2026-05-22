@@ -666,6 +666,29 @@ async function tgHyperliquidPortfolioText() {
     if (useTestnet) { exPerps.setSandboxMode(true); exSpot.setSandboxMode(true); }
     await exPerps.loadMarkets();
 
+    // Get a price map for ALL spot tokens via the native SDK (weight 2).
+    // Hyperliquid's allMids returns { HYPE: "57.7", PURR: "0.18", ... }.
+    // USDC is the quote currency and = $1 by definition.
+    const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
+    const infoClient = new hl.InfoClient({ transport });
+    let priceMap = {};
+    try {
+      const mids = await infoClient.allMids();
+      for (const [sym, px] of Object.entries(mids || {})) {
+        priceMap[sym] = parseFloat(px);
+      }
+    } catch (e) { console.warn("[HL allMids]", e.message); }
+    // Convert any spot token to USDC. Hyperliquid lists spot prices keyed
+    // by either the token name (e.g. "HYPE") OR the spot pair name
+    // (e.g. "@107" or "PURR/USDC"). Try both.
+    const priceUsdc = (ccy) => {
+      if (ccy === "USDC" || ccy === "USDT") return 1;
+      if (priceMap[ccy] != null) return priceMap[ccy];
+      // Some pairs key as "BASE/USDC"
+      if (priceMap[`${ccy}/USDC`] != null) return priceMap[`${ccy}/USDC`];
+      return null;  // unknown — won't include in total
+    };
+
     // ── PERPS USDC balance ──
     const perpBal = await exPerps.fetchBalance().catch(() => ({}));
     let perpFree = 0, perpTotal = 0;
@@ -679,15 +702,18 @@ async function tgHyperliquidPortfolioText() {
 
     // ── SPOT balances (all tokens, not just USDC) ──
     const spotBal = await exSpot.fetchBalance().catch((e) => { console.warn("[HL spot bal]", e.message); return {}; });
-    const spotTokens = [];   // [{ ccy, free, total }]
+    const spotTokens = [];   // [{ ccy, free, total, priceUsd, valueUsd }]
     if (spotBal.total) {
       for (const [ccy, total] of Object.entries(spotBal.total)) {
         const t = parseFloat(total || 0);
         if (t > 0) {
+          const px = priceUsdc(ccy);
           spotTokens.push({
             ccy,
-            free  : parseFloat(spotBal.free?.[ccy] || 0),
-            total : t,
+            free   : parseFloat(spotBal.free?.[ccy] || 0),
+            total  : t,
+            priceUsd: px,
+            valueUsd: px != null ? t * px : null,
           });
         }
       }
@@ -697,6 +723,7 @@ async function tgHyperliquidPortfolioText() {
     let positions = [];
     try { positions = await exPerps.fetchPositions(); } catch(e) {}
     let posLines = "";
+    let unrealPnlTotal = 0;
     const openPositions = positions.filter(p => parseFloat(p.contracts || p.info?.szi || 0) !== 0);
     if (openPositions.length > 0) {
       for (const p of openPositions) {
@@ -704,26 +731,40 @@ async function tgHyperliquidPortfolioText() {
         const side = sz > 0 ? "LONG" : "SHORT";
         const uPnl = parseFloat(p.unrealizedPnl ?? p.info?.unrealizedPnl ?? 0);
         const mark = parseFloat(p.markPrice ?? p.info?.markPx ?? 0);
+        unrealPnlTotal += uPnl;
         posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
       }
     } else {
       posLines = "  (no open positions)\n";
     }
 
-    // ── Format spot section + compute spot USDC value ──
+    // ── Format spot section + compute spot USDC TOTAL value (all tokens) ──
     let spotLines = "";
-    let spotUsdcTotal = 0;
+    let spotUsdTotal = 0;
+    let spotUnknownTokens = [];
     if (spotTokens.length === 0) {
       spotLines = "  (no spot balances)\n";
     } else {
       for (const t of spotTokens) {
-        spotLines += `  <code>${t.ccy.padEnd(6)}</code> Free: <b>${t.free.toFixed(4)}</b> | Total: <b>${t.total.toFixed(4)}</b>\n`;
-        if (t.ccy === "USDC") spotUsdcTotal += t.total;
+        if (t.valueUsd != null) {
+          spotUsdTotal += t.valueUsd;
+          const priceTag = t.ccy === "USDC" ? "" : ` × $${t.priceUsd.toFixed(4)}`;
+          spotLines += `  <code>${t.ccy.padEnd(6)}</code> ${t.total.toFixed(4)}${priceTag} = <b>$${t.valueUsd.toFixed(2)}</b>\n`;
+        } else {
+          spotUnknownTokens.push(t.ccy);
+          spotLines += `  <code>${t.ccy.padEnd(6)}</code> ${t.total.toFixed(4)} <i>(no price found — excluded)</i>\n`;
+        }
       }
     }
-    const combinedUsdc = perpTotal + spotUsdcTotal;
+
+    // ── COMBINED — everything in USDT-equivalent ──
+    // Perps USDC + all spot tokens converted to USDC value
+    const combinedUsd = perpTotal + spotUsdTotal;
 
     const envTag = useTestnet ? "🧪 TESTNET" : "🟢 MAINNET";
+    const unknownNote = spotUnknownTokens.length > 0
+      ? `\n<i>⚠ No price for: ${spotUnknownTokens.join(", ")} — not in total</i>`
+      : "";
     return `<b>💼 🟣 Hyperliquid Portfolio</b> ${envTag}
 <i>${new Date().toLocaleString()}</i>
 Wallet: <code>${walletAddr.slice(0,10)}...${walletAddr.slice(-6)}</code>
@@ -732,17 +773,19 @@ Wallet: <code>${walletAddr.slice(0,10)}...${walletAddr.slice(-6)}</code>
 💰 <b>Perps Account</b>
   Free  USDC: <b>$${perpFree.toFixed(2)}</b>
   Total USDC: <b>$${perpTotal.toFixed(2)}</b>
+  Unrealized PnL: <b>${unrealPnlTotal>=0?"+":""}$${unrealPnlTotal.toFixed(2)}</b>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-🪙 <b>Spot Account</b>
-${spotLines}  Spot USDC value: <b>$${spotUsdcTotal.toFixed(2)}</b>
+🪙 <b>Spot Account</b> (all tokens valued in USDC)
+${spotLines}  Spot total: <b>$${spotUsdTotal.toFixed(2)}</b>${unknownNote}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 📊 <b>Open Perp Positions</b>
 ${posLines}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💵 <b>COMBINED USDC: $${combinedUsdc.toFixed(2)}</b>
-   (Perps $${perpTotal.toFixed(2)} + Spot $${spotUsdcTotal.toFixed(2)})`;
+💵 <b>TOTAL (USDT-equivalent): $${combinedUsd.toFixed(2)}</b>
+   Perps: $${perpTotal.toFixed(2)}
+   Spot:  $${spotUsdTotal.toFixed(2)}`;
 
   } catch(err) {
     return `❌ Hyperliquid portfolio fetch failed:\n<code>${err.message}</code>`;
@@ -2185,7 +2228,7 @@ async function maintainGrid(botId, currentPrice) {
           if (rt) rt.targetOrderId = r.id;
         }
         const tag = d.type === "target" ? "🎯 TARGET" : "📥 ENTRY";
-        log(botId, `↑ ${tag} ${d.side.toUpperCase()} @ $${d.price}  qty:${d.qty}${r.filled ? "  (already filled!)" : ""}`);
+        log(botId, `↑ ${tag} ${d.side.toUpperCase()} @ $${d.price}  qty:${d.qty} [post-only Alo]${r.filled ? "  ⚠ FILLED IMMEDIATELY (rare)" : ""}`);
       } else {
         const msg = r.error || "unknown";
         // Hyperliquid Alo reject => order would cross spread → would be taker.
