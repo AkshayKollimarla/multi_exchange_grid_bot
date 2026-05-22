@@ -3410,3 +3410,194 @@
 2026-05-20T22:28:37.763Z  [INFO   ]   ↳ Cancelled BUY @ $53.4
 2026-05-20T22:28:37.764Z  [INFO   ]   ↳ Cancelled BUY @ $53.5
 2026-05-20T22:28:37.764Z  [SUCCESS] ✅ All 4 order(s) cancelled via native SDK
+============================================================
+=== Session start: 2026-05-22T02:53:40.405Z
+============================================================
+2026-05-22T02:53:40.402Z  [INFO   ] Hyperliquid SDK pre-warmed: HYPE idx=159 coin=HYPE szDec=2 sig=5 [PERP]
+2026-05-22T02:53:40.576Z  [INFO   ] Cancelling leftover orders...
+2026-05-22T02:53:41.734Z  [SUCCESS] Bot started! Entry: $57.647 | HYPE/USDC:USDC
+2026-05-22T02:53:41.735Z  [INFO   ] Upper: $59.647  |  Lower: $55.647
+2026-05-22T02:53:41.736Z  [INFO   ] 📄 Per-bot log: tail -f logs/hyperliquid.log
+2026-05-22T02:53:42.601Z  [INFO   ] Grid re-anchored to $57.65 (price $57.647)
+2026-05-22T02:53:43.121Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.7  qty:0.3
+2026-05-22T02:53:43.122Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.75  qty:0.3
+2026-05-22T02:53:43.124Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.8  qty:0.3
+2026-05-22T02:53:43.125Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.6  qty:0.3
+2026-05-22T02:53:43.126Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.55  qty:0.3
+2026-05-22T02:53:43.129Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.5  qty:0.3
+2026-05-22T02:53:43.132Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:53:43.133Z  [INFO   ] Loop: 4000ms interval, first run in 3500ms (1 bot(s) running)
+2026-05-22T02:54:35.275Z  [SUCCESS] FILLED [ENTRY] BUY @ $57.6  qty:0.3
+2026-05-22T02:54:35.280Z  [INFO   ] 📌 Pending RT: BUY @ $57.6 → target SELL @ $57.65 (1 pending)
+2026-05-22T02:54:35.778Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.8 — far from price
+2026-05-22T02:54:36.289Z  [INFO   ] ↑ 🎯 TARGET SELL @ $57.65  qty:0.3
+2026-05-22T02:54:36.292Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.45  qty:0.3
+2026-05-22T02:54:36.296Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T02:54:38.911Z  [INFO   ] Grid re-anchored to $57.6 (price $57.5805)
+2026-05-22T02:54:59.080Z  [SUCCESS] FILLED [ENTRY] BUY @ $57.55  qty:0.3
+2026-05-22T02:54:59.081Z  [INFO   ] 📌 Pending RT: BUY @ $57.55 → target SELL @ $57.6 (2 pending)
+2026-05-22T02:54:59.082Z  [SUCCESS] FILLED [ENTRY] BUY @ $57.5  qty:0.3
+2026-05-22T02:54:59.082Z  [INFO   ] 📌 Pending RT: BUY @ $57.5 → target SELL @ $57.55 (3 pending)
+2026-05-22T02:54:59.083Z  [INFO   ] Grid re-anchored to $57.5 (price $57.5145)
+2026-05-22T02:54:59.599Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.7 — far from price
+2026-05-22T02:54:59.600Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.75 — far from price
+2026-05-22T02:55:00.144Z  [INFO   ] ↑ 🎯 TARGET SELL @ $57.55  qty:0.3
+2026-05-22T02:55:00.144Z  [INFO   ] ↑ 🎯 TARGET SELL @ $57.6  qty:0.3
+2026-05-22T02:55:00.145Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.4  qty:0.3
+2026-05-22T02:55:00.146Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.35  qty:0.3
+2026-05-22T02:55:00.146Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T02:55:02.920Z  [INFO   ] Grid re-anchored to $57.55 (price $57.557500000000005)
+2026-05-22T02:55:07.134Z  [SUCCESS] FILLED [TARGET] SELL @ $57.55  qty:0.3
+2026-05-22T02:55:07.135Z  [SUCCESS] ✅ ROUND TRIP #1  Buy@$57.5000 → Sell@$57.5500  qty:0.3  PnL:+$0.0150
+2026-05-22T02:55:07.739Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.35 — far from price
+2026-05-22T02:55:08.244Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.7  qty:0.3
+2026-05-22T02:55:08.245Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.5  qty:0.3
+2026-05-22T02:55:08.246Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T02:55:08.901Z  [INFO   ] 📲 Telegram summary  RTs: 1  PnL: +$0.015
+2026-05-22T02:55:32.269Z  [WARN   ] Manual stop — cancelling orders...
+2026-05-22T02:55:32.271Z  [INFO   ] Starting cancel: 6 locally-tracked order(s)
+2026-05-22T02:55:32.272Z  [INFO   ] Using native Hyperliquid SDK for cancellation (bypass CCXT)
+2026-05-22T02:55:32.773Z  [INFO   ]   ↳ Cancelled SELL @ $57.65
+2026-05-22T02:55:32.774Z  [INFO   ]   ↳ Cancelled BUY @ $57.45
+2026-05-22T02:55:32.776Z  [INFO   ]   ↳ Cancelled SELL @ $57.6
+2026-05-22T02:55:32.777Z  [INFO   ]   ↳ Cancelled BUY @ $57.4
+2026-05-22T02:55:32.778Z  [INFO   ]   ↳ Cancelled SELL @ $57.7
+2026-05-22T02:55:32.779Z  [INFO   ]   ↳ Cancelled BUY @ $57.5
+2026-05-22T02:55:32.780Z  [SUCCESS] ✅ All 6 order(s) cancelled via native SDK
+2026-05-22T02:55:32.782Z  [SUCCESS] All orders cancelled.
+2026-05-22T02:57:52.981Z  [INFO   ] Hyperliquid SDK pre-warmed: HYPE idx=10107 coin=@107 szDec=2 sig=8 [SPOT]
+2026-05-22T02:57:53.120Z  [INFO   ] Cancelling leftover orders...
+2026-05-22T02:57:54.244Z  [SUCCESS] Bot started! Entry: $57.5955 | HYPE/USDC
+2026-05-22T02:57:54.245Z  [INFO   ] Upper: $59.5955  |  Lower: $55.5955
+2026-05-22T02:57:54.246Z  [INFO   ] 📄 Per-bot log: tail -f logs/hyperliquid.log
+2026-05-22T02:57:55.524Z  [INFO   ] SPOT mode: you hold 12.0779 HYPE. Recommended ≥ 0.9000 HYPE so all 3 sell slots can be placed.
+2026-05-22T02:57:56.236Z  [INFO   ] Grid re-anchored to $57.6 (price $57.5955)
+2026-05-22T02:57:56.828Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.55  qty:0.3
+2026-05-22T02:57:56.829Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.5  qty:0.3
+2026-05-22T02:57:56.830Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.45  qty:0.3
+2026-05-22T02:57:56.831Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.65  qty:0.3
+2026-05-22T02:57:56.832Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.7  qty:0.3
+2026-05-22T02:57:56.833Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.75  qty:0.3
+2026-05-22T02:57:56.834Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:57:56.836Z  [INFO   ] Loop: 4000ms interval, first run in 3500ms (1 bot(s) running)
+2026-05-22T02:58:17.249Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.65 — far from price
+2026-05-22T02:58:17.830Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.8  qty:0.3
+2026-05-22T02:58:17.831Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:58:21.862Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.8 — far from price
+2026-05-22T02:58:22.798Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.65  qty:0.3
+2026-05-22T02:58:22.799Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:58:32.910Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.65  qty:0.3
+2026-05-22T02:58:32.911Z  [INFO   ] 📌 Pending RT: SELL @ $57.65 → target BUY @ $57.6 (1 pending)
+2026-05-22T02:58:33.468Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.45 — far from price
+2026-05-22T02:58:34.134Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.6  qty:0.3
+2026-05-22T02:58:34.135Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.8  qty:0.3
+2026-05-22T02:58:34.136Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T02:58:41.335Z  [SUCCESS] FILLED [TARGET] BUY @ $57.6  qty:0.3
+2026-05-22T02:58:41.337Z  [SUCCESS] ✅ ROUND TRIP #1  Buy@$57.6000 → Sell@$57.6500  qty:0.3  PnL:+$0.0150
+2026-05-22T02:58:41.994Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.8 — far from price
+2026-05-22T02:58:42.718Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.45  qty:0.3
+2026-05-22T02:58:42.719Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.65  qty:0.3
+2026-05-22T02:58:42.721Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:58:43.067Z  [INFO   ] 📲 Telegram summary  RTs: 1  PnL: +$0.015
+2026-05-22T02:58:44.558Z  [INFO   ] Grid re-anchored to $57.65 (price $57.656000000000006)
+2026-05-22T02:58:45.043Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.45 — far from price
+2026-05-22T02:58:45.044Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.65 — far from price
+2026-05-22T02:58:45.840Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.6  qty:0.3
+2026-05-22T02:58:45.841Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.8  qty:0.3
+2026-05-22T02:58:45.842Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:58:48.815Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.7  qty:0.3
+2026-05-22T02:58:48.817Z  [INFO   ] 📌 Pending RT: SELL @ $57.7 → target BUY @ $57.65 (1 pending)
+2026-05-22T02:58:48.818Z  [INFO   ] Grid re-anchored to $57.7 (price $57.7045)
+2026-05-22T02:58:49.462Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.5 — far from price
+2026-05-22T02:58:50.096Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.65  qty:0.3
+2026-05-22T02:58:50.097Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.85  qty:0.3
+2026-05-22T02:58:50.097Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T02:59:00.735Z  [INFO   ] Grid re-anchored to $57.6 (price $57.6205)
+2026-05-22T02:59:01.625Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.6 — far from price
+2026-05-22T02:59:01.626Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.85 — far from price
+2026-05-22T02:59:02.180Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.5  qty:0.3
+2026-05-22T02:59:02.181Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.65  qty:0.3
+2026-05-22T02:59:02.182Z  [INFO   ] Grid: 4 above + 2 below = 6 (5 entries, 1 targets)
+2026-05-22T02:59:04.747Z  [SUCCESS] FILLED [TARGET] BUY @ $57.65  qty:0.3
+2026-05-22T02:59:04.748Z  [SUCCESS] ✅ ROUND TRIP #2  Buy@$57.6500 → Sell@$57.7000  qty:0.3  PnL:+$0.0150
+2026-05-22T02:59:05.285Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.8 — far from price
+2026-05-22T02:59:05.984Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.45  qty:0.3
+2026-05-22T02:59:05.985Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.7  qty:0.3
+2026-05-22T02:59:05.985Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T02:59:06.368Z  [INFO   ] 📲 Telegram summary  RTs: 2  PnL: +$0.03
+2026-05-22T02:59:28.806Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.65  qty:0.3
+2026-05-22T02:59:28.807Z  [INFO   ] 📌 Pending RT: SELL @ $57.65 → target BUY @ $57.6 (1 pending)
+2026-05-22T02:59:29.266Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.45 — far from price
+2026-05-22T02:59:29.949Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.6  qty:0.3
+2026-05-22T02:59:29.950Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.8  qty:0.3
+2026-05-22T02:59:29.951Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T02:59:32.724Z  [INFO   ] Grid re-anchored to $57.65 (price $57.663)
+2026-05-22T03:00:16.901Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.7  qty:0.3
+2026-05-22T03:00:16.902Z  [INFO   ] 📌 Pending RT: SELL @ $57.7 → target BUY @ $57.65 (2 pending)
+2026-05-22T03:00:16.903Z  [INFO   ] Grid re-anchored to $57.7 (price $57.7055)
+2026-05-22T03:00:17.328Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.5 — far from price
+2026-05-22T03:00:17.998Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.65  qty:0.3
+2026-05-22T03:00:17.998Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.85  qty:0.3
+2026-05-22T03:00:17.999Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T03:00:32.927Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.75  qty:0.3
+2026-05-22T03:00:32.928Z  [INFO   ] 📌 Pending RT: SELL @ $57.75 → target BUY @ $57.7 (3 pending)
+2026-05-22T03:00:33.449Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.55 — far from price
+2026-05-22T03:00:34.015Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.7  qty:0.3
+2026-05-22T03:00:34.016Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.9  qty:0.3
+2026-05-22T03:00:34.018Z  [INFO   ] Grid: 3 above + 3 below = 6 (3 entries, 3 targets)
+2026-05-22T03:00:36.953Z  [INFO   ] Grid re-anchored to $57.75 (price $57.7575)
+2026-05-22T03:00:57.015Z  [SUCCESS] FILLED [TARGET] BUY @ $57.7  qty:0.3
+2026-05-22T03:00:57.016Z  [SUCCESS] ✅ ROUND TRIP #3  Buy@$57.7000 → Sell@$57.7500  qty:0.3  PnL:+$0.0150
+2026-05-22T03:00:57.729Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.7  qty:0.3
+2026-05-22T03:00:57.730Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T03:00:58.066Z  [INFO   ] 📲 Telegram summary  RTs: 3  PnL: +$0.045
+2026-05-22T03:01:01.125Z  [INFO   ] Grid re-anchored to $57.7 (price $57.6815)
+2026-05-22T03:01:02.286Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.9 — far from price
+2026-05-22T03:01:02.287Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.7 — far from price
+2026-05-22T03:01:03.080Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.55  qty:0.3
+2026-05-22T03:01:03.081Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.75  qty:0.3
+2026-05-22T03:01:03.084Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T03:01:09.130Z  [INFO   ] Grid re-anchored to $57.65 (price $57.647000000000006)
+2026-05-22T03:01:13.295Z  [SUCCESS] FILLED [TARGET] BUY @ $57.65  qty:0.3
+2026-05-22T03:01:13.296Z  [SUCCESS] ✅ ROUND TRIP #4  Buy@$57.6500 → Sell@$57.7000  qty:0.3  PnL:+$0.0150
+2026-05-22T03:01:13.733Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.85 — far from price
+2026-05-22T03:01:14.238Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.5  qty:0.3
+2026-05-22T03:01:14.240Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.7  qty:0.3
+2026-05-22T03:01:14.241Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T03:01:14.578Z  [INFO   ] 📲 Telegram summary  RTs: 4  PnL: +$0.06
+2026-05-22T03:02:09.181Z  [SUCCESS] FILLED [TARGET] BUY @ $57.6  qty:0.3
+2026-05-22T03:02:09.182Z  [SUCCESS] ✅ ROUND TRIP #5  Buy@$57.6000 → Sell@$57.6500  qty:0.3  PnL:+$0.0150
+2026-05-22T03:02:10.045Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.6  qty:0.3
+2026-05-22T03:02:10.045Z  [INFO   ] Grid: 3 above + 3 below = 6 (6 entries, 0 targets)
+2026-05-22T03:02:10.409Z  [INFO   ] 📲 Telegram summary  RTs: 5  PnL: +$0.075
+2026-05-22T03:02:25.231Z  [SUCCESS] FILLED [ENTRY] BUY @ $57.6  qty:0.3
+2026-05-22T03:02:25.232Z  [INFO   ] 📌 Pending RT: BUY @ $57.6 → target SELL @ $57.65 (1 pending)
+2026-05-22T03:02:25.655Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.8 — far from price
+2026-05-22T03:02:26.269Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.45  qty:0.3
+2026-05-22T03:02:26.270Z  [INFO   ] ↑ 🎯 TARGET SELL @ $57.65  qty:0.3
+2026-05-22T03:02:26.271Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T03:02:29.149Z  [INFO   ] Grid re-anchored to $57.6 (price $57.587)
+2026-05-22T03:03:17.203Z  [INFO   ] Grid re-anchored to $57.55 (price $57.540499999999994)
+2026-05-22T03:03:18.319Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.55 — far from price
+2026-05-22T03:03:18.320Z  [INFO   ] ↓ Cancelled ENTRY SELL @ $57.75 — far from price
+2026-05-22T03:03:18.915Z  [INFO   ] ↑ 📥 ENTRY BUY @ $57.4  qty:0.3
+2026-05-22T03:03:18.916Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.6  qty:0.3
+2026-05-22T03:03:18.916Z  [INFO   ] Grid: 3 above + 3 below = 6 (5 entries, 1 targets)
+2026-05-22T03:03:29.455Z  [SUCCESS] FILLED [ENTRY] SELL @ $57.6  qty:0.3
+2026-05-22T03:03:29.455Z  [INFO   ] 📌 Pending RT: SELL @ $57.6 → target BUY @ $57.55 (2 pending)
+2026-05-22T03:03:29.456Z  [INFO   ] Grid re-anchored to $57.6 (price $57.605000000000004)
+2026-05-22T03:03:29.881Z  [INFO   ] ↓ Cancelled ENTRY BUY @ $57.4 — far from price
+2026-05-22T03:03:30.529Z  [INFO   ] ↑ 🎯 TARGET BUY @ $57.55  qty:0.3
+2026-05-22T03:03:30.530Z  [INFO   ] ↑ 📥 ENTRY SELL @ $57.75  qty:0.3
+2026-05-22T03:03:30.532Z  [INFO   ] Grid: 3 above + 3 below = 6 (4 entries, 2 targets)
+2026-05-22T03:03:50.136Z  [WARN   ] Manual stop — cancelling orders...
+2026-05-22T03:03:50.137Z  [INFO   ] Starting cancel: 6 locally-tracked order(s)
+2026-05-22T03:03:50.138Z  [INFO   ] Using native Hyperliquid SDK for cancellation (bypass CCXT)
+2026-05-22T03:03:50.585Z  [INFO   ]   ↳ Cancelled BUY @ $57.5
+2026-05-22T03:03:50.586Z  [INFO   ]   ↳ Cancelled SELL @ $57.7
+2026-05-22T03:03:50.587Z  [INFO   ]   ↳ Cancelled BUY @ $57.45
+2026-05-22T03:03:50.588Z  [INFO   ]   ↳ Cancelled SELL @ $57.65
+2026-05-22T03:03:50.589Z  [INFO   ]   ↳ Cancelled BUY @ $57.55
+2026-05-22T03:03:50.589Z  [INFO   ]   ↳ Cancelled SELL @ $57.75
+2026-05-22T03:03:50.590Z  [SUCCESS] ✅ All 6 order(s) cancelled via native SDK
+2026-05-22T03:03:50.591Z  [SUCCESS] All orders cancelled.

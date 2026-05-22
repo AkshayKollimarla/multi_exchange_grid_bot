@@ -306,28 +306,39 @@ function tgHelpText() {
 /portfolio  Portfolio (pick exchange)
 /report     PnL report (pick exchange)
 /csv        Download 24h CSV (pick exchange)
-/restart    Restart with new params
+/restart    Restart / Launch a bot
 /stop       Stop a bot
 
-<b>Restart — send 5 numbers:</b>
-<code>sellSpread  buySpread  targetSpread  qty  distance</code>
+<b>/restart — no UI needed:</b>
+After picking an exchange, send either:
+• <b>5 numbers</b> (reuses last symbol):
+  <code>sell buy target qty distance</code>
+• <b>7 values</b> (fresh start, any symbol):
+  <code>sell buy target qty distance priceSource symbol</code>
 
-Example: <code>1.0  1.0  0.5  0.1  10</code>
-
-After picking an action, you'll be asked which exchange.`;
+<b>Example (cold start, no UI):</b>
+<code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>`;
 }
 
 function restartPromptText(exchangeKey, lastCfg) {
   const tag = EXCHANGE_TAG[exchangeKey];
-  const hint = lastCfg
-    ? `\n📌 <b>Last used:</b>\n<code>${lastCfg.avgSellSpacing}  ${lastCfg.avgBuySpacing}  ${lastCfg.targetSpread}  ${lastCfg.qtyPerStep}  ${lastCfg.distance}</code>\n`
-    : "";
-  return `🔄 <b>Restart ${tag}</b>${hint}
-Send <b>5 numbers</b> separated by spaces:
-
-<code>sellSpread  buySpread  targetSpread  qty  distance</code>
-
-Example: <code>1.0  1.0  0.5  0.1  10</code>`;
+  if (lastCfg) {
+    return `🔄 <b>Restart ${tag}</b>\n\n` +
+      `📌 <b>Last used:</b>\n<code>${lastCfg.avgSellSpacing} ${lastCfg.avgBuySpacing} ${lastCfg.targetSpread} ${lastCfg.qtyPerStep} ${lastCfg.distance}</code>\n` +
+      `Symbol: <code>${lastCfg.symbol}</code> via <code>${lastCfg.priceSource}</code>\n\n` +
+      `<b>Quick restart — send 5 numbers</b> (reuses symbol):\n` +
+      `<code>sell buy target qty distance</code>\n\n` +
+      `<b>Or change symbol — send 7 values:</b>\n` +
+      `<code>sell buy target qty distance priceSource symbol</code>`;
+  }
+  // No previous config → MUST send full 7
+  return `🆕 <b>Launch ${tag} (no previous config)</b>\n\n` +
+    `Send <b>7 values</b>:\n` +
+    `<code>sell buy target qty distance priceSource symbol</code>\n\n` +
+    `<b>Examples (copy & paste):</b>\n` +
+    `HL perp HYPE:\n<code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>\n\n` +
+    `HL spot HYPE:\n<code>0.05 0.05 0.05 0.3 1 hyperliquid_spot HYPE/USDC</code>\n\n` +
+    `Binance SOL/FDUSD:\n<code>0.25 0.25 0.5 1.166 5 binance_spot SOL/FDUSD</code>`;
 }
 
 function tgReportText(exchangeKey) {
@@ -741,50 +752,133 @@ ${posLines}
 // ============================================================
 //  RESTART HANDLER (per exchange)
 // ============================================================
-async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpread, qty, distance) {
+
+// ─────────────────────────────────────────────────────────────
+// Restart a bot via Telegram. Works in TWO modes:
+//   A) "Quick restart" — prev config exists → tweak just spacings/qty/dist
+//      (the legacy 5-numbers flow used by the menu buttons)
+//   B) "Cold launch"   — no prev config → user MUST supply full params:
+//      sellSpread buySpread targetSpread qty distance  priceSource symbol
+//      (8 values total)
+// Either way: no UI is required. Frontend just shows the running state.
+// ─────────────────────────────────────────────────────────────
+async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpread, qty, distance, priceSource, symbol) {
   const bot = bots[exchangeKey];
   const tag = EXCHANGE_TAG[exchangeKey];
   const prev = bot.config;
-  if (!prev) {
-    await tgSend(chatId, `❌ ${tag}: No previous config. Start from web UI first.`, mainMenu());
+
+  // If no prev config, the caller MUST have given priceSource + symbol
+  if (!prev && (!priceSource || !symbol)) {
+    await tgSend(chatId,
+      `❌ <b>${tag}: no previous config in memory</b>\n\n` +
+      `Send <b>7 values</b> to launch fresh:\n` +
+      `<code>sellSpread buySpread targetSpread qty distance priceSource symbol</code>\n\n` +
+      `<b>Examples:</b>\n` +
+      `Hyperliquid perp HYPE:\n<code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>\n\n` +
+      `Hyperliquid spot HYPE:\n<code>0.05 0.05 0.05 0.3 1 hyperliquid_spot HYPE/USDC</code>\n\n` +
+      `Binance spot SOL/FDUSD:\n<code>0.25 0.25 0.5 1.166 5 binance_spot SOL/FDUSD</code>`,
+      mainMenu());
     return;
   }
+
   await tgSend(chatId,
-    `⏳ Restarting ${tag}...\n\nSell : <code>$${sellSpread}</code>\nBuy  : <code>$${buySpread}</code>\nTarget: <code>$${targetSpread}</code>\nQty   : <code>${qty}</code>\nDist  : <code>$${distance}</code>`
+    `⏳ ${prev ? "Restarting" : "Launching"} ${tag}...\n\n` +
+    `Sell : <code>$${sellSpread}</code>\nBuy  : <code>$${buySpread}</code>\n` +
+    `Target: <code>$${targetSpread}</code>\nQty   : <code>${qty}</code>\nDist  : <code>$${distance}</code>` +
+    (prev ? "" : `\nSrc  : <code>${priceSource}</code>\nSym  : <code>${symbol}</code>`)
   );
 
+  // Stop the previous session if running
   if (bot.running) {
     clearInterval(bot.loopTimer); bot.running = false;
     try{ await cancelAllOrders(exchangeKey); } catch(e){}
     log(exchangeKey, "Telegram restart: stopped previous session", "warn");
   }
 
-  const cfg = {
+  // Build cfg — either patch prev, or build from scratch
+  const cfg = prev ? {
     ...prev,
-    avgSellSpacing : sellSpread,
-    avgBuySpacing  : buySpread,
-    targetSpread,
-    qtyPerStep     : qty,
-    distance,
+    avgSellSpacing : parseFloat(sellSpread),
+    avgBuySpacing  : parseFloat(buySpread),
+    targetSpread   : parseFloat(targetSpread),
+    qtyPerStep     : parseFloat(qty),
+    distance       : parseFloat(distance),
+  } : {
+    priceSource    : priceSource,
+    symbol         : symbol,
+    avgSellSpacing : parseFloat(sellSpread),
+    avgBuySpacing  : parseFloat(buySpread),
+    targetSpread   : parseFloat(targetSpread),
+    qtyPerStep     : parseFloat(qty),
+    distance       : parseFloat(distance),
+    telegramToken  : process.env.TELEGRAM_BOT_TOKEN,
+    telegramChatId : process.env.TELEGRAM_CHAT_ID,
   };
   injectKeysIntoCfg(exchangeKey, cfg);
+
+  if (!cfg.apiKey || !cfg.secretKey) {
+    const which = exchangeKey === "deribit"     ? "DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET"
+                : exchangeKey === "hyperliquid" ? "HYPERLIQUID_WALLET_ADDRESS / HYPERLIQUID_PRIVATE_KEY"
+                                                : "BINANCE_API_KEY / BINANCE_SECRET_KEY";
+    await tgSend(chatId, `❌ ${tag}: <code>${which}</code> missing in .env`, mainMenu());
+    return;
+  }
 
   try {
     const exchange = buildExchange(cfg.priceSource, cfg.apiKey, cfg.secretKey);
     await exchange.loadMarkets();
     if (exchangeKey === "binance") await syncExchangeTime(exchange);
 
-    const tick       = await getTickerSnapshot(exchange, cfg.symbol);
+    // Pre-warm Hyperliquid native SDK before ticker fetch
+    if (exchangeKey === "hyperliquid") {
+      try {
+        const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+        const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+        const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
+        const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
+        const infoClient = new hl.InfoClient({ transport });
+        const isSpot = (cfg.priceSource === "hyperliquid_spot");
+        const base   = cfg.symbol.split("/")[0];
+        let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
+        if (isSpot) {
+          const m = await infoClient.spotMeta();
+          for (let i = 0; i < m.universe.length; i++) {
+            const baseToken = m.tokens[m.universe[i].tokens[0]];
+            if (baseToken?.name === base) {
+              assetIndex = 10000 + m.universe[i].index;
+              szDecimals = baseToken.szDecimals ?? 4; maxSig = 8;
+              coinId = m.universe[i].name; break;
+            }
+          }
+        } else {
+          const m = await infoClient.meta();
+          for (let i = 0; i < m.universe.length; i++) {
+            if (m.universe[i].name === base) {
+              assetIndex = i; szDecimals = m.universe[i].szDecimals ?? 4;
+              maxSig = 5; coinId = m.universe[i].name; break;
+            }
+          }
+        }
+        if (assetIndex < 0) throw new Error(`Asset ${base} not found`);
+        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot };
+        bot.exchange = exchange;
+      } catch (e) {
+        log(exchangeKey, `Hyperliquid SDK prewarm failed: ${e.message}`, "warn");
+      }
+    }
+
+    const tick       = await getTickerSnapshot(exchange, cfg.symbol, 15000, bot);
     const entryPrice = tick.last;
     const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
     const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
 
     Object.assign(bot, {
+      botId: exchangeKey, exchangeKey,
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
       bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true, openOrders: [],
       fillHistory: [], pendingRoundTrips: [], completedRoundTrips: [],
-      logs: [], loopCount: 0, lastNotifiedRt: 0,
+      logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
 
     try { await exchange.cancelAllOrders(cfg.symbol); }
@@ -796,17 +890,24 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     }
 
     await maintainGrid(exchangeKey, entryPrice);
-    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), 6000);
-    log(exchangeKey, `Telegram restart: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
+    const runningCount = listBots().filter(b => b.running).length;
+    const loopMs = runningCount <= 1 ? 4000 : runningCount === 2 ? 5000 : runningCount === 3 ? 7000 : 9000;
+    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), loopMs);
+    log(exchangeKey, `Telegram ${prev ? "restart" : "launch"}: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
     broadcast("state", buildStateSnapshot());
 
     await tgSend(chatId,
-      `✅ <b>${tag} Restarted!</b>\n\nSymbol: <code>${cfg.symbol}</code>\nEntry : <code>$${entryPrice.toFixed(4)}</code>\nUpper : <code>$${upperLimit.toFixed(4)}</code>\nLower : <code>$${lowerLimit.toFixed(4)}</code>\nRange : <code>±$${distance}</code>`,
+      `✅ <b>${tag} ${prev ? "Restarted" : "Launched"}!</b>\n\n` +
+      `Symbol: <code>${cfg.symbol}</code>\n` +
+      `Entry : <code>$${entryPrice.toFixed(4)}</code>\n` +
+      `Upper : <code>$${upperLimit.toFixed(4)}</code>\n` +
+      `Lower : <code>$${lowerLimit.toFixed(4)}</code>\n` +
+      `Log   : <code>logs/${exchangeKey}.log</code>`,
       mainMenu()
     );
   } catch(err) {
-    log(exchangeKey, `Telegram restart failed: ${err.message}`, "error");
-    await tgSend(chatId, `❌ ${tag} Restart failed:\n<code>${err.message}</code>`, mainMenu());
+    log(exchangeKey, `Telegram ${prev ? "restart" : "launch"} failed: ${err.message}`, "error");
+    await tgSend(chatId, `❌ ${tag} ${prev ? "Restart" : "Launch"} failed:\n<code>${err.message}</code>`, mainMenu());
   }
 }
 
@@ -865,17 +966,63 @@ async function handleTgUpdate(update) {
 
     const conv = tgConv[fromId];
     if (conv?.step === "awaiting_params" && !text.startsWith("/")) {
-      const parts = text.split(/\s+/).map(Number);
-      if (parts.length !== 5 || parts.some(isNaN) || parts.some(v => v <= 0)) {
-        await tgSend(fromId,
-          `❌ Need exactly <b>5 positive numbers</b>:\n<code>sellSpread  buySpread  targetSpread  qty  distance</code>\n\nExample: <code>1.0  1.0  0.5  0.1  10</code>`,
-          [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+      const parts = text.trim().split(/\s+/);
+      const exch = conv.exchangeKey;
+      const prev = bots[exch]?.config;
+      // Two valid shapes:
+      //   5 values (numbers): sell buy target qty distance  → needs prev config
+      //   7 values: sell buy target qty distance priceSource symbol → cold launch
+      if (parts.length === 5) {
+        const nums = parts.map(Number);
+        if (nums.some(isNaN) || nums.some(v => v <= 0)) {
+          await tgSend(fromId,
+            `❌ Need <b>5 positive numbers</b>:\n<code>sellSpread buySpread targetSpread qty distance</code>\n\n` +
+            `Or send <b>7 values</b> for a fresh start (no UI needed):\n<code>sell buy target qty distance priceSource symbol</code>\n\n` +
+            `Example (HL perp HYPE):\n<code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>`,
+            [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+          return;
+        }
+        if (!prev) {
+          await tgSend(fromId,
+            `❌ <b>${EXCHANGE_TAG[exch]}: no previous config</b>\n\n` +
+            `Send <b>7 values</b> to launch fresh:\n` +
+            `<code>sell buy target qty distance priceSource symbol</code>\n\n` +
+            `<b>Examples:</b>\n` +
+            `HL perp:    <code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>\n` +
+            `HL spot:    <code>0.05 0.05 0.05 0.3 1 hyperliquid_spot HYPE/USDC</code>\n` +
+            `Binance:    <code>0.25 0.25 0.5 1.166 5 binance_spot SOL/FDUSD</code>`,
+            [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+          return;
+        }
+        delete tgConv[fromId];
+        const [ss, bs, ts, q, dist] = nums;
+        await tgDoRestart(fromId, exch, ss, bs, ts, q, dist);
         return;
       }
-      const exch = conv.exchangeKey;
-      delete tgConv[fromId];
-      const [ss, bs, ts, q, dist] = parts;
-      await tgDoRestart(fromId, exch, ss, bs, ts, q, dist);
+      if (parts.length === 7) {
+        const [ssRaw, bsRaw, tsRaw, qRaw, distRaw, priceSource, symbol] = parts;
+        const ss = parseFloat(ssRaw), bs = parseFloat(bsRaw), ts = parseFloat(tsRaw);
+        const q  = parseFloat(qRaw),  dist = parseFloat(distRaw);
+        if ([ss, bs, ts, q, dist].some(v => isNaN(v) || v <= 0)) {
+          await tgSend(fromId, `❌ First 5 values must be positive numbers.`,
+            [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+          return;
+        }
+        if (!priceSource || !symbol) {
+          await tgSend(fromId, `❌ priceSource and symbol are required as the 6th and 7th values.`,
+            [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+          return;
+        }
+        delete tgConv[fromId];
+        await tgDoRestart(fromId, exch, ss, bs, ts, q, dist, priceSource, symbol);
+        return;
+      }
+      await tgSend(fromId,
+        `❌ Send either <b>5</b> or <b>7</b> values.\n\n` +
+        `<b>5 numbers</b> (uses existing config):\n<code>sell buy target qty distance</code>\n\n` +
+        `<b>7 values</b> (fresh launch, no UI):\n<code>sell buy target qty distance priceSource symbol</code>\n\n` +
+        `Example: <code>0.05 0.05 0.05 1 2 hyperliquid HYPE/USDC:USDC</code>`,
+        [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
       return;
     }
 
@@ -884,7 +1031,7 @@ async function handleTgUpdate(update) {
       case "/start":
       case "/menu":
         await tgSend(fromId,
-          `👋 <b>Grid Bot Control Panel</b>\n\n🟦 Binance: <b>${bots.binance.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟧 Deribit: <b>${bots.deribit.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n\nChoose an action:`,
+          `👋 <b>Grid Bot Control Panel</b>\n\n🟦 Binance: <b>${bots.binance.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟧 Deribit: <b>${bots.deribit.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟣 Hyperliquid: <b>${bots.hyperliquid.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n\nChoose an action:`,
           mainMenu()); break;
       case "/status":    await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("status")); break;
       case "/portfolio": await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("portfolio")); break;
@@ -894,7 +1041,7 @@ async function handleTgUpdate(update) {
       case "/stop":      await tgSend(fromId, "Pick an exchange to stop:", exchangeSelectorMenu("stop")); break;
       case "/help":      await tgSend(fromId, tgHelpText(), mainMenu()); break;
       default:
-        if (!conv) await tgSend(fromId, "Use /menu or tap the buttons:", mainMenu());
+        if (!conv) await tgSend(fromId, "Use /menu, /restart, or tap the buttons:", mainMenu());
     }
   }
 }
@@ -1664,13 +1811,26 @@ async function placeTargetOrder(botId, filledSide, fillPrice, fillQty) {
     }
   }
 
-  // Deribit: post_only to capture maker rebates
-  const params = exchangeKey === "deribit" ? { post_only: true } : {};
+  // Post-only on all exchanges for maker fees:
+  //   Hyperliquid: placeSingleOrder routes through hyperliquidNativeOrders (Alo)
+  //   Binance: timeInForce GTX (spot) / postOnly (futures)
+  //   Deribit: post_only
+  let params = {};
+  if (exchangeKey === "deribit") params = { post_only: true };
+  else if (exchangeKey === "binance") params = { timeInForce: "GTX", postOnly: true };
+
   try {
-    const order = await bot.exchange.createLimitOrder(cfg.symbol, targetSide, qty, targetPrice, params);
-    bot.openOrders.push({ id: order.id, side: targetSide, price: targetPrice, qty, type: "target", placedAt: Date.now() });
+    let orderId;
+    if (exchangeKey === "hyperliquid") {
+      const r = await placeSingleOrder(botId, targetSide, qty, targetPrice, cfg.symbol, {});
+      orderId = r.id;
+    } else {
+      const order = await bot.exchange.createLimitOrder(cfg.symbol, targetSide, qty, targetPrice, params);
+      orderId = order.id;
+    }
+    bot.openOrders.push({ id: orderId, side: targetSide, price: targetPrice, qty, type: "target", placedAt: Date.now() });
     log(botId, `Target ${targetSide.toUpperCase()} placed @ $${targetPrice}`);
-    return { id: order.id, price: targetPrice, qty, side: targetSide, shared: false };
+    return { id: orderId, price: targetPrice, qty, side: targetSide, shared: false };
   } catch (err) {
     const isPostOnlyReject = (err.message || "").includes("post_only_reject");
     if (exchangeKey === "deribit" && isPostOnlyReject) {
@@ -1724,13 +1884,31 @@ async function maintainGrid(botId, currentPrice) {
   const qty = roundQty(cfg.qtyPerStep, stepSize);
   const PER_SIDE = 3;            // exactly 3 above + 3 below = 6 total
   const isDeribit = exchangeKey === "deribit";
-  const orderParams = isDeribit ? { post_only: true } : {};
+  // Post-only for ALL exchanges — guarantees maker fee, never accidental taker.
+  //   Binance spot: timeInForce 'GTX' (Good Till Crossing = post-only)
+  //   Binance futures: postOnly: true
+  //   Deribit: post_only: true
+  //   Hyperliquid: handled separately (Alo tif in hyperliquidNativeOrders)
+  let orderParams = {};
+  if (isDeribit) {
+    orderParams = { post_only: true };
+  } else if (exchangeKey === "binance") {
+    // Spot uses 'GTX'; futures use postOnly. CCXT accepts both; pass both for safety.
+    orderParams = { timeInForce: "GTX", postOnly: true };
+  }
 
   const bid = bot.bestBid || currentPrice;
   const ask = bot.bestAsk || currentPrice;
-  const minSellPrice = isDeribit ? roundPrice(ask + tickSize, tickSize) : currentPrice + tickSize;
-  const maxBuyPrice  = isDeribit ? roundPrice(bid - tickSize, tickSize) : currentPrice - tickSize;
-  const isPostOnlyReject = (err) => err && (err.message || "").includes("post_only_reject");
+  // Use bid/ask floors for ALL exchanges now (post-only would reject otherwise):
+  //   A SELL must be at or above the best ASK (otherwise it'd cross → taker → reject)
+  //   A BUY  must be at or below the best BID
+  const minSellPrice = roundPrice(ask + tickSize, tickSize);
+  const maxBuyPrice  = roundPrice(bid - tickSize, tickSize);
+  const isPostOnlyReject = (err) => {
+    const m = (err?.message || "").toLowerCase();
+    return m.includes("post_only_reject") || m.includes("post-only") ||
+           m.includes("would immediately match") || m.includes("rejected post-only");
+  };
 
   // ════════════════════════════════════════════════════════════════════
   //  PER-SIDE STRICT 3+3
@@ -2010,7 +2188,15 @@ async function maintainGrid(botId, currentPrice) {
         log(botId, `↑ ${tag} ${d.side.toUpperCase()} @ $${d.price}  qty:${d.qty}${r.filled ? "  (already filled!)" : ""}`);
       } else {
         const msg = r.error || "unknown";
-        log(botId, `Place ${d.type.toUpperCase()} ${d.side.toUpperCase()} failed @ $${d.price}: ${msg}`, msg.includes("crossed") ? "warn" : "error");
+        // Hyperliquid Alo reject => order would cross spread → would be taker.
+        // This is EXPECTED — we want to skip taker fills. Retry next loop
+        // when the spread has moved or the anchor shifts.
+        const isAloReject = /post.?only|alo|would.*cross|cross.*book|reject/i.test(msg);
+        if (isAloReject) {
+          log(botId, `${d.side.toUpperCase()} @ $${d.price} would be TAKER — skipped (post-only). Retry next loop.`, "warn");
+        } else {
+          log(botId, `Place ${d.type.toUpperCase()} ${d.side.toUpperCase()} failed @ $${d.price}: ${msg}`, "error");
+        }
       }
     }
   } else {
@@ -2102,7 +2288,11 @@ async function hyperliquidNativeOrders(bot, orders) {
     p: formatPrice(o.price),
     s: formatSize(o.qty),
     r: false,
-    t: { limit: { tif: "Gtc" } },  // Good 'til cancelled
+    // "Alo" = Add Liquidity Only (post-only). Exchange REJECTS if the order
+    // would cross the spread, instead of executing as taker. Guarantees the
+    // maker rebate / lower fee tier. Rejected orders are caught below and
+    // logged; the next loop will re-price further from market.
+    t: { limit: { tif: "Alo" } },
   }));
 
   try {
