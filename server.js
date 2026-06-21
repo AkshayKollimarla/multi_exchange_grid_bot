@@ -20,6 +20,7 @@ const path      = require("path");
 // integration has known bugs with fetchOpenOrders and cancelOrder.
 const hl        = require("@nktkas/hyperliquid");
 const { privateKeyToAccount } = require("viem/accounts");
+const db        = require("./db");
 
 // ─────────────────────────────────────────────────────────────
 // Per-bot log files. Each bot writes to logs/<botId>.log so you
@@ -1686,11 +1687,13 @@ async function checkAndHandleFills(botId, currentPrice) {
       const feeEst    = estimateFee(cfg.priceSource, fillPrice, fillQty);
       log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee≈$${feeEst.toFixed(4)}`, "success");
 
-      bot.fillHistory.unshift({
+      const hlFill = {
         side: tracked.side, price: fillPrice, qty: fillQty,
         type: tracked.type, ts: fillTs,
         fee: feeEst, feeCcy: "USDC", orderId: tracked.id,
-      });
+      };
+      bot.fillHistory.unshift(hlFill);
+      db.recordFill(bot, hlFill);
 
       if (tracked.type === "entry") {
         const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
@@ -1735,7 +1738,7 @@ async function checkAndHandleFills(botId, currentPrice) {
           const closeFee  = estimateFee(cfg.priceSource, fillPrice,     rt.qty);
           const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
           const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
-          bot.completedRoundTrips.unshift({
+          const hlRt = {
             id: rt.id, openSide: rt.openSide,
             openPrice: rt.openPrice, closePrice: fillPrice,
             buyPrice, sellPrice, qty: rt.qty,
@@ -1743,7 +1746,9 @@ async function checkAndHandleFills(botId, currentPrice) {
             grossPnl, totalFee, netPnl,
             openTs: rt.openTs, closeTs: fillTs,
             durationMs: Date.now() - new Date(rt.openTs).getTime(),
-          });
+          };
+          bot.completedRoundTrips.unshift(hlRt);
+          db.recordRoundTrip(bot, hlRt, bot.completedRoundTrips.length);
           const netSign = netPnl >= 0 ? "+" : "";
           log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
           if (cfg?.telegramToken && cfg?.telegramChatId) {
@@ -1775,11 +1780,13 @@ async function checkAndHandleFills(botId, currentPrice) {
 
         log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
 
-        bot.fillHistory.unshift({
+        const ccxtFill = {
           side: tracked.side, price: fillPrice, qty: fillQty,
           type: tracked.type, ts: fillTs,
           fee: feeCost, feeCcy, orderId: tracked.id,
-        });
+        };
+        bot.fillHistory.unshift(ccxtFill);
+        db.recordFill(bot, ccxtFill);
 
         if (tracked.type === "entry") {
           // Just record the pending round trip. The strict-6 algorithm in
@@ -1839,7 +1846,7 @@ async function checkAndHandleFills(botId, currentPrice) {
             const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
             const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
 
-            bot.completedRoundTrips.unshift({
+            const ccxtRt = {
               id: rt.id, openSide: rt.openSide,
               openPrice: rt.openPrice, closePrice: fillPrice,
               buyPrice, sellPrice,
@@ -1848,7 +1855,9 @@ async function checkAndHandleFills(botId, currentPrice) {
               grossPnl, totalFee, netPnl,
               openTs: rt.openTs, closeTs: fillTs,
               durationMs: Date.now() - new Date(rt.openTs).getTime(),
-            });
+            };
+            bot.completedRoundTrips.unshift(ccxtRt);
+            db.recordRoundTrip(bot, ccxtRt, bot.completedRoundTrips.length);
             const netSign = netPnl >= 0 ? "+" : "";
             log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
 
@@ -3120,6 +3129,32 @@ app.get("/api/report", async (req, res) => {
   res.json({ period, fromTs, toTs, exchange: exchangeKey, ...getRoundTripReport(exchangeKey, fromTs, toTs) });
 });
 
+// DB-backed report — reads from MySQL so history survives restarts.
+// Same response shape as /api/report.
+app.get("/api/db_report", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  const exchange = req.query.exchange || req.query.botId || null;
+  const now = Date.now();
+  const period = req.query.period || "24h";
+  let fromTs, toTs = now;
+  if (period === "24h")      fromTs = now - 24 * 60 * 60 * 1000;
+  else if (period === "7d")  fromTs = now - 7  * 24 * 60 * 60 * 1000;
+  else if (period === "30d") fromTs = now - 30 * 24 * 60 * 60 * 1000;
+  else if (period === "all") fromTs = 0;
+  else if (period === "custom") {
+    fromTs = parseInt(req.query.from) || (now - 24 * 60 * 60 * 1000);
+    toTs   = parseInt(req.query.to)   || now;
+  } else fromTs = now - 24 * 60 * 60 * 1000;
+
+  try {
+    const report = await db.queryReport({ exchange, fromTs, toTs });
+    if (!report) return res.status(503).json({ error: "DB unavailable" });
+    res.json({ period, fromTs, toTs, exchange, ...report });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // CSV download (browser) — same period semantics as /api/report
 app.get("/api/csv", async (req, res) => {
   const exchangeKey = req.query.botId || req.query.exchange || "binance";
@@ -3552,6 +3587,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
   console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
+  db.pingDb();
 });
 
 // Flush per-bot log streams on shutdown so the tail of each file is written
