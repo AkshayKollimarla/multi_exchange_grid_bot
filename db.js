@@ -47,12 +47,69 @@ async function pingDb() {
   try {
     const conn = await p.getConnection();
     await conn.query("SELECT 1");
+    // Auto-create bot_sessions table on first connect so deploys don't
+    // need a separate migration step.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS bot_sessions (
+        bot_id      VARCHAR(64) NOT NULL PRIMARY KEY,
+        exchange    VARCHAR(32) NOT NULL,
+        config_json JSON        NOT NULL,
+        started_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+      ) ENGINE=InnoDB
+    `);
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
   } catch (e) {
     console.error("[DB] Ping failed:", e.message);
     return false;
+  }
+}
+
+// Save (or upsert) a running bot session so we can resume it after restart.
+// Caller is responsible for stripping secrets — see stripSecrets in server.js.
+async function saveSession(botId, exchange, config) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.execute(
+      `INSERT INTO bot_sessions (bot_id, exchange, config_json)
+       VALUES (?, ?, CAST(? AS JSON))
+       ON DUPLICATE KEY UPDATE exchange = VALUES(exchange), config_json = VALUES(config_json)`,
+      [botId, exchange, JSON.stringify(config)]
+    );
+  } catch (e) {
+    console.error("[DB] saveSession failed:", e.message);
+  }
+}
+
+async function clearSession(botId) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.execute("DELETE FROM bot_sessions WHERE bot_id = ?", [botId]);
+  } catch (e) {
+    console.error("[DB] clearSession failed:", e.message);
+  }
+}
+
+async function loadAllSessions() {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const [rows] = await p.query(
+      "SELECT bot_id, exchange, config_json FROM bot_sessions ORDER BY started_at ASC"
+    );
+    return rows.map(r => ({
+      botId: r.bot_id,
+      exchange: r.exchange,
+      // mysql2 returns JSON columns already parsed as objects
+      config: typeof r.config_json === "string" ? JSON.parse(r.config_json) : r.config_json,
+    }));
+  } catch (e) {
+    console.error("[DB] loadAllSessions failed:", e.message);
+    return [];
   }
 }
 
@@ -227,4 +284,8 @@ async function loadRecentRoundTrips({ exchange, symbol, limit = 200 }) {
   }
 }
 
-module.exports = { getPool, pingDb, recordFill, recordRoundTrip, queryReport, loadRecentRoundTrips, dbConfigured };
+module.exports = {
+  getPool, pingDb, recordFill, recordRoundTrip, queryReport,
+  loadRecentRoundTrips, saveSession, clearSession, loadAllSessions,
+  dbConfigured,
+};

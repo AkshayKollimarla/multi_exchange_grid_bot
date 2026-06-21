@@ -22,6 +22,17 @@ const hl        = require("@nktkas/hyperliquid");
 const { privateKeyToAccount } = require("viem/accounts");
 const db        = require("./db");
 
+// Fields stripped before saving a bot session to MySQL. These are
+// re-injected from .env on resume via injectKeysIntoCfg.
+const SESSION_SECRET_FIELDS = ["apiKey", "secretKey", "telegramToken"];
+function stripSecrets(cfg) {
+  const out = {};
+  for (const k of Object.keys(cfg || {})) {
+    if (!SESSION_SECRET_FIELDS.includes(k)) out[k] = cfg[k];
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Per-bot log files. Each bot writes to logs/<botId>.log so you
 // can `tail -f` any single bot in its own terminal. The single
@@ -1170,6 +1181,7 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
       }
       clearInterval(bot.loopTimer); bot.running = false;
       try { await cancelAllOrders(exchangeKey); } catch(e){}
+      db.clearSession(exchangeKey);
       log(exchangeKey, "Telegram stop", "warn");
       broadcast("state", buildStateSnapshot());
       await tgEdit(chatId, msgId,
@@ -1480,6 +1492,7 @@ async function emergencyStop(botId, reason) {
   bot.running = false;
   log(botId, `EMERGENCY STOP: ${reason}`, "error");
   try { await cancelAllOrders(botId); } catch(e){}
+  db.clearSession(botId);
 
   const cfg = bot.config;
   if (cfg?.telegramToken && cfg?.telegramChatId) {
@@ -3420,6 +3433,9 @@ app.post("/api/start", async (req, res) => {
     }, startupDelay);
     log(botId, `Loop: ${loopMs}ms interval, first run in ${startupDelay}ms (${runningCount} bot(s) running)`, "info");
 
+    // Persist the running session so it auto-resumes after deploy / reboot.
+    db.saveSession(botId, exchangeKey, stripSecrets(req.body));
+
     res.json({ success: true, botId, exchange: exchangeKey, label: bot.label, entryPrice, upperLimit, lowerLimit });
   } catch (err) {
     const is429 = (err.message || "").includes("429") || /too many requests/i.test(err.message || "");
@@ -3454,6 +3470,8 @@ app.post("/api/stop", async (req, res) => {
   await sendTelegram(process.env.TELEGRAM_BOT_TOKEN, process.env.TELEGRAM_CHAT_ID,
     `${tag} 🛑 Grid Bot Manually Stopped\n\nSymbol: ${bot.config?.symbol||"—"}\nLast Price: $${bot.lastPrice||"—"}\nTime: ${new Date().toLocaleString()}`
   );
+
+  db.clearSession(botId);
 
   res.json({ success: true, botId, exchange: exchangeKey });
   broadcast("state", buildStateSnapshot());
@@ -3601,8 +3619,40 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
   console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
-  db.pingDb();
+  db.pingDb().then(ok => { if (ok) resumeSessions(); });
 });
+
+// Re-launch any bot whose session was persisted to MySQL. Runs once on
+// startup after the DB ping succeeds. Each resume is best-effort — if one
+// fails, the others still try.
+async function resumeSessions() {
+  let sessions;
+  try {
+    sessions = await db.loadAllSessions();
+  } catch (e) {
+    console.error("[RESUME] loadAllSessions failed:", e.message);
+    return;
+  }
+  if (!sessions || sessions.length === 0) return;
+  console.log(`[RESUME] Found ${sessions.length} persisted session(s) — restarting...`);
+  for (const s of sessions) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT}/api/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(s.config),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) {
+        console.log(`[RESUME] ${s.botId} (${s.exchange}) resumed: entry $${body.entryPrice}`);
+      } else {
+        console.error(`[RESUME] ${s.botId} failed: ${body.error || r.status}`);
+      }
+    } catch (e) {
+      console.error(`[RESUME] ${s.botId} crashed during resume:`, e.message);
+    }
+  }
+}
 
 // Flush per-bot log streams on shutdown so the tail of each file is written
 function flushLogs(reason) {
