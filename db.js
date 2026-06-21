@@ -186,4 +186,45 @@ async function queryReport({ exchange, fromTs, toTs }) {
   };
 }
 
-module.exports = { getPool, pingDb, recordFill, recordRoundTrip, queryReport, dbConfigured };
+// Load the most recent round trips for a given (exchange, symbol) and
+// return them in the in-memory shape used by bot.completedRoundTrips
+// (newest first). Fee breakdown isn't persisted, so grossPnl/totalFee/netPnl
+// fall back to pnl/0/pnl for historical rows.
+async function loadRecentRoundTrips({ exchange, symbol, limit = 200 }) {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const lim = parseInt(limit, 10) || 200;
+    const [rows] = await p.query(
+      `SELECT round_trip, open_side, buy_price, sell_price, qty, pnl, duration_sec, opened_at, closed_at
+       FROM round_trips
+       WHERE exchange = ? AND symbol = ?
+       ORDER BY closed_at DESC
+       LIMIT ${lim}`,
+      [exchange, symbol]
+    );
+    return rows.map(r => {
+      const openSide   = String(r.open_side).toLowerCase();
+      const buyPrice   = Number(r.buy_price);
+      const sellPrice  = Number(r.sell_price);
+      const openPrice  = openSide === "buy"  ? buyPrice  : sellPrice;
+      const closePrice = openSide === "buy"  ? sellPrice : buyPrice;
+      const pnl        = Number(r.pnl);
+      return {
+        id: `db_${r.round_trip}`,
+        openSide, openPrice, closePrice, buyPrice, sellPrice,
+        qty: Number(r.qty),
+        pnl,
+        grossPnl: pnl, totalFee: 0, netPnl: pnl,
+        openTs: r.opened_at instanceof Date ? r.opened_at.toISOString() : r.opened_at,
+        closeTs: r.closed_at instanceof Date ? r.closed_at.toISOString() : r.closed_at,
+        durationMs: Math.round(Number(r.duration_sec) * 1000),
+      };
+    });
+  } catch (e) {
+    console.error("[DB] loadRecentRoundTrips failed:", e.message);
+    return [];
+  }
+}
+
+module.exports = { getPool, pingDb, recordFill, recordRoundTrip, queryReport, loadRecentRoundTrips, dbConfigured };

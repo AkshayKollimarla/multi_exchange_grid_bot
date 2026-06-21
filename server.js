@@ -3367,6 +3367,20 @@ app.post("/api/start", async (req, res) => {
     log(botId, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
     log(botId, `📄 Per-bot log: tail -f logs/${botId}.log`, "info");
 
+    // Hydrate historical round trips from DB so the dashboard reflects
+    // full history across restarts (last 200 closed RTs for this market).
+    try {
+      const historical = await db.loadRecentRoundTrips({
+        exchange: exchangeKey, symbol: cfg.symbol, limit: 200,
+      });
+      if (historical.length > 0) {
+        bot.completedRoundTrips = historical;
+        log(botId, `Loaded ${historical.length} historical round trips from DB`, "info");
+      }
+    } catch (e) {
+      log(botId, `DB hydration skipped: ${e.message}`, "warn");
+    }
+
     // Spot inventory advisory
     if (exchangeKey === "hyperliquid" && bot.hlCache?.isSpot) {
       const recommended = (cfg.qtyPerStep * 3).toFixed(4);
