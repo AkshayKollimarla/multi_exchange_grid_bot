@@ -59,10 +59,53 @@ function closeLogStream(botId) {
 
 const app    = express();
 const server = http.createServer(app);
-const wss    = new WebSocket.Server({ server });
+
+// ────────────────────────────────────────────────────────────
+// HTTP Basic Auth — protects the dashboard, all /api routes,
+// and the WebSocket. Configured via DASHBOARD_USER + DASHBOARD_PASSWORD
+// in .env. If either is unset, auth is disabled (open dashboard).
+// Localhost requests bypass auth so resumeSessions's internal POST to
+// /api/start works without credentials.
+// ────────────────────────────────────────────────────────────
+function checkBasicAuth(headerValue) {
+  const user = process.env.DASHBOARD_USER;
+  const pass = process.env.DASHBOARD_PASSWORD;
+  if (!user || !pass) return true; // auth disabled
+  if (!headerValue) return false;
+  const [scheme, encoded] = headerValue.split(" ");
+  if (scheme !== "Basic" || !encoded) return false;
+  let decoded;
+  try { decoded = Buffer.from(encoded, "base64").toString("utf8"); }
+  catch (e) { return false; }
+  const sep = decoded.indexOf(":");
+  if (sep < 0) return false;
+  return decoded.slice(0, sep) === user && decoded.slice(sep + 1) === pass;
+}
+function isLocalhostReq(req) {
+  const ip = req.ip || req.connection?.remoteAddress || "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+}
+function basicAuthMiddleware(req, res, next) {
+  if (isLocalhostReq(req)) return next();
+  if (checkBasicAuth(req.headers.authorization)) return next();
+  res.set("WWW-Authenticate", 'Basic realm="Grid Bot Dashboard"');
+  res.status(401).send("Authentication required");
+}
+
+const wss = new WebSocket.Server({
+  server,
+  verifyClient: (info, cb) => {
+    const ip = info.req.socket?.remoteAddress || "";
+    const localhost = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+    if (localhost) return cb(true);
+    if (checkBasicAuth(info.req.headers.authorization)) return cb(true);
+    cb(false, 401, "Unauthorized");
+  },
+});
 
 app.use(cors());
 app.use(express.json());
+app.use(basicAuthMiddleware);
 app.use(express.static(__dirname));
 
 // ============================================================
