@@ -1038,8 +1038,8 @@
       </div>
       <div class="card-body" style="padding:0;">
         <table class="ord-table">
-          <thead><tr><th>#</th><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>PnL</th><th>When</th></tr></thead>
-          <tbody id="liveRtBody"><tr><td colspan="7" class="empty-td">No round trips yet — waiting for first target fill</td></tr></tbody>
+          <thead><tr><th>#</th><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th><th>When</th></tr></thead>
+          <tbody id="liveRtBody"><tr><td colspan="8" class="empty-td">No round trips yet — waiting for first target fill</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1077,8 +1077,8 @@
           <div class="rep-stat"><div class="rep-label">Win Rate</div><div class="rep-value" id="rWinRate">—</div></div>
         </div>
         <table class="ord-table">
-          <thead><tr><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>PnL</th><th>Duration</th><th>Closed</th></tr></thead>
-          <tbody id="rtBody"><tr><td colspan="7" class="empty-td">No round trips in this period</td></tr></tbody>
+          <thead><tr><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th><th>Duration</th><th>Closed</th></tr></thead>
+          <tbody id="rtBody"><tr><td colspan="8" class="empty-td">No round trips in this period</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1952,11 +1952,11 @@ function renderLiveRoundTrips(rts) {
   totalEl.title = `Gross: $${totalGross.toFixed(4)}  Fees: -$${totalFees.toFixed(4)}  Net: $${totalNet.toFixed(4)}`;
 
   if (!rts.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-td">No round trips yet — waiting for first target fill</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-td">No round trips yet — waiting for first target fill</td></tr>`;
     return;
   }
 
-  // Show the 20 most recent — display NET PnL (gross − fees)
+  // Show the 20 most recent — display NET PnL (gross − fees) plus a Fee column
   const recent = rts.slice(0, 20);
   tbody.innerHTML = recent.map((rt, i) => {
     const gross = rt.grossPnl ?? rt.pnl ?? 0;
@@ -1970,13 +1970,14 @@ function renderLiveRoundTrips(rts) {
       : `<span class="sell-text">SELL→BUY</span>`;
     const closeTime  = new Date(rt.closeTs).toLocaleTimeString();
     const rowBg      = i % 2 === 0 ? "" : "background:var(--surface-2);";
-    const tip = `Gross: $${gross.toFixed(4)}\nFees:  -$${fee.toFixed(4)}\nNet:   $${net.toFixed(4)}`;
+    const tip = `Gross: $${gross.toFixed(4)}\nFee:   -$${fee.toFixed(4)}\nNet:   $${net.toFixed(4)}`;
     return `<tr style="${rowBg}">
       <td style="font-weight:700;color:var(--brand);">#${rts.length - i}</td>
       <td>${sideText}</td>
       <td class="buy-text">$${rt.buyPrice.toFixed(4)}</td>
       <td class="sell-text">$${rt.sellPrice.toFixed(4)}</td>
       <td>${rt.qty}</td>
+      <td style="color:var(--red);">-$${fee.toFixed(4)}</td>
       <td class="${pnlClass}" style="font-weight:800;" title="${tip}">${pnlSign}$${Math.abs(net).toFixed(4)}</td>
       <td style="color:var(--muted);">${closeTime}</td>
     </tr>`;
@@ -2034,7 +2035,8 @@ async function loadReport() {
   const qs = reportQueryString();
   if (!qs) return;
   try {
-    const res  = await fetch(`/api/report?${qs}`);
+    // DB-backed report: persists across bot restarts.
+    const res  = await fetch(`/api/db_report?${qs}`);
     const data = await res.json();
     renderReport(data);
   } catch(err) { console.error("Report error:", err); }
@@ -2071,20 +2073,19 @@ function renderReport(data) {
   document.getElementById("rPerRt").textContent  = perRtPnl ? `+$${perRtPnl.toFixed(4)}` : "—";
   document.getElementById("rAvgSpread").textContent = avgSpread ? `$${avgSpread.toFixed(4)}` : "—";
 
-  // Show/hide fee/rebate/net cells based on exchange
-  document.getElementById("feesStat").style.display = isDeribit ? "" : "none";
+  // Fees + Net PnL always shown (DB-backed report tracks fees for all exchanges).
+  // Rebates only relevant for Deribit (maker rebates).
+  document.getElementById("feesStat").style.display = "";
   document.getElementById("rebStat").style.display  = isDeribit ? "" : "none";
-  document.getElementById("netStat").style.display  = isDeribit ? "" : "none";
-  if (isDeribit) {
-    const fees    = data.totalFees    || 0;
-    const rebates = data.totalRebates || 0;
-    const netPnl  = data.netPnl       || pnl;
-    document.getElementById("rFees").textContent    = "-$" + fees.toFixed(4);
-    document.getElementById("rRebates").textContent = "+$" + rebates.toFixed(4);
-    const netEl = document.getElementById("rNetPnl");
-    netEl.textContent = (netPnl >= 0 ? "+" : "") + "$" + netPnl.toFixed(4);
-    netEl.className   = "rep-value " + (netPnl > 0 ? "pos" : netPnl < 0 ? "neg" : "");
-  }
+  document.getElementById("netStat").style.display  = "";
+  const fees    = data.totalFees    || 0;
+  const rebates = data.totalRebates || 0;
+  const netPnl  = data.netPnl       ?? pnl;
+  document.getElementById("rFees").textContent    = "-$" + fees.toFixed(4);
+  if (isDeribit) document.getElementById("rRebates").textContent = "+$" + rebates.toFixed(4);
+  const netEl = document.getElementById("rNetPnl");
+  netEl.textContent = (netPnl >= 0 ? "+" : "") + "$" + netPnl.toFixed(4);
+  netEl.className   = "rep-value " + (netPnl > 0 ? "pos" : netPnl < 0 ? "neg" : "");
 
   document.getElementById("rBuys").textContent   = data.periodBuys  ?? "—";
   document.getElementById("rSells").textContent  = data.periodSells ?? "—";
@@ -2092,21 +2093,26 @@ function renderReport(data) {
 
   const tbody = document.getElementById("rtBody");
   if (!data.roundTrips?.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-td">No round trips in this period</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-td">No round trips in this period</td></tr>`;
     return;
   }
   tbody.innerHTML = data.roundTrips.map((rt, i) => {
     const dur       = formatDuration(rt.durationMs);
     const closeTime = new Date(rt.closeTs).toLocaleTimeString();
     const rowBg     = i % 2 === 0 ? "" : "background:var(--surface-2);";
-    const pnlClass  = rt.pnl >= 0 ? "pos-text" : "sell-text";
-    const pnlSign   = rt.pnl >= 0 ? "+" : "";
+    const gross     = rt.grossPnl ?? rt.pnl ?? 0;
+    const fee       = rt.totalFee ?? 0;
+    const net       = rt.netPnl   ?? (gross - fee);
+    const pnlClass  = net >= 0 ? "pos-text" : "sell-text";
+    const pnlSign   = net >= 0 ? "+" : "";
+    const tip = `Gross: $${gross.toFixed(4)}\nFee:   -$${fee.toFixed(4)}\nNet:   $${net.toFixed(4)}`;
     return `<tr style="${rowBg}">
       <td class="${rt.openSide==="BUY"?"buy-text":"sell-text"}">${rt.openSide}</td>
       <td class="buy-text">$${rt.buyPrice.toFixed(4)}</td>
       <td class="sell-text">$${rt.sellPrice.toFixed(4)}</td>
       <td>${rt.qty}</td>
-      <td class="${pnlClass}">${pnlSign}${rt.pnl.toFixed(4)}</td>
+      <td style="color:var(--red);">-$${fee.toFixed(4)}</td>
+      <td class="${pnlClass}" title="${tip}">${pnlSign}$${Math.abs(net).toFixed(4)}</td>
       <td style="color:var(--muted);">${dur}</td>
       <td style="color:var(--muted);">${closeTime}</td>
     </tr>`;

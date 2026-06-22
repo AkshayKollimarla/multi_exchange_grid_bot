@@ -3379,20 +3379,8 @@ app.post("/api/start", async (req, res) => {
     log(botId, `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
     log(botId, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
     log(botId, `📄 Per-bot log: tail -f logs/${botId}.log`, "info");
-
-    // Hydrate historical round trips from DB so the dashboard reflects
-    // full history across restarts (last 200 closed RTs for this market).
-    try {
-      const historical = await db.loadRecentRoundTrips({
-        exchange: exchangeKey, symbol: cfg.symbol, limit: 200,
-      });
-      if (historical.length > 0) {
-        bot.completedRoundTrips = historical;
-        log(botId, `Loaded ${historical.length} historical round trips from DB`, "info");
-      }
-    } catch (e) {
-      log(botId, `DB hydration skipped: ${e.message}`, "warn");
-    }
+    // Live dashboard always starts at zero — DB-backed history lives in
+    // the PnL Report tab (via /api/db_report).
 
     // Spot inventory advisory
     if (exchangeKey === "hyperliquid" && bot.hlCache?.isSpot) {

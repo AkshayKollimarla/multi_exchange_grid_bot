@@ -58,6 +58,16 @@ async function pingDb() {
         updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
       ) ENGINE=InnoDB
     `);
+    // Auto-add fee columns to round_trips if missing. Idempotent — ignore
+    // "Duplicate column" errors on subsequent boots.
+    for (const col of [
+      "ADD COLUMN gross_pnl DECIMAL(20,8) NULL",
+      "ADD COLUMN total_fee DECIMAL(20,8) NULL",
+      "ADD COLUMN net_pnl   DECIMAL(20,8) NULL",
+    ]) {
+      try { await conn.query(`ALTER TABLE round_trips ${col}`); }
+      catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    }
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
@@ -153,10 +163,13 @@ async function recordRoundTrip(bot, rt, sequenceNumber) {
   try {
     const spread      = +(rt.sellPrice - rt.buyPrice).toFixed(8);
     const durationSec = +((rt.durationMs || 0) / 1000).toFixed(3);
+    const grossPnl    = rt.grossPnl ?? rt.pnl ?? 0;
+    const totalFee    = rt.totalFee ?? 0;
+    const netPnl      = rt.netPnl   ?? (grossPnl - totalFee);
     await p.execute(
       `INSERT INTO round_trips
-       (round_trip, bot_id, exchange, symbol, open_side, buy_price, sell_price, qty, spread, pnl, duration_sec, opened_at, closed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (round_trip, bot_id, exchange, symbol, open_side, buy_price, sell_price, qty, spread, pnl, duration_sec, opened_at, closed_at, gross_pnl, total_fee, net_pnl)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         sequenceNumber,
         bot.botId || bot.exchangeKey,
@@ -171,6 +184,9 @@ async function recordRoundTrip(bot, rt, sequenceNumber) {
         durationSec,
         toMysqlDate(rt.openTs),
         toMysqlDate(rt.closeTs),
+        grossPnl,
+        totalFee,
+        netPnl,
       ]
     );
   } catch (e) {
@@ -190,7 +206,8 @@ async function queryReport({ exchange, fromTs, toTs }) {
 
   const [rtRows] = await p.execute(
     `SELECT round_trip, bot_id, exchange, symbol, open_side, buy_price, sell_price,
-            qty, spread, pnl, duration_sec, opened_at, closed_at
+            qty, spread, pnl, duration_sec, opened_at, closed_at,
+            gross_pnl, total_fee, net_pnl
      FROM round_trips
      WHERE ${exchClause} closed_at BETWEEN ? AND ?
      ORDER BY closed_at DESC`,
@@ -202,43 +219,48 @@ async function queryReport({ exchange, fromTs, toTs }) {
     params
   );
 
-  let totalFees = 0, totalRebates = 0;
   let periodBuys = 0, periodSells = 0;
   for (const f of fillRows) {
-    const fee = Number(f.fee) || 0;
-    if (fee > 0) totalFees   += fee;
-    else         totalRebates += -fee;
     if (f.side === "buy")  periodBuys++;
     if (f.side === "sell") periodSells++;
   }
 
-  const roundTrips = rtRows.map(r => ({
-    openSide  : String(r.open_side).toUpperCase(),
-    buyPrice  : Number(r.buy_price),
-    sellPrice : Number(r.sell_price),
-    qty       : Number(r.qty),
-    pnl       : Number(r.pnl),
-    openTs    : r.opened_at,
-    closeTs   : r.closed_at,
-    durationMs: Math.round(Number(r.duration_sec) * 1000),
-  }));
+  const roundTrips = rtRows.map(r => {
+    const grossPnl = r.gross_pnl != null ? Number(r.gross_pnl) : Number(r.pnl);
+    const totalFee = r.total_fee != null ? Number(r.total_fee) : 0;
+    const netPnl   = r.net_pnl   != null ? Number(r.net_pnl)   : (grossPnl - totalFee);
+    return {
+      openSide  : String(r.open_side).toUpperCase(),
+      buyPrice  : Number(r.buy_price),
+      sellPrice : Number(r.sell_price),
+      qty       : Number(r.qty),
+      pnl       : Number(r.pnl),
+      grossPnl, totalFee, netPnl,
+      openTs    : r.opened_at,
+      closeTs   : r.closed_at,
+      durationMs: Math.round(Number(r.duration_sec) * 1000),
+    };
+  });
 
   const count = roundTrips.length;
-  const pnl   = +roundTrips.reduce((s, r) => s + r.pnl, 0).toFixed(4);
-  const wins   = roundTrips.filter(r => r.pnl > 0).length;
-  const losses = roundTrips.filter(r => r.pnl < 0).length;
+  const pnl   = +roundTrips.reduce((s, r) => s + r.grossPnl, 0).toFixed(4);
+  const wins   = roundTrips.filter(r => r.netPnl > 0).length;
+  const losses = roundTrips.filter(r => r.netPnl < 0).length;
   const winRate = count > 0 ? Math.round((wins / count) * 100) : 0;
   const avgSpread = count > 0
     ? +(roundTrips.reduce((s, r) => s + (r.sellPrice - r.buyPrice), 0) / count).toFixed(6)
     : 0;
   const perRtPnl = count > 0 ? +(pnl / count).toFixed(6) : 0;
-  const netPnl = +(pnl - totalFees + totalRebates).toFixed(6);
+  // Use per-RT fees (more accurate than scanning fills, since fills may
+  // include orphaned ones not tied to a closed RT).
+  const totalFees = +roundTrips.reduce((s, r) => s + r.totalFee, 0).toFixed(6);
+  const netPnl   = +roundTrips.reduce((s, r) => s + r.netPnl,   0).toFixed(6);
 
   return {
     count, pnl, wins, losses, winRate, roundTrips,
     periodBuys, periodSells, perRtPnl, avgSpread,
-    totalFees: +totalFees.toFixed(6),
-    totalRebates: +totalRebates.toFixed(6),
+    totalFees,
+    totalRebates: 0,
     netPnl,
   };
 }
