@@ -61,52 +61,120 @@ const app    = express();
 const server = http.createServer(app);
 
 // ────────────────────────────────────────────────────────────
-// HTTP Basic Auth — protects the dashboard, all /api routes,
-// and the WebSocket. Configured via DASHBOARD_USER + DASHBOARD_PASSWORD
-// in .env. If either is unset, auth is disabled (open dashboard).
+// SESSION-BASED AUTH (cookie). Configured via DASHBOARD_USER +
+// DASHBOARD_PASSWORD in .env. If either is unset, auth is disabled.
 // Localhost requests bypass auth so resumeSessions's internal POST to
 // /api/start works without credentials.
+//   - POST /api/login        — issues a session cookie
+//   - POST /api/logout       — clears it
+//   - GET  /api/auth/status  — reports auth state (public)
+//   - /login.html            — public, serves the login page
+//   - everything else        — requires a valid session cookie
 // ────────────────────────────────────────────────────────────
-function checkBasicAuth(headerValue) {
-  const user = process.env.DASHBOARD_USER;
-  const pass = process.env.DASHBOARD_PASSWORD;
-  if (!user || !pass) return true; // auth disabled
-  if (!headerValue) return false;
-  const [scheme, encoded] = headerValue.split(" ");
-  if (scheme !== "Basic" || !encoded) return false;
-  let decoded;
-  try { decoded = Buffer.from(encoded, "base64").toString("utf8"); }
-  catch (e) { return false; }
-  const sep = decoded.indexOf(":");
-  if (sep < 0) return false;
-  return decoded.slice(0, sep) === user && decoded.slice(sep + 1) === pass;
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const sessions = new Map(); // sid -> expiresAt (ms epoch)
+
+function genSessionId() { return crypto.randomBytes(32).toString("hex"); }
+
+function isSessionValid(sid) {
+  if (!sid) return false;
+  const exp = sessions.get(sid);
+  if (!exp) return false;
+  if (Date.now() > exp) { sessions.delete(sid); return false; }
+  return true;
+}
+
+function parseCookies(header) {
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    const k = part.slice(0, idx).trim();
+    let v = part.slice(idx + 1).trim();
+    try { v = decodeURIComponent(v); } catch (e) {}
+    out[k] = v;
+  }
+  return out;
+}
+
+function isAuthDisabled() {
+  return !process.env.DASHBOARD_USER || !process.env.DASHBOARD_PASSWORD;
 }
 function isLocalhostReq(req) {
   const ip = req.ip || req.connection?.remoteAddress || "";
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
-function basicAuthMiddleware(req, res, next) {
+
+// Paths that never require auth (login flow + the login page itself).
+const PUBLIC_PATHS = new Set([
+  "/login.html",
+  "/api/login",
+  "/api/logout",
+  "/api/auth/status",
+]);
+
+function sessionAuthMiddleware(req, res, next) {
+  if (isAuthDisabled()) return next();
   if (isLocalhostReq(req)) return next();
-  if (checkBasicAuth(req.headers.authorization)) return next();
-  res.set("WWW-Authenticate", 'Basic realm="Grid Bot Dashboard"');
-  res.status(401).send("Authentication required");
+  if (PUBLIC_PATHS.has(req.path)) return next();
+
+  const cookies = parseCookies(req.headers.cookie);
+  if (isSessionValid(cookies.session)) return next();
+
+  if (req.path.startsWith("/api/")) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  res.redirect("/login.html");
 }
 
 const wss = new WebSocket.Server({
   server,
   verifyClient: (info, cb) => {
+    if (isAuthDisabled()) return cb(true);
     const ip = info.req.socket?.remoteAddress || "";
     const localhost = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
     if (localhost) return cb(true);
-    if (checkBasicAuth(info.req.headers.authorization)) return cb(true);
+    const cookies = parseCookies(info.req.headers.cookie);
+    if (isSessionValid(cookies.session)) return cb(true);
     cb(false, 401, "Unauthorized");
   },
 });
 
 app.use(cors());
 app.use(express.json());
-app.use(basicAuthMiddleware);
+app.use(sessionAuthMiddleware);
 app.use(express.static(__dirname));
+
+// ── Login / Logout / Status ──
+app.post("/api/login", (req, res) => {
+  if (isAuthDisabled()) return res.json({ ok: true, authDisabled: true });
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: "Missing credentials" });
+  if (username !== process.env.DASHBOARD_USER || password !== process.env.DASHBOARD_PASSWORD) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  const sid = genSessionId();
+  sessions.set(sid, Date.now() + SESSION_TTL_MS);
+  res.setHeader(
+    "Set-Cookie",
+    `session=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`
+  );
+  res.json({ ok: true });
+});
+
+app.post("/api/logout", (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.session) sessions.delete(cookies.session);
+  res.setHeader("Set-Cookie", "session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/status", (req, res) => {
+  if (isAuthDisabled()) return res.json({ authenticated: true, authDisabled: true });
+  const cookies = parseCookies(req.headers.cookie);
+  res.json({ authenticated: isSessionValid(cookies.session) });
+});
 
 // ============================================================
 //  MULTI-BOT STATE

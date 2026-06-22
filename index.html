@@ -804,6 +804,10 @@
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText">OFFLINE</span>
   </div>
+  <button id="logoutBtn" onclick="doLogout()" title="Sign out"
+    style="margin-left:10px;background:transparent;border:1px solid var(--border,#2a2f42);color:var(--ink,#e9edf5);padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;display:none;">
+    Logout
+  </button>
 </div>
 
 <!-- ══ RUNNING BOTS DASHBOARD ══ -->
@@ -1097,6 +1101,38 @@
 </div><!-- end page -->
 
 <script>
+// ══════════════════════════════════════════════════════════════
+//  AUTH — login/logout via cookie session
+// ══════════════════════════════════════════════════════════════
+// Wrap fetch so any 401 redirects to /login.html.
+const _origFetch = window.fetch.bind(window);
+window.fetch = async function authFetch(input, init = {}) {
+  const opts = { credentials: "include", ...init };
+  const res = await _origFetch(input, opts);
+  if (res.status === 401) {
+    window.location.href = "/login.html";
+    // Return a never-resolving promise so callers don't try to use the response.
+    return new Promise(() => {});
+  }
+  return res;
+};
+
+async function doLogout() {
+  try { await fetch("/api/logout", { method: "POST" }); } catch (e) {}
+  window.location.href = "/login.html";
+}
+
+// Reveal the logout button only if auth is actually enabled on the server.
+fetch("/api/auth/status")
+  .then(r => r.json())
+  .then(d => {
+    if (!d.authDisabled) {
+      const btn = document.getElementById("logoutBtn");
+      if (btn) btn.style.display = "";
+    }
+  })
+  .catch(() => {});
+
 // ══════════════════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════════════════

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — Grid Bot</title>
+  <style>
+    :root {
+      --bg: #0b0d13;
+      --surface: #131722;
+      --surface-2: #1a1f2e;
+      --border: #2a2f42;
+      --ink: #e9edf5;
+      --muted: #8a93a8;
+      --brand: #7c5cff;
+      --brand-2: #5a3fef;
+      --red: #ef4444;
+      --green: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(1200px 600px at 30% -10%, rgba(124,92,255,0.18), transparent),
+                  radial-gradient(1000px 500px at 100% 100%, rgba(124,92,255,0.10), transparent),
+                  var(--bg);
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 28px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .brand {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+    .brand span { color: var(--brand); }
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 24px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .field { margin-bottom: 14px; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 11px 13px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--ink);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 120ms;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      border-color: var(--brand);
+    }
+    button {
+      width: 100%;
+      padding: 12px 14px;
+      background: linear-gradient(180deg, var(--brand), var(--brand-2));
+      border: 0;
+      border-radius: 10px;
+      color: white;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: transform 80ms;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .error {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      color: #fca5a5;
+      font-size: 13px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      display: none;
+    }
+    .footer-note {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <form class="card" id="loginForm" autocomplete="on">
+    <div class="brand">Grid<span>Bot</span></div>
+    <div class="sub">Sign in to your dashboard</div>
+
+    <div class="error" id="errBox"></div>
+
+    <div class="field">
+      <label for="u">Username</label>
+      <input type="text" id="u" name="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="p">Password</label>
+      <input type="password" id="p" name="password" autocomplete="current-password" required>
+    </div>
+
+    <button type="submit" id="submitBtn">Sign in</button>
+
+    <div class="footer-note">Session lasts 7 days.</div>
+  </form>
+
+  <script>
+    const form = document.getElementById("loginForm");
+    const errBox = document.getElementById("errBox");
+    const submitBtn = document.getElementById("submitBtn");
+
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.style.display = "block";
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errBox.style.display = "none";
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Signing in...";
+
+      const username = document.getElementById("u").value.trim();
+      const password = document.getElementById("p").value;
+
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+          credentials: "include",
+        });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        showError(data.error || "Sign in failed.");
+      } catch (err) {
+        showError("Network error. Try again.");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Sign in";
+      }
+    });
+
+    // If already authenticated, skip the form and go straight to the dashboard.
+    fetch("/api/auth/status", { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { if (d.authenticated) window.location.href = "/"; })
+      .catch(() => {});
+  </script>
+</body>
+</html>
