@@ -901,30 +901,49 @@ async function tgHyperliquidPortfolioText() {
     // ── Sub-accounts (Hyperliquid lets a master wallet have named perp
     // sub-accounts, e.g. "xyz"). Each has its own clearinghouseState with
     // balance + positions. We sum them into the perp totals.
-    let subAccounts = [];
-    try {
-      const host = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+    const host = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+    async function hlPost(body) {
       const r = await fetch(`https://${host}/info`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "subAccounts", user: walletAddr }),
+        body: JSON.stringify(body),
       });
-      if (r.ok) {
-        const j = await r.json();
-        if (Array.isArray(j)) subAccounts = j;
-      }
-    } catch(e) { console.warn("[HL subAccounts]", e.message); }
+      const text = await r.text();
+      let j; try { j = JSON.parse(text); } catch(e) { j = text; }
+      return { ok: r.ok, status: r.status, body: j };
+    }
+
+    let subAccounts = [];
+    try {
+      const resp = await hlPost({ type: "subAccounts", user: walletAddr });
+      console.log(`[HL subAccounts] HTTP ${resp.status} — response:`, JSON.stringify(resp.body).slice(0, 600));
+      if (resp.ok && Array.isArray(resp.body)) subAccounts = resp.body;
+    } catch(e) { console.warn("[HL subAccounts] fetch failed:", e.message); }
+
+    console.log(`[HL portfolio] Found ${subAccounts.length} sub-account(s)`);
 
     for (const sub of subAccounts) {
-      const subName = sub.name || (sub.subAccountUser?.slice(0, 6) || "sub");
-      const cs = sub.clearinghouseState;
-      if (!cs) continue;
+      const subName = sub.name || sub.subAccountName || (sub.subAccountUser?.slice(0, 6) || "sub");
+      const subAddr = sub.subAccountUser || sub.address || sub.user;
+      console.log(`[HL subAccounts] processing "${subName}" addr=${subAddr}`);
+
+      // Some Hyperliquid responses bundle clearinghouseState; others return
+      // only addresses. If absent, fetch it explicitly for the sub-account.
+      let cs = sub.clearinghouseState;
+      if (!cs && subAddr) {
+        try {
+          const r2 = await hlPost({ type: "clearinghouseState", user: subAddr });
+          if (r2.ok && r2.body && typeof r2.body === "object") cs = r2.body;
+          console.log(`[HL subAccounts] fetched clearinghouseState separately for ${subName} — accountValue:`, cs?.marginSummary?.accountValue);
+        } catch(e) { console.warn(`[HL subAccounts] clearinghouseState fetch for ${subName} failed:`, e.message); }
+      }
+      if (!cs) { console.warn(`[HL subAccounts] no clearinghouseState for ${subName} — skipped`); continue; }
+
       const subAccountValue = parseFloat(cs.marginSummary?.accountValue || 0);
       const subWithdrawable = parseFloat(cs.withdrawable || 0);
-      // Add the sub-account's USDC balance to perp totals
       perpFree  += subWithdrawable;
       perpTotal += subAccountValue;
-      // Add its open positions
+
       if (Array.isArray(cs.assetPositions)) {
         for (const ap of cs.assetPositions) {
           const pos = ap?.position;
