@@ -903,10 +903,17 @@ async function tgHyperliquidPortfolioText() {
     } catch(e) { console.warn("[HL clearinghouseState] failed:", e.message); }
 
     if (mainCs) {
-      const acctValue = parseFloat(mainCs.marginSummary?.accountValue || 0);
-      const withdraw  = parseFloat(mainCs.withdrawable || 0);
-      if (acctValue > 0) perpTotal = acctValue;
-      if (withdraw  > 0) perpFree  = withdraw;
+      // Hyperliquid's accountValue on marginSummary = CROSS account only.
+      // Isolated positions hold their own USDC pool in position.leverage.rawUsd.
+      // To match the dashboard's "Total USDC" we add: cross account value +
+      // sum of every isolated position's rawUsd (their dedicated collateral).
+      const crossAcctValue = parseFloat(
+        mainCs.crossMarginSummary?.accountValue
+        ?? mainCs.marginSummary?.accountValue
+        ?? 0
+      );
+      const withdraw = parseFloat(mainCs.withdrawable || 0);
+      let isolatedUsdSum = 0;
 
       if (Array.isArray(mainCs.assetPositions)) {
         for (const ap of mainCs.assetPositions) {
@@ -918,14 +925,25 @@ async function tgHyperliquidPortfolioText() {
           const uPnl = parseFloat(pos.unrealizedPnl || 0);
           const notional = parseFloat(pos.positionValue || 0);
           const mark = Math.abs(szi) > 0 ? notional / Math.abs(szi) : 0;
-          const levType = pos.leverage?.type === "isolated" ? "ISO" : "CROSS";
+          const isIsolated = pos.leverage?.type === "isolated";
+          const levType = isIsolated ? "ISO" : "CROSS";
           const levVal  = pos.leverage?.value;
           const levTag  = levVal ? `${levVal}x ${levType}` : levType;
           unrealPnlTotal += uPnl;
           perpPositionNotionalTotal += notional;
+          // Isolated position has its own USDC pool — add it to the perp total.
+          if (isIsolated) {
+            const isoRaw = parseFloat(pos.leverage?.rawUsd || pos.marginUsed || 0);
+            // Effective USDC value of this isolated pool = rawUsd + unrealized PnL.
+            isolatedUsdSum += isoRaw + uPnl;
+          }
           posLines += `  📍 <code>${pos.coin}</code> ${side} ${Math.abs(szi)} @ $${mark.toFixed(4)} | Value: $${notional.toFixed(2)} | ${levTag} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
         }
       }
+
+      perpTotal = crossAcctValue + isolatedUsdSum;
+      perpFree  = withdraw;
+      console.log(`[HL portfolio] perpTotal=$${perpTotal.toFixed(2)} (cross $${crossAcctValue.toFixed(2)} + iso $${isolatedUsdSum.toFixed(2)})`);
     } else {
       // Fallback: old CCXT path (only cross positions)
       let positions = [];
@@ -1023,23 +1041,25 @@ async function tgHyperliquidPortfolioText() {
       }
     }
 
-    // ── COMBINED — everything in USDT-equivalent ──
-    // Perps USDC collateral + spot tokens + notional value of open perp positions
-    const combinedUsd = perpTotal + spotUsdTotal + perpPositionNotionalTotal;
+    // ── COMBINED — actual wallet value (USDT-equivalent) ──
+    // Perp USDC (cross + isolated, includes uPnL) + spot tokens.
+    // Position notional is leveraged exposure, NOT money — shown
+    // separately below for visibility but excluded from the total.
+    const combinedUsd = perpTotal + spotUsdTotal;
 
     const envTag = useTestnet ? "🧪 TESTNET" : "🟢 MAINNET";
     const unknownNote = spotUnknownTokens.length > 0
       ? `\n<i>⚠ No price for: ${spotUnknownTokens.join(", ")} — not in total</i>`
       : "";
-    const positionLine = perpPositionNotionalTotal > 0
-      ? `\n   Positions: $${perpPositionNotionalTotal.toFixed(2)} (notional)`
+    const exposureLine = perpPositionNotionalTotal > 0
+      ? `\n<i>📈 Open position exposure (notional, not in total): $${perpPositionNotionalTotal.toFixed(2)}</i>`
       : "";
     return `<b>💼 🟣 Hyperliquid Portfolio</b> ${envTag}
 <i>${new Date().toLocaleString()}</i>
 Wallet: <code>${walletAddr.slice(0,10)}...${walletAddr.slice(-6)}</code>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 <b>Perps Account</b>
+💰 <b>Perps Account</b> (cross + isolated)
   Free  USDC: <b>$${perpFree.toFixed(2)}</b>
   Total USDC: <b>$${perpTotal.toFixed(2)}</b>
   Unrealized PnL: <b>${unrealPnlTotal>=0?"+":""}$${unrealPnlTotal.toFixed(2)}</b>
@@ -1053,8 +1073,8 @@ ${spotLines}  Spot total: <b>$${spotUsdTotal.toFixed(2)}</b>${unknownNote}
 ${posLines}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 💵 <b>TOTAL (USDT-equivalent): $${combinedUsd.toFixed(2)}</b>
-   Perps:     $${perpTotal.toFixed(2)}
-   Spot:      $${spotUsdTotal.toFixed(2)}${positionLine}`;
+   Perps: $${perpTotal.toFixed(2)}
+   Spot:  $${spotUsdTotal.toFixed(2)}${exposureLine}`;
 
   } catch(err) {
     return `❌ Hyperliquid portfolio fetch failed:\n<code>${err.message}</code>`;
