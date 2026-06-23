@@ -879,15 +879,26 @@ async function tgHyperliquidPortfolioText() {
     try { positions = await exPerps.fetchPositions(); } catch(e) {}
     let posLines = "";
     let unrealPnlTotal = 0;
+    let perpPositionNotionalTotal = 0;
     const openPositions = positions.filter(p => parseFloat(p.contracts || p.info?.szi || 0) !== 0);
     if (openPositions.length > 0) {
       for (const p of openPositions) {
         const sz   = parseFloat(p.contracts || p.info?.szi || 0);
         const side = sz > 0 ? "LONG" : "SHORT";
         const uPnl = parseFloat(p.unrealizedPnl ?? p.info?.unrealizedPnl ?? 0);
-        const mark = parseFloat(p.markPrice ?? p.info?.markPx ?? 0);
+        // Hyperliquid's native positionValue is the notional at current mark.
+        // Fall back to priceMap (allMids) × size if CCXT didn't expose it.
+        const baseCoin = p.symbol?.split("/")?.[0] || "";
+        const midPx    = priceMap[baseCoin];
+        let notional = p.info?.positionValue != null ? parseFloat(p.info.positionValue) : null;
+        if (notional == null && midPx != null) notional = midPx * Math.abs(sz);
+        const mark = notional != null && Math.abs(sz) > 0
+          ? notional / Math.abs(sz)
+          : (midPx ?? parseFloat(p.markPrice ?? p.info?.markPx ?? 0));
         unrealPnlTotal += uPnl;
-        posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+        if (notional != null) perpPositionNotionalTotal += notional;
+        const notionalStr = notional != null ? ` | Value: $${notional.toFixed(2)}` : "";
+        posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)}${notionalStr} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
       }
     } else {
       posLines = "  (no open positions)\n";
@@ -913,12 +924,15 @@ async function tgHyperliquidPortfolioText() {
     }
 
     // ── COMBINED — everything in USDT-equivalent ──
-    // Perps USDC + all spot tokens converted to USDC value
-    const combinedUsd = perpTotal + spotUsdTotal;
+    // Perps USDC collateral + spot tokens + notional value of open perp positions
+    const combinedUsd = perpTotal + spotUsdTotal + perpPositionNotionalTotal;
 
     const envTag = useTestnet ? "🧪 TESTNET" : "🟢 MAINNET";
     const unknownNote = spotUnknownTokens.length > 0
       ? `\n<i>⚠ No price for: ${spotUnknownTokens.join(", ")} — not in total</i>`
+      : "";
+    const positionLine = perpPositionNotionalTotal > 0
+      ? `\n   Positions: $${perpPositionNotionalTotal.toFixed(2)} (notional)`
       : "";
     return `<b>💼 🟣 Hyperliquid Portfolio</b> ${envTag}
 <i>${new Date().toLocaleString()}</i>
@@ -939,8 +953,8 @@ ${spotLines}  Spot total: <b>$${spotUsdTotal.toFixed(2)}</b>${unknownNote}
 ${posLines}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 💵 <b>TOTAL (USDT-equivalent): $${combinedUsd.toFixed(2)}</b>
-   Perps: $${perpTotal.toFixed(2)}
-   Spot:  $${spotUsdTotal.toFixed(2)}`;
+   Perps:     $${perpTotal.toFixed(2)}
+   Spot:      $${spotUsdTotal.toFixed(2)}${positionLine}`;
 
   } catch(err) {
     return `❌ Hyperliquid portfolio fetch failed:\n<code>${err.message}</code>`;
