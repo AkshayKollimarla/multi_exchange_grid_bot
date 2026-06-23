@@ -875,32 +875,8 @@ async function tgHyperliquidPortfolioText() {
     }
 
     // ── Open perp positions (MAIN account) ──
-    let positions = [];
-    try { positions = await exPerps.fetchPositions(); } catch(e) {}
-    let posLines = "";
-    let unrealPnlTotal = 0;
-    let perpPositionNotionalTotal = 0;
-    const openPositions = positions.filter(p => parseFloat(p.contracts || p.info?.szi || 0) !== 0);
-    for (const p of openPositions) {
-      const sz   = parseFloat(p.contracts || p.info?.szi || 0);
-      const side = sz > 0 ? "LONG" : "SHORT";
-      const uPnl = parseFloat(p.unrealizedPnl ?? p.info?.unrealizedPnl ?? 0);
-      const baseCoin = p.symbol?.split("/")?.[0] || "";
-      const midPx    = priceMap[baseCoin];
-      let notional = p.info?.positionValue != null ? parseFloat(p.info.positionValue) : null;
-      if (notional == null && midPx != null) notional = midPx * Math.abs(sz);
-      const mark = notional != null && Math.abs(sz) > 0
-        ? notional / Math.abs(sz)
-        : (midPx ?? parseFloat(p.markPrice ?? p.info?.markPx ?? 0));
-      unrealPnlTotal += uPnl;
-      if (notional != null) perpPositionNotionalTotal += notional;
-      const notionalStr = notional != null ? ` | Value: $${notional.toFixed(2)}` : "";
-      posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)}${notionalStr} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
-    }
-
-    // ── Sub-accounts (Hyperliquid lets a master wallet have named perp
-    // sub-accounts, e.g. "xyz"). Each has its own clearinghouseState with
-    // balance + positions. We sum them into the perp totals.
+    // Pull clearinghouseState directly — CCXT.fetchPositions filters out
+    // isolated-margin positions on Hyperliquid, so the [xyz] one was missed.
     const host = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
     async function hlPost(body) {
       const r = await fetch(`https://${host}/info`, {
@@ -913,6 +889,71 @@ async function tgHyperliquidPortfolioText() {
       return { ok: r.ok, status: r.status, body: j };
     }
 
+    let posLines = "";
+    let unrealPnlTotal = 0;
+    let perpPositionNotionalTotal = 0;
+
+    // Refresh perpTotal/perpFree from clearinghouseState — it covers both
+    // cross and isolated; CCXT's fetchBalance only sees cross.
+    let mainCs = null;
+    try {
+      const resp = await hlPost({ type: "clearinghouseState", user: walletAddr });
+      if (resp.ok && resp.body && typeof resp.body === "object") mainCs = resp.body;
+      console.log(`[HL clearinghouseState] HTTP ${resp.status} — assetPositions: ${mainCs?.assetPositions?.length || 0}`);
+    } catch(e) { console.warn("[HL clearinghouseState] failed:", e.message); }
+
+    if (mainCs) {
+      const acctValue = parseFloat(mainCs.marginSummary?.accountValue || 0);
+      const withdraw  = parseFloat(mainCs.withdrawable || 0);
+      if (acctValue > 0) perpTotal = acctValue;
+      if (withdraw  > 0) perpFree  = withdraw;
+
+      if (Array.isArray(mainCs.assetPositions)) {
+        for (const ap of mainCs.assetPositions) {
+          const pos = ap?.position;
+          if (!pos) continue;
+          const szi = parseFloat(pos.szi || 0);
+          if (szi === 0) continue;
+          const side = szi > 0 ? "LONG" : "SHORT";
+          const uPnl = parseFloat(pos.unrealizedPnl || 0);
+          const notional = parseFloat(pos.positionValue || 0);
+          const mark = Math.abs(szi) > 0 ? notional / Math.abs(szi) : 0;
+          const levType = pos.leverage?.type === "isolated" ? "ISO" : "CROSS";
+          const levVal  = pos.leverage?.value;
+          const levTag  = levVal ? `${levVal}x ${levType}` : levType;
+          unrealPnlTotal += uPnl;
+          perpPositionNotionalTotal += notional;
+          posLines += `  📍 <code>${pos.coin}</code> ${side} ${Math.abs(szi)} @ $${mark.toFixed(4)} | Value: $${notional.toFixed(2)} | ${levTag} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+        }
+      }
+    } else {
+      // Fallback: old CCXT path (only cross positions)
+      let positions = [];
+      try { positions = await exPerps.fetchPositions(); } catch(e) {}
+      const openPositions = positions.filter(p => parseFloat(p.contracts || p.info?.szi || 0) !== 0);
+      for (const p of openPositions) {
+        const sz   = parseFloat(p.contracts || p.info?.szi || 0);
+        const side = sz > 0 ? "LONG" : "SHORT";
+        const uPnl = parseFloat(p.unrealizedPnl ?? p.info?.unrealizedPnl ?? 0);
+        const baseCoin = p.symbol?.split("/")?.[0] || "";
+        const midPx    = priceMap[baseCoin];
+        let notional = p.info?.positionValue != null ? parseFloat(p.info.positionValue) : null;
+        if (notional == null && midPx != null) notional = midPx * Math.abs(sz);
+        const mark = notional != null && Math.abs(sz) > 0
+          ? notional / Math.abs(sz)
+          : (midPx ?? parseFloat(p.markPrice ?? p.info?.markPx ?? 0));
+        unrealPnlTotal += uPnl;
+        if (notional != null) perpPositionNotionalTotal += notional;
+        const notionalStr = notional != null ? ` | Value: $${notional.toFixed(2)}` : "";
+        posLines += `  📍 <code>${p.symbol}</code> ${side} ${Math.abs(sz)} @ $${mark.toFixed(4)}${notionalStr} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+      }
+    }
+
+    // ── Sub-accounts (Hyperliquid feature where a master wallet has
+    // named perp sub-accounts). For most users this returns null —
+    // isolated-margin positions are already covered by the main
+    // clearinghouseState above. We keep this branch for users who DO
+    // have true Hyperliquid sub-accounts.
     let subAccounts = [];
     try {
       const resp = await hlPost({ type: "subAccounts", user: walletAddr });
