@@ -967,74 +967,66 @@ async function tgHyperliquidPortfolioText() {
       }
     }
 
-    // ── Probe extra endpoints to find "xyz" — could be a sub-account, a
-    // vault deposit, or something else. Each probe logs what's there so we
-    // can wire up the right one.
-    const probes = [
-      { name: "subAccounts",         body: { type: "subAccounts",         user: walletAddr } },
-      { name: "userVaultEquities",   body: { type: "userVaultEquities",   user: walletAddr } },
-      { name: "userVaultDeposits",   body: { type: "userVaultDeposits",   user: walletAddr } },
-    ];
-    const probeResults = {};
-    for (const probe of probes) {
-      try {
-        const r = await hlPost(probe.body);
-        probeResults[probe.name] = r.body;
-        console.log(`[HL probe:${probe.name}] HTTP ${r.status} — body: ${JSON.stringify(r.body).slice(0, 600)}`);
-      } catch (e) {
-        console.warn(`[HL probe:${probe.name}] failed:`, e.message);
-      }
-    }
-
-    // Handle userVaultEquities: array of { vaultAddress, equity, ... }.
-    // Each is USDC the user has deposited into a vault — add to perpTotal.
-    let vaultEquitySum = 0;
-    let vaultEquityLines = "";
-    const vaults = probeResults.userVaultEquities;
-    if (Array.isArray(vaults) && vaults.length > 0) {
-      for (const v of vaults) {
-        const equity = parseFloat(v.equity || v.usd || v.value || 0);
-        if (equity === 0) continue;
-        vaultEquitySum += equity;
-        const addr = v.vaultAddress || v.address || "vault";
-        vaultEquityLines += `  📦 <code>${addr.slice(0, 10)}...</code> equity: $${equity.toFixed(2)}\n`;
-      }
-      perpTotal += vaultEquitySum;
-      console.log(`[HL portfolio] Vault equity sum: $${vaultEquitySum.toFixed(2)}`);
-    }
-
-    // Handle subAccounts (still try, in case Hyperliquid populates it later).
-    const subAccounts = Array.isArray(probeResults.subAccounts) ? probeResults.subAccounts : [];
-    for (const sub of subAccounts) {
-      const subName = sub.name || sub.subAccountName || (sub.subAccountUser?.slice(0, 6) || "sub");
-      const subAddr = sub.subAccountUser || sub.address || sub.user;
-      let cs = sub.clearinghouseState;
-      if (!cs && subAddr) {
-        const r2 = await hlPost({ type: "clearinghouseState", user: subAddr }).catch(() => null);
-        if (r2?.ok && r2.body && typeof r2.body === "object") cs = r2.body;
-      }
-      if (!cs) continue;
-      perpFree  += parseFloat(cs.withdrawable || 0);
-      perpTotal += parseFloat(cs.marginSummary?.accountValue || 0);
-      if (Array.isArray(cs.assetPositions)) {
-        for (const ap of cs.assetPositions) {
-          const pos = ap?.position;
-          if (!pos) continue;
-          const szi = parseFloat(pos.szi || 0);
-          if (szi === 0) continue;
-          const side = szi > 0 ? "LONG" : "SHORT";
-          const uPnl = parseFloat(pos.unrealizedPnl || 0);
-          const notional = parseFloat(pos.positionValue || 0);
-          const mark = Math.abs(szi) > 0 ? notional / Math.abs(szi) : 0;
-          unrealPnlTotal += uPnl;
-          perpPositionNotionalTotal += notional;
-          posLines += `  📍 [<code>${subName}</code>] <code>${pos.coin}</code> ${side} ${Math.abs(szi)} @ $${mark.toFixed(4)} | Value: $${notional.toFixed(2)} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+    // ── HIP-3 perp dexs (e.g. SPCX, BLST, "xyz") ──
+    // Hyperliquid lets third parties deploy their own perp DEXs on top of
+    // HL. Each has its OWN clearinghouse + USDC pool, separate from the
+    // base perp clearinghouse we queried above. The dashboard tags
+    // balances with [<dex_name>]. We enumerate all perp dexs and query
+    // user state for each so isolated balances + positions are included.
+    let dexList = [];
+    try {
+      const r = await hlPost({ type: "perpDexs" });
+      console.log(`[HL probe:perpDexs] HTTP ${r.status} — body: ${JSON.stringify(r.body).slice(0, 600)}`);
+      // Response is an array; entries with null = base, named entries = HIP-3 dexs.
+      if (Array.isArray(r.body)) {
+        for (const entry of r.body) {
+          if (!entry) continue; // skip the null = base entry
+          const name = entry.name || entry.fullName || null;
+          if (name) dexList.push(name);
         }
+      }
+    } catch (e) { console.warn("[HL perpDexs] failed:", e.message); }
+
+    console.log(`[HL portfolio] HIP-3 dexs to query: ${dexList.join(", ") || "(none)"}`);
+
+    for (const dex of dexList) {
+      try {
+        const r = await hlPost({ type: "clearinghouseState", user: walletAddr, dex });
+        if (!r.ok || !r.body || typeof r.body !== "object") {
+          console.log(`[HL dex:${dex}] no state (HTTP ${r.status})`);
+          continue;
+        }
+        const cs = r.body;
+        const dexAcct = parseFloat(cs.marginSummary?.accountValue || 0);
+        const dexFree = parseFloat(cs.withdrawable || 0);
+        console.log(`[HL dex:${dex}] accountValue=$${dexAcct.toFixed(2)} withdrawable=$${dexFree.toFixed(2)} positions=${cs.assetPositions?.length || 0}`);
+        if (dexAcct === 0 && (!cs.assetPositions || cs.assetPositions.length === 0)) continue;
+        perpTotal += dexAcct;
+        perpFree  += dexFree;
+        if (Array.isArray(cs.assetPositions)) {
+          for (const ap of cs.assetPositions) {
+            const pos = ap?.position;
+            if (!pos) continue;
+            const szi = parseFloat(pos.szi || 0);
+            if (szi === 0) continue;
+            const side = szi > 0 ? "LONG" : "SHORT";
+            const uPnl = parseFloat(pos.unrealizedPnl || 0);
+            const notional = parseFloat(pos.positionValue || 0);
+            const mark = Math.abs(szi) > 0 ? notional / Math.abs(szi) : 0;
+            const levType = pos.leverage?.type === "isolated" ? "ISO" : "CROSS";
+            const levVal  = pos.leverage?.value;
+            const levTag  = levVal ? `${levVal}x ${levType}` : levType;
+            unrealPnlTotal += uPnl;
+            perpPositionNotionalTotal += notional;
+            posLines += `  📍 [<code>${dex}</code>] <code>${pos.coin}</code> ${side} ${Math.abs(szi)} @ $${mark.toFixed(4)} | Value: $${notional.toFixed(2)} | ${levTag} | uPnL: ${uPnl>=0?"+":""}$${uPnl.toFixed(4)}\n`;
+          }
+        }
+      } catch (e) {
+        console.warn(`[HL dex:${dex}] fetch failed:`, e.message);
       }
     }
 
     if (!posLines) posLines = "  (no open positions)\n";
-    if (vaultEquityLines) posLines += vaultEquityLines;
 
     // ── Format spot section + compute spot USDC TOTAL value (all tokens) ──
     let spotLines = "";
