@@ -68,6 +68,9 @@ async function pingDb() {
       try { await conn.query(`ALTER TABLE round_trips ${col}`); }
       catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     }
+    // Persisted in-memory state for true continuation across restarts.
+    try { await conn.query("ALTER TABLE bot_sessions ADD COLUMN state_json JSON NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
@@ -104,18 +107,36 @@ async function clearSession(botId) {
   }
 }
 
+// Save the bot's in-memory state (open orders, pending RTs, etc.) so a
+// restart can pick up exactly where it left off. Called from gridLoop,
+// throttled by the caller (we do raw writes here).
+async function saveSessionState(botId, state) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.execute(
+      "UPDATE bot_sessions SET state_json = CAST(? AS JSON) WHERE bot_id = ?",
+      [JSON.stringify(state), botId]
+    );
+  } catch (e) {
+    console.error("[DB] saveSessionState failed:", e.message);
+  }
+}
+
 async function loadAllSessions() {
   const p = getPool();
   if (!p) return [];
   try {
     const [rows] = await p.query(
-      "SELECT bot_id, exchange, config_json FROM bot_sessions ORDER BY started_at ASC"
+      "SELECT bot_id, exchange, config_json, state_json FROM bot_sessions ORDER BY started_at ASC"
     );
     return rows.map(r => ({
       botId: r.bot_id,
       exchange: r.exchange,
       // mysql2 returns JSON columns already parsed as objects
       config: typeof r.config_json === "string" ? JSON.parse(r.config_json) : r.config_json,
+      state:  r.state_json == null ? null
+            : (typeof r.state_json === "string" ? JSON.parse(r.state_json) : r.state_json),
     }));
   } catch (e) {
     console.error("[DB] loadAllSessions failed:", e.message);
@@ -308,6 +329,6 @@ async function loadRecentRoundTrips({ exchange, symbol, limit = 200 }) {
 
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
-  loadRecentRoundTrips, saveSession, clearSession, loadAllSessions,
-  dbConfigured,
+  loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
+  loadAllSessions, dbConfigured,
 };

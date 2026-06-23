@@ -1713,6 +1713,26 @@ async function gridLoop(botId) {
     }
 
     broadcast("state", buildStateSnapshot());
+
+    // Persist in-memory state every 10s so a deploy/reboot can resume in
+    // place without cancelling orders or recomputing the grid.
+    if (!bot._lastStateSave || Date.now() - bot._lastStateSave > 10000) {
+      bot._lastStateSave = Date.now();
+      db.saveSessionState(botId, {
+        openOrders         : bot.openOrders,
+        pendingRoundTrips  : bot.pendingRoundTrips,
+        completedRoundTrips: bot.completedRoundTrips.slice(0, 200),
+        fillHistory        : bot.fillHistory.slice(0, 500),
+        gridAnchor         : bot.gridAnchor,
+        entryPrice         : bot.entryPrice,
+        upperLimit         : bot.upperLimit,
+        lowerLimit         : bot.lowerLimit,
+        lastPrice          : bot.lastPrice,
+        lastNotifiedRt     : bot.lastNotifiedRt,
+        startedAt          : bot.startedAt,
+        savedAt            : new Date().toISOString(),
+      });
+    }
   } catch (err) {
     if ((err.message || "").includes("429") || /too many requests/i.test(err.message || "")) {
       bot.rateLimitUntil = Date.now() + 45000;  // pause 45s on rate limit
@@ -3440,9 +3460,9 @@ app.post("/api/start", async (req, res) => {
         tick = await getTickerSnapshot(exchange, cfg.symbol, 20000, bot);
       } else throw e;
     }
-    const entryPrice = tick.last;
-    const upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
-    const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
+    let entryPrice = tick.last;
+    let upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
+    let lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
 
     Object.assign(bot, {
       botId, exchangeKey,
@@ -3478,16 +3498,39 @@ app.post("/api/start", async (req, res) => {
       }
     }
 
-    log(botId, `Cancelling leftover orders...`);
-    try { await exchange.cancelAllOrders(cfg.symbol); }
-    catch(e) {
-      try {
-        const prev = await exchange.fetchOpenOrders(cfg.symbol);
-        for (const o of prev) { try{ await exchange.cancelOrder(o.id, cfg.symbol); }catch(_){} }
-      } catch(_){}
+    // True-continuation resume: restore in-memory state and DO NOT touch
+    // open orders. Frontend never sets these — only resumeSessions does.
+    const isResume   = req.body?.resume === true;
+    const resumeState = req.body?._resumeState || null;
+
+    if (isResume && resumeState) {
+      if (Array.isArray(resumeState.openOrders))          bot.openOrders          = resumeState.openOrders;
+      if (Array.isArray(resumeState.pendingRoundTrips))   bot.pendingRoundTrips   = resumeState.pendingRoundTrips;
+      if (Array.isArray(resumeState.completedRoundTrips)) bot.completedRoundTrips = resumeState.completedRoundTrips;
+      if (Array.isArray(resumeState.fillHistory))         bot.fillHistory         = resumeState.fillHistory;
+      if (resumeState.gridAnchor     != null) bot.gridAnchor     = resumeState.gridAnchor;
+      if (resumeState.upperLimit     != null) upperLimit         = resumeState.upperLimit;
+      if (resumeState.lowerLimit     != null) lowerLimit         = resumeState.lowerLimit;
+      if (resumeState.entryPrice     != null) entryPrice         = resumeState.entryPrice;
+      if (resumeState.lastPrice      != null) bot.lastPrice      = resumeState.lastPrice;
+      if (resumeState.lastNotifiedRt != null) bot.lastNotifiedRt = resumeState.lastNotifiedRt;
+      if (resumeState.startedAt      != null) bot.startedAt      = resumeState.startedAt;
+      bot.upperLimit = upperLimit;
+      bot.lowerLimit = lowerLimit;
+      bot.entryPrice = entryPrice;
+      log(botId, `Resuming previous session — ${bot.openOrders.length} open orders, ${bot.pendingRoundTrips.length} pending RTs, ${bot.completedRoundTrips.length} completed RTs restored`, "success");
+    } else {
+      log(botId, `Cancelling leftover orders...`);
+      try { await exchange.cancelAllOrders(cfg.symbol); }
+      catch(e) {
+        try {
+          const prev = await exchange.fetchOpenOrders(cfg.symbol);
+          for (const o of prev) { try{ await exchange.cancelOrder(o.id, cfg.symbol); }catch(_){} }
+        } catch(_){}
+      }
     }
 
-    log(botId, `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
+    log(botId, isResume ? `Bot resumed! Symbol: ${cfg.symbol}` : `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
     log(botId, `Upper: $${upperLimit}  |  Lower: $${lowerLimit}`);
     log(botId, `📄 Per-bot log: tail -f logs/${botId}.log`, "info");
     // Live dashboard always starts at zero — DB-backed history lives in
@@ -3508,10 +3551,15 @@ app.post("/api/start", async (req, res) => {
 
     const tag = EXCHANGE_TAG[exchangeKey];
     await sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-      `${tag} Grid Bot Started\nSymbol: ${cfg.symbol}\nEntry: $${entryPrice}\nUpper: $${upperLimit}\nLower: $${lowerLimit}\nTime: ${new Date().toLocaleString()}`
+      isResume
+        ? `${tag} 🔄 Grid Bot Resumed\nSymbol: ${cfg.symbol}\nOpen orders: ${bot.openOrders.length}\nPending RTs: ${bot.pendingRoundTrips.length}\nTime: ${new Date().toLocaleString()}`
+        : `${tag} Grid Bot Started\nSymbol: ${cfg.symbol}\nEntry: $${entryPrice}\nUpper: $${upperLimit}\nLower: $${lowerLimit}\nTime: ${new Date().toLocaleString()}`
     );
 
-    await maintainGrid(botId, entryPrice);
+    // Initial grid placement only on a fresh start. On resume, the next
+    // gridLoop iteration handles fill detection + grid maintenance using
+    // the restored openOrders state.
+    if (!isResume) await maintainGrid(botId, entryPrice);
 
     // Stagger startup AND scale the loop interval with how many bots run.
     // More bots → slower per-bot loop so aggregate API weight stays under
@@ -3533,7 +3581,9 @@ app.post("/api/start", async (req, res) => {
     log(botId, `Loop: ${loopMs}ms interval, first run in ${startupDelay}ms (${runningCount} bot(s) running)`, "info");
 
     // Persist the running session so it auto-resumes after deploy / reboot.
-    db.saveSession(botId, exchangeKey, stripSecrets(req.body));
+    // On resume the row already exists with config — don't overwrite, just
+    // let the periodic state save in gridLoop refresh state_json.
+    if (!isResume) db.saveSession(botId, exchangeKey, stripSecrets(req.body));
 
     res.json({ success: true, botId, exchange: exchangeKey, label: bot.label, entryPrice, upperLimit, lowerLimit });
   } catch (err) {
@@ -3736,14 +3786,19 @@ async function resumeSessions() {
   console.log(`[RESUME] Found ${sessions.length} persisted session(s) — restarting...`);
   for (const s of sessions) {
     try {
+      // True continuation: pass resume:true + the persisted state. /api/start
+      // skips cancelAllOrders + initial maintainGrid when these are present.
       const r = await fetch(`http://127.0.0.1:${PORT}/api/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(s.config),
+        body: JSON.stringify({ ...s.config, resume: true, _resumeState: s.state }),
       });
       const body = await r.json().catch(() => ({}));
       if (r.ok) {
-        console.log(`[RESUME] ${s.botId} (${s.exchange}) resumed: entry $${body.entryPrice}`);
+        const restored = s.state
+          ? ` (restored ${s.state.openOrders?.length || 0} orders, ${s.state.pendingRoundTrips?.length || 0} pending RTs)`
+          : "";
+        console.log(`[RESUME] ${s.botId} (${s.exchange}) resumed${restored}`);
       } else {
         console.error(`[RESUME] ${s.botId} failed: ${body.error || r.status}`);
       }
