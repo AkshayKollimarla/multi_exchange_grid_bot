@@ -1104,12 +1104,22 @@
 // ══════════════════════════════════════════════════════════════
 //  AUTH — login/logout via cookie session
 // ══════════════════════════════════════════════════════════════
-// Wrap fetch so any 401 redirects to /login.html.
+// Wrap fetch so any 401 to OUR backend redirects to /login.html.
+// Cross-origin requests (Hyperliquid, Binance, Deribit public APIs)
+// are left untouched — adding credentials:"include" to them breaks
+// their CORS (they allow * origin but not credentials).
 const _origFetch = window.fetch.bind(window);
+function isSameOriginUrl(input) {
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  if (!/^https?:\/\//i.test(url)) return true; // relative path
+  try { return new URL(url).origin === window.location.origin; }
+  catch (e) { return false; }
+}
 window.fetch = async function authFetch(input, init = {}) {
-  const opts = { credentials: "include", ...init };
+  const sameOrigin = isSameOriginUrl(input);
+  const opts = sameOrigin ? { credentials: "include", ...init } : init;
   const res = await _origFetch(input, opts);
-  if (res.status === 401) {
+  if (sameOrigin && res.status === 401) {
     window.location.href = "/login.html";
     // Return a never-resolving promise so callers don't try to use the response.
     return new Promise(() => {});
