@@ -967,42 +967,55 @@ async function tgHyperliquidPortfolioText() {
       }
     }
 
-    // ── Sub-accounts (Hyperliquid feature where a master wallet has
-    // named perp sub-accounts). For most users this returns null —
-    // isolated-margin positions are already covered by the main
-    // clearinghouseState above. We keep this branch for users who DO
-    // have true Hyperliquid sub-accounts.
-    let subAccounts = [];
-    try {
-      const resp = await hlPost({ type: "subAccounts", user: walletAddr });
-      console.log(`[HL subAccounts] HTTP ${resp.status} — response:`, JSON.stringify(resp.body).slice(0, 600));
-      if (resp.ok && Array.isArray(resp.body)) subAccounts = resp.body;
-    } catch(e) { console.warn("[HL subAccounts] fetch failed:", e.message); }
+    // ── Probe extra endpoints to find "xyz" — could be a sub-account, a
+    // vault deposit, or something else. Each probe logs what's there so we
+    // can wire up the right one.
+    const probes = [
+      { name: "subAccounts",         body: { type: "subAccounts",         user: walletAddr } },
+      { name: "userVaultEquities",   body: { type: "userVaultEquities",   user: walletAddr } },
+      { name: "userVaultDeposits",   body: { type: "userVaultDeposits",   user: walletAddr } },
+    ];
+    const probeResults = {};
+    for (const probe of probes) {
+      try {
+        const r = await hlPost(probe.body);
+        probeResults[probe.name] = r.body;
+        console.log(`[HL probe:${probe.name}] HTTP ${r.status} — body: ${JSON.stringify(r.body).slice(0, 600)}`);
+      } catch (e) {
+        console.warn(`[HL probe:${probe.name}] failed:`, e.message);
+      }
+    }
 
-    console.log(`[HL portfolio] Found ${subAccounts.length} sub-account(s)`);
+    // Handle userVaultEquities: array of { vaultAddress, equity, ... }.
+    // Each is USDC the user has deposited into a vault — add to perpTotal.
+    let vaultEquitySum = 0;
+    let vaultEquityLines = "";
+    const vaults = probeResults.userVaultEquities;
+    if (Array.isArray(vaults) && vaults.length > 0) {
+      for (const v of vaults) {
+        const equity = parseFloat(v.equity || v.usd || v.value || 0);
+        if (equity === 0) continue;
+        vaultEquitySum += equity;
+        const addr = v.vaultAddress || v.address || "vault";
+        vaultEquityLines += `  📦 <code>${addr.slice(0, 10)}...</code> equity: $${equity.toFixed(2)}\n`;
+      }
+      perpTotal += vaultEquitySum;
+      console.log(`[HL portfolio] Vault equity sum: $${vaultEquitySum.toFixed(2)}`);
+    }
 
+    // Handle subAccounts (still try, in case Hyperliquid populates it later).
+    const subAccounts = Array.isArray(probeResults.subAccounts) ? probeResults.subAccounts : [];
     for (const sub of subAccounts) {
       const subName = sub.name || sub.subAccountName || (sub.subAccountUser?.slice(0, 6) || "sub");
       const subAddr = sub.subAccountUser || sub.address || sub.user;
-      console.log(`[HL subAccounts] processing "${subName}" addr=${subAddr}`);
-
-      // Some Hyperliquid responses bundle clearinghouseState; others return
-      // only addresses. If absent, fetch it explicitly for the sub-account.
       let cs = sub.clearinghouseState;
       if (!cs && subAddr) {
-        try {
-          const r2 = await hlPost({ type: "clearinghouseState", user: subAddr });
-          if (r2.ok && r2.body && typeof r2.body === "object") cs = r2.body;
-          console.log(`[HL subAccounts] fetched clearinghouseState separately for ${subName} — accountValue:`, cs?.marginSummary?.accountValue);
-        } catch(e) { console.warn(`[HL subAccounts] clearinghouseState fetch for ${subName} failed:`, e.message); }
+        const r2 = await hlPost({ type: "clearinghouseState", user: subAddr }).catch(() => null);
+        if (r2?.ok && r2.body && typeof r2.body === "object") cs = r2.body;
       }
-      if (!cs) { console.warn(`[HL subAccounts] no clearinghouseState for ${subName} — skipped`); continue; }
-
-      const subAccountValue = parseFloat(cs.marginSummary?.accountValue || 0);
-      const subWithdrawable = parseFloat(cs.withdrawable || 0);
-      perpFree  += subWithdrawable;
-      perpTotal += subAccountValue;
-
+      if (!cs) continue;
+      perpFree  += parseFloat(cs.withdrawable || 0);
+      perpTotal += parseFloat(cs.marginSummary?.accountValue || 0);
       if (Array.isArray(cs.assetPositions)) {
         for (const ap of cs.assetPositions) {
           const pos = ap?.position;
@@ -1021,6 +1034,7 @@ async function tgHyperliquidPortfolioText() {
     }
 
     if (!posLines) posLines = "  (no open positions)\n";
+    if (vaultEquityLines) posLines += vaultEquityLines;
 
     // ── Format spot section + compute spot USDC TOTAL value (all tokens) ──
     let spotLines = "";
