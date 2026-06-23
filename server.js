@@ -967,6 +967,10 @@ async function tgHyperliquidPortfolioText() {
       }
     }
 
+    // Save main-account perp values before adding HIP-3 dex balances.
+    const perpMainTotal = perpTotal;
+    const perpMainFree  = perpFree;
+
     // ── HIP-3 perp dexs (e.g. SPCX, BLST, "xyz") ──
     // Hyperliquid lets third parties deploy their own perp DEXs on top of
     // HL. Each has its OWN clearinghouse + USDC pool, separate from the
@@ -989,6 +993,7 @@ async function tgHyperliquidPortfolioText() {
 
     console.log(`[HL portfolio] HIP-3 dexs to query: ${dexList.join(", ") || "(none)"}`);
 
+    const dexAcctEntries = []; // { name, total, free } — one per non-empty HIP-3 dex
     for (const dex of dexList) {
       try {
         const r = await hlPost({ type: "clearinghouseState", user: walletAddr, dex });
@@ -1001,8 +1006,7 @@ async function tgHyperliquidPortfolioText() {
         const dexFree = parseFloat(cs.withdrawable || 0);
         console.log(`[HL dex:${dex}] accountValue=$${dexAcct.toFixed(2)} withdrawable=$${dexFree.toFixed(2)} positions=${cs.assetPositions?.length || 0}`);
         if (dexAcct === 0 && (!cs.assetPositions || cs.assetPositions.length === 0)) continue;
-        perpTotal += dexAcct;
-        perpFree  += dexFree;
+        dexAcctEntries.push({ name: dex, total: dexAcct, free: dexFree });
         if (Array.isArray(cs.assetPositions)) {
           for (const ap of cs.assetPositions) {
             const pos = ap?.position;
@@ -1025,6 +1029,8 @@ async function tgHyperliquidPortfolioText() {
         console.warn(`[HL dex:${dex}] fetch failed:`, e.message);
       }
     }
+
+    for (const d of dexAcctEntries) { perpTotal += d.total; perpFree += d.free; }
 
     if (!posLines) posLines = "  (no open positions)\n";
 
@@ -1060,14 +1066,20 @@ async function tgHyperliquidPortfolioText() {
     const exposureLine = perpPositionNotionalTotal > 0
       ? `\n<i>📈 Open position exposure (notional, not in total): $${perpPositionNotionalTotal.toFixed(2)}</i>`
       : "";
+
+    // Per-account perp breakdown: main HL + each non-empty HIP-3 dex
+    let perpAcctLines = `  USDC (Perps):  <b>$${perpMainTotal.toFixed(2)}</b> <i>(free: $${perpMainFree.toFixed(2)})</i>\n`;
+    for (const d of dexAcctEntries) {
+      perpAcctLines += `  USDC (${d.name}):    <b>$${d.total.toFixed(2)}</b> <i>(free: $${d.free.toFixed(2)})</i>\n`;
+    }
+
     return `<b>💼 🟣 Hyperliquid Portfolio</b> ${envTag}
 <i>${new Date().toLocaleString()}</i>
 Wallet: <code>${walletAddr.slice(0,10)}...${walletAddr.slice(-6)}</code>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 <b>Perps Account</b> (cross + isolated)
-  Free  USDC: <b>$${perpFree.toFixed(2)}</b>
-  Total USDC: <b>$${perpTotal.toFixed(2)}</b>
+💰 <b>Perps Accounts</b>
+${perpAcctLines}  Perps total:  <b>$${perpTotal.toFixed(2)}</b>
   Unrealized PnL: <b>${unrealPnlTotal>=0?"+":""}$${unrealPnlTotal.toFixed(2)}</b>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1078,9 +1090,9 @@ ${spotLines}  Spot total: <b>$${spotUsdTotal.toFixed(2)}</b>${unknownNote}
 📊 <b>Open Perp Positions</b>
 ${posLines}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-💵 <b>TOTAL (USDT-equivalent): $${combinedUsd.toFixed(2)}</b>
-   Perps: $${perpTotal.toFixed(2)}
-   Spot:  $${spotUsdTotal.toFixed(2)}${exposureLine}`;
+💵 <b>TOTAL ≈ $${combinedUsd.toFixed(2)} USDT</b>
+   Perps:  $${perpTotal.toFixed(2)}
+   Spot:   $${spotUsdTotal.toFixed(2)}${exposureLine}`;
 
   } catch(err) {
     return `❌ Hyperliquid portfolio fetch failed:\n<code>${err.message}</code>`;
