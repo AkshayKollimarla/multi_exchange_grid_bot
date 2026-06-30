@@ -1069,6 +1069,10 @@
           <button class="tab-btn" onclick="setReportPeriod('7d', this)">7 Days</button>
           <button class="tab-btn" onclick="setReportPeriod('30d', this)">30 Days</button>
           <button class="tab-btn" onclick="setReportPeriod('custom', this)">Custom</button>
+          <select id="reportSymbol" onchange="onReportSymbolChange()" title="Filter report by coin"
+                  style="margin-left:auto;background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;cursor:pointer;">
+            <option value="all">All coins</option>
+          </select>
         </div>
         <div id="customDateRow" class="custom-date-row">
           <label>From: <input type="date" id="fromDate"/></label>
@@ -1157,6 +1161,7 @@ let allSymbols      = [];
 let selectedSymbol  = "";
 let symbolsLoaded   = false;
 let currentPeriod   = "24h";
+let currentReportSymbol = "all";   // PnL Report coin filter ("all" = every coin)
 let currentExchange = "binance";   // which tab is active
 let lastFullState   = { binance: {}, deribit: {}, hyperliquid: {} };
 let serverConfig    = { deribitTestnet: false };  // populated from /api/config on init
@@ -1269,6 +1274,9 @@ function switchExchange(exchangeKey) {
   // Update report label
   document.getElementById("reportExLabel").textContent =
       isDeribit ? "Deribit" : isHyperliquid ? "Hyperliquid" : "Binance";
+
+  // Reset the coin filter — symbols differ per exchange.
+  currentReportSymbol = "all";
 
   // Re-render whatever state we have for this exchange
   renderActiveExchange();
@@ -2105,6 +2113,9 @@ function setReportPeriod(period, btn) {
 // Build the report URL params (used by both loadReport and downloadCsv)
 function reportQueryString() {
   let qs = `exchange=${currentExchange}&period=${currentPeriod}`;
+  if (currentReportSymbol && currentReportSymbol !== "all") {
+    qs += `&symbol=${encodeURIComponent(currentReportSymbol)}`;
+  }
   if (currentPeriod === "custom") {
     const from = document.getElementById("fromDate").value;
     const to   = document.getElementById("toDate").value;
@@ -2112,6 +2123,28 @@ function reportQueryString() {
     qs += `&from=${new Date(from).getTime()}&to=${new Date(to).getTime() + 86400000}`;
   }
   return qs;
+}
+
+// Coin dropdown changed — refilter the report.
+function onReportSymbolChange() {
+  currentReportSymbol = document.getElementById("reportSymbol").value || "all";
+  loadReport();
+}
+
+// Rebuild the coin dropdown options from the report's symbol list, keeping the
+// current selection if it still exists.
+function populateReportSymbols(symbols) {
+  const sel = document.getElementById("reportSymbol");
+  if (!sel) return;
+  const list = Array.isArray(symbols) ? symbols : [];
+  // If the selected coin is no longer present (e.g. exchange switch), reset.
+  if (currentReportSymbol !== "all" && !list.includes(currentReportSymbol)) {
+    currentReportSymbol = "all";
+  }
+  const opts = ['<option value="all">All coins</option>']
+    .concat(list.map(s => `<option value="${s}">${s}</option>`));
+  sel.innerHTML = opts.join("");
+  sel.value = currentReportSymbol;
 }
 
 async function loadReport() {
@@ -2139,6 +2172,8 @@ function downloadCsv() {
 }
 
 function renderReport(data) {
+  populateReportSymbols(data.symbols);
+
   const pnl      = data.pnl      || 0;
   const rt       = data.count    || 0;
   const perRtPnl = data.perRtPnl || 0;

@@ -216,27 +216,46 @@ async function recordRoundTrip(bot, rt, sequenceNumber) {
 }
 
 // Period-filtered report from DB — same shape as the in-memory report.
-async function queryReport({ exchange, fromTs, toTs }) {
+async function queryReport({ exchange, fromTs, toTs, symbol }) {
   const p = getPool();
   if (!p) return null;
   const from = new Date(fromTs);
   const to   = new Date(toTs);
 
-  const params = exchange ? [exchange, from, to] : [from, to];
   const exchClause = exchange ? "exchange = ? AND " : "";
+
+  // Distinct symbols traded in this exchange+period — used to populate the
+  // PnL Report's coin dropdown. NOT filtered by the selected symbol, so the
+  // dropdown always lists every coin available in the window.
+  const symParams = exchange ? [exchange, from, to] : [from, to];
+  const [symRows] = await p.execute(
+    `SELECT DISTINCT symbol FROM round_trips
+     WHERE ${exchClause} closed_at BETWEEN ? AND ?
+       AND symbol IS NOT NULL AND symbol <> ''
+     ORDER BY symbol`,
+    symParams
+  );
+  const symbols = symRows.map(r => r.symbol);
+
+  // Optional per-coin filter for the actual report figures.
+  const symClause = symbol ? "symbol = ? AND " : "";
+  const params = [];
+  if (exchange) params.push(exchange);
+  if (symbol)   params.push(symbol);
+  params.push(from, to);
 
   const [rtRows] = await p.execute(
     `SELECT round_trip, bot_id, exchange, symbol, open_side, buy_price, sell_price,
             qty, spread, pnl, duration_sec, opened_at, closed_at,
             gross_pnl, total_fee, net_pnl
      FROM round_trips
-     WHERE ${exchClause} closed_at BETWEEN ? AND ?
+     WHERE ${exchClause}${symClause} closed_at BETWEEN ? AND ?
      ORDER BY closed_at DESC`,
     params
   );
 
   const [fillRows] = await p.execute(
-    `SELECT side, fee FROM fills WHERE ${exchClause} filled_at BETWEEN ? AND ?`,
+    `SELECT side, fee FROM fills WHERE ${exchClause}${symClause} filled_at BETWEEN ? AND ?`,
     params
   );
 
@@ -283,6 +302,7 @@ async function queryReport({ exchange, fromTs, toTs }) {
     totalFees,
     totalRebates: 0,
     netPnl,
+    symbols,
   };
 }
 

@@ -3326,6 +3326,66 @@ function buildCsvReport(exchangeKey, fromTs, toTs) {
   return lines.join("\n");
 }
 
+// DB-backed CSV — same layout as buildCsvReport but sourced from MySQL so it
+// honours the per-coin symbol filter (the in-memory builder only sees the
+// currently-running bot's single symbol). `report` is a db.queryReport result.
+function buildCsvFromDbReport(report, { exchangeKey, symbol, fromTs, toTs }) {
+  // Pull config from a running bot matching this symbol (for the context row).
+  const cfg = (symbol
+    ? (listBots().find(b => b.config?.symbol === symbol && b.exchangeKey === exchangeKey)?.config)
+    : bots[exchangeKey]?.config) || {};
+
+  const esc = (v) => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  const lines = [];
+  lines.push("# GRID BOT PNL REPORT");
+  lines.push(`# Exchange,${esc(exchangeKey)}`);
+  lines.push(`# Symbol,${esc(symbol || "ALL")}`);
+  lines.push(`# Period from,${esc(new Date(fromTs).toISOString())}`);
+  lines.push(`# Period to,${esc(new Date(toTs).toISOString())}`);
+  lines.push(`# Generated,${esc(new Date().toISOString())}`);
+  lines.push("");
+
+  lines.push("RTPS,TOTAL_PNL,PER_STEP_QTY,AVG_SPREAD,TARGET_SPREAD,DISTANCE,TOTAL_FEES,TOTAL_REBATES,NET_PNL");
+  lines.push([
+    report.count,
+    Number(report.pnl).toFixed(6),
+    cfg.qtyPerStep ?? "",
+    Number(report.avgSpread).toFixed(6),
+    cfg.targetSpread ?? "",
+    cfg.distance ?? "",
+    Number(report.totalFees).toFixed(6),
+    Number(report.totalRebates || 0).toFixed(6),
+    Number(report.netPnl).toFixed(6),
+  ].map(esc).join(","));
+  lines.push("");
+
+  lines.push("ROUND_TRIP,OPEN_SIDE,BUY_PRICE,SELL_PRICE,QTY,SPREAD,PNL,DURATION_SEC,OPENED_AT,CLOSED_AT");
+  const ordered = [...(report.roundTrips || [])].sort((a, b) => new Date(a.closeTs) - new Date(b.closeTs));
+  ordered.forEach((rt, idx) => {
+    lines.push([
+      idx + 1,
+      rt.openSide,
+      Number(rt.buyPrice).toFixed(6),
+      Number(rt.sellPrice).toFixed(6),
+      rt.qty,
+      (Number(rt.sellPrice) - Number(rt.buyPrice)).toFixed(6),
+      Number(rt.grossPnl ?? rt.pnl).toFixed(6),
+      ((rt.durationMs || 0) / 1000).toFixed(1),
+      new Date(rt.openTs).toISOString(),
+      new Date(rt.closeTs).toISOString(),
+    ].map(esc).join(","));
+  });
+  if (ordered.length === 0) lines.push("# No round trips in this period");
+
+  return lines.join("\n");
+}
+
 // ============================================================
 //  DERIBIT FEES REFRESH
 //  Pulls real fee/rebate data from Deribit user trades and
@@ -3481,6 +3541,7 @@ app.get("/api/report", async (req, res) => {
 app.get("/api/db_report", async (req, res) => {
   if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
   const exchange = req.query.exchange || req.query.botId || null;
+  const symbol   = req.query.symbol && req.query.symbol !== "all" ? req.query.symbol : null;
   const now = Date.now();
   const period = req.query.period || "24h";
   let fromTs, toTs = now;
@@ -3494,9 +3555,9 @@ app.get("/api/db_report", async (req, res) => {
   } else fromTs = now - 24 * 60 * 60 * 1000;
 
   try {
-    const report = await db.queryReport({ exchange, fromTs, toTs });
+    const report = await db.queryReport({ exchange, fromTs, toTs, symbol });
     if (!report) return res.status(503).json({ error: "DB unavailable" });
-    res.json({ period, fromTs, toTs, exchange, ...report });
+    res.json({ period, fromTs, toTs, exchange, symbol, ...report });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -3506,6 +3567,7 @@ app.get("/api/db_report", async (req, res) => {
 app.get("/api/csv", async (req, res) => {
   const exchangeKey = req.query.botId || req.query.exchange || "binance";
   if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });
+  const symbol = req.query.symbol && req.query.symbol !== "all" ? req.query.symbol : null;
 
   const now    = Date.now();
   const period = req.query.period || "24h";
@@ -3520,9 +3582,23 @@ app.get("/api/csv", async (req, res) => {
 
   if (exchangeKey === "deribit") await refreshDeribitFees().catch(()=>{});
 
-  const csv = buildCsvReport(exchangeKey, fromTs, toTs);
+  // Prefer the DB-backed builder so the CSV honours the coin filter and
+  // persists across restarts. Fall back to in-memory if MySQL isn't set up.
+  let csv;
+  if (db.dbConfigured()) {
+    try {
+      const report = await db.queryReport({ exchange: exchangeKey, fromTs, toTs, symbol });
+      csv = report ? buildCsvFromDbReport(report, { exchangeKey, symbol, fromTs, toTs })
+                   : buildCsvReport(exchangeKey, fromTs, toTs);
+    } catch (e) {
+      csv = buildCsvReport(exchangeKey, fromTs, toTs);
+    }
+  } else {
+    csv = buildCsvReport(exchangeKey, fromTs, toTs);
+  }
+  const symTag   = symbol ? `_${String(symbol).replace(/[^A-Za-z0-9]+/g, "")}` : "";
   const dateStr  = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-  const filename = `gridbot_${exchangeKey}_${period}_${dateStr}.csv`;
+  const filename = `gridbot_${exchangeKey}${symTag}_${period}_${dateStr}.csv`;
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(csv);
