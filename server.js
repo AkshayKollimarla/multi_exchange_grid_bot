@@ -3365,11 +3365,12 @@ function buildCsvFromDbReport(report, { exchangeKey, symbol, fromTs, toTs }) {
   ].map(esc).join(","));
   lines.push("");
 
-  lines.push("ROUND_TRIP,OPEN_SIDE,BUY_PRICE,SELL_PRICE,QTY,SPREAD,PNL,DURATION_SEC,OPENED_AT,CLOSED_AT");
+  lines.push("ROUND_TRIP,SYMBOL,OPEN_SIDE,BUY_PRICE,SELL_PRICE,QTY,SPREAD,PNL,DURATION_SEC,OPENED_AT,CLOSED_AT");
   const ordered = [...(report.roundTrips || [])].sort((a, b) => new Date(a.closeTs) - new Date(b.closeTs));
   ordered.forEach((rt, idx) => {
     lines.push([
       idx + 1,
+      rt.symbol || "",
       rt.openSide,
       Number(rt.buyPrice).toFixed(6),
       Number(rt.sellPrice).toFixed(6),

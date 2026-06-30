@@ -224,16 +224,20 @@ async function queryReport({ exchange, fromTs, toTs, symbol }) {
 
   const exchClause = exchange ? "exchange = ? AND " : "";
 
-  // Distinct symbols traded in this exchange+period — used to populate the
-  // PnL Report's coin dropdown. NOT filtered by the selected symbol, so the
-  // dropdown always lists every coin available in the window.
-  const symParams = exchange ? [exchange, from, to] : [from, to];
+  // Coins for the PnL Report dropdown: every symbol ever traded on this
+  // exchange (round trips OR fills), all-time and NOT filtered by the selected
+  // coin/period — so a coin is selectable even before it has any closed round
+  // trip (e.g. a freshly-started coin that has only placed entries so far).
+  const symWhere = exchange ? "WHERE exchange = ?" : "";
   const [symRows] = await p.execute(
-    `SELECT DISTINCT symbol FROM round_trips
-     WHERE ${exchClause} closed_at BETWEEN ? AND ?
-       AND symbol IS NOT NULL AND symbol <> ''
+    `SELECT symbol FROM (
+       SELECT DISTINCT symbol FROM round_trips ${symWhere}
+       UNION
+       SELECT DISTINCT symbol FROM fills ${symWhere}
+     ) t
+     WHERE symbol IS NOT NULL AND symbol <> ''
      ORDER BY symbol`,
-    symParams
+    exchange ? [exchange, exchange] : []
   );
   const symbols = symRows.map(r => r.symbol);
 
@@ -270,6 +274,7 @@ async function queryReport({ exchange, fromTs, toTs, symbol }) {
     const totalFee = r.total_fee != null ? Number(r.total_fee) : 0;
     const netPnl   = r.net_pnl   != null ? Number(r.net_pnl)   : (grossPnl - totalFee);
     return {
+      symbol    : r.symbol,
       openSide  : String(r.open_side).toUpperCase(),
       buyPrice  : Number(r.buy_price),
       sellPrice : Number(r.sell_price),

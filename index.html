@@ -1092,8 +1092,8 @@
           <div class="rep-stat"><div class="rep-label">Win Rate</div><div class="rep-value" id="rWinRate">—</div></div>
         </div>
         <table class="ord-table">
-          <thead><tr><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th><th>Duration</th><th>Closed</th></tr></thead>
-          <tbody id="rtBody"><tr><td colspan="8" class="empty-td">No round trips in this period</td></tr></tbody>
+          <thead><tr><th>Side</th><th>Symbol</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th><th>Duration</th><th>Closed</th></tr></thead>
+          <tbody id="rtBody"><tr><td colspan="9" class="empty-td">No round trips in this period</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2142,7 +2142,7 @@ function populateReportSymbols(symbols) {
     currentReportSymbol = "all";
   }
   const opts = ['<option value="all">All coins</option>']
-    .concat(list.map(s => `<option value="${s}">${s}</option>`));
+    .concat(list.map(s => `<option value="${s}">${coinLabel(s)}</option>`));
   sel.innerHTML = opts.join("");
   sel.value = currentReportSymbol;
 }
@@ -2211,7 +2211,7 @@ function renderReport(data) {
 
   const tbody = document.getElementById("rtBody");
   if (!data.roundTrips?.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty-td">No round trips in this period</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-td">No round trips in this period</td></tr>`;
     return;
   }
   tbody.innerHTML = data.roundTrips.map((rt, i) => {
@@ -2226,6 +2226,7 @@ function renderReport(data) {
     const tip = `Gross: $${gross.toFixed(4)}\nFee:   -$${fee.toFixed(4)}\nNet:   $${net.toFixed(4)}`;
     return `<tr style="${rowBg}">
       <td class="${rt.openSide==="BUY"?"buy-text":"sell-text"}">${rt.openSide}</td>
+      <td style="font-weight:600;" title="${rt.symbol||""}">${coinLabel(rt.symbol)}</td>
       <td class="buy-text">$${rt.buyPrice.toFixed(4)}</td>
       <td class="sell-text">$${rt.sellPrice.toFixed(4)}</td>
       <td>${rt.qty}</td>
@@ -2235,6 +2236,17 @@ function renderReport(data) {
       <td style="color:var(--muted);">${closeTime}</td>
     </tr>`;
   }).join("");
+}
+
+// Short, readable coin label from a stored symbol:
+//   "HYPE/USDC:USDC"      -> "HYPE"
+//   "xyz:SPCX/USDC:USDC"  -> "SPCX"
+//   "BTC-PERPETUAL"       -> "BTC-PERPETUAL"
+function coinLabel(sym) {
+  if (!sym) return "—";
+  let base = String(sym).split("/")[0];      // drop the quote/settle part
+  if (base.includes(":")) base = base.split(":").pop();  // drop HIP-3 dex prefix
+  return base;
 }
 
 function formatDuration(ms) {
