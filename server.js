@@ -2008,7 +2008,7 @@ async function checkAndHandleFills(botId, currentPrice) {
       db.recordFill(bot, hlFill);
 
       if (tracked.type === "entry") {
-        const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+        const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
         const targetSide  = tracked.side === "sell" ? "buy" : "sell";
         const targetPrice = tracked.side === "sell"
           ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
@@ -2026,7 +2026,7 @@ async function checkAndHandleFills(botId, currentPrice) {
         const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
         if (matched.length === 0) {
           // Fallback: price-based
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
           const entrySide  = tracked.side === "buy" ? "sell" : "buy";
           const entryPrice = tracked.side === "buy"
             ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
@@ -2105,7 +2105,7 @@ async function checkAndHandleFills(botId, currentPrice) {
           // maintainGrid (which runs immediately after this in gridLoop)
           // will handle target placement and entry promotion.
           const targetSide  = tracked.side === "sell" ? "buy" : "sell";
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
           const targetPrice = tracked.side === "sell"
             ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
             : roundPrice(fillPrice + cfg.targetSpread, tickSize);
@@ -2128,7 +2128,7 @@ async function checkAndHandleFills(botId, currentPrice) {
 
           if (matched.length === 0) {
             // Fallback: try price-based match for legacy/external orders
-            const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+            const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
             const entrySide  = tracked.side === "buy" ? "sell" : "buy";
             const entryPrice = tracked.side === "buy"
               ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
@@ -3049,8 +3049,10 @@ async function syncOrdersFromExchange(botId) {
     const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
     let exchangeOrders;
     try {
+      const orphanArgs = { user: wallet };
+      if (cache.hipDex) orphanArgs.dex = cache.hipDex;   // HIP-3: scope to this dex
       exchangeOrders = await Promise.race([
-        cache.infoClient.openOrders({ user: wallet }),
+        cache.infoClient.openOrders(orphanArgs),
         new Promise((_, rej) => setTimeout(() => rej(new Error("openOrders timeout 5s")), 5000)),
       ]);
     } catch (e) {
