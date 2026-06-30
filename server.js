@@ -19,7 +19,6 @@ const path      = require("path");
 // Native Hyperliquid SDK — used as fallback because CCXT's Hyperliquid
 // integration has known bugs with fetchOpenOrders and cancelOrder.
 const hl        = require("@nktkas/hyperliquid");
-const { signL1Action } = require("@nktkas/hyperliquid/signing");
 const { privateKeyToAccount } = require("viem/accounts");
 const db        = require("./db");
 
@@ -2745,32 +2744,14 @@ async function hyperliquidNativeOrders(bot, orders) {
     });
 
   try {
-    let statuses;
-    if (cache.hipDex) {
-      // SDK's order() validates against a fixed schema that strips unknown fields (incl. dex).
-      // Sign and POST directly so dex is included in the signed action.
-      const nonce  = Date.now();
-      const action = { type: "order", orders: orderRequests, grouping: "na", dex: cache.hipDex };
-      const sig    = await signL1Action({ wallet: cache.wallet, action, nonce, isTestnet: cache.isTestnet });
-      const hlHost = cache.isTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
-      const httpResp = await Promise.race([
-        fetch(`https://${hlHost}/exchange`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, signature: sig, nonce }),
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
-      ]);
-      if (!httpResp.ok) throw new Error(`HIP-3 order HTTP ${httpResp.status}`);
-      const data = await httpResp.json();
-      if (data?.status !== "ok") throw new Error(typeof data?.response === "string" ? data.response : JSON.stringify(data));
-      statuses = data?.response?.data?.statuses;
-    } else {
-      const resp = await Promise.race([
-        cache.exchClient.order({ orders: orderRequests, grouping: "na" }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
-      ]);
-      statuses = resp?.response?.data?.statuses;
-    }
+    // For HIP-3, cache.assetIndex is the encoded builder asset id
+    // (100000 + perpDexIndex*10000 + localIndex). The Exchange API routes by
+    // that id alone — no "dex" field on the action — so the standard SDK call works.
+    const resp = await Promise.race([
+      cache.exchClient.order({ orders: orderRequests, grouping: "na" }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
+    ]);
+    const statuses = resp?.response?.data?.statuses;
     return parseStatuses(statuses, orders.length);
   } catch (e) {
     // Parse partial-success from error.response (same pattern as cancel)
@@ -2863,6 +2844,7 @@ async function hyperliquidNativeCancel(bot, orderIds) {
           if (baseToken?.name === base) { assetIndex = 10000 + m.universe[i].index; break; }
         }
       } else if (cfg.priceSource === "hyperliquid_hip3") {
+        // Encode the builder asset id: 100000 + perpDexIndex*10000 + localIndex.
         const hipDex = cfg.hipDex || "xyz";
         const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
         const mr = await fetch(`https://${hlHost}/info`, {
@@ -2875,10 +2857,25 @@ async function hyperliquidNativeCancel(bot, orderIds) {
         const dexA   = allA.filter(u => u.name?.startsWith(dexPfx));
         const srcA   = dexA.length > 0 ? dexA : allA;
         const sfx    = base.includes(":") ? base.split(":").slice(1).join(":") : base;
+        let localIndex = -1;
         for (let i = 0; i < srcA.length; i++) {
           const nm = srcA[i].name || "";
-          if (nm === base || nm === sfx || nm === dexPfx + sfx) { assetIndex = i; break; }
+          if (nm === base || nm === sfx || nm === dexPfx + sfx) { localIndex = i; break; }
         }
+        let perpDexIndex = -1;
+        const pdr = await fetch(`https://${hlHost}/info`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "perpDexs" }),
+        });
+        if (pdr.ok) {
+          const pds = await pdr.json();
+          if (Array.isArray(pds)) {
+            for (let k = 0; k < pds.length; k++) {
+              if (pds[k]?.name === hipDex) { perpDexIndex = k; break; }
+            }
+          }
+        }
+        if (localIndex >= 0 && perpDexIndex >= 0) assetIndex = 100000 + perpDexIndex * 10000 + localIndex;
       } else {
         const m = await infoClient.meta();
         for (let i = 0; i < m.universe.length; i++) {
@@ -2895,35 +2892,15 @@ async function hyperliquidNativeCancel(bot, orderIds) {
   const cancels = orderIds.map(id => ({ a: assetIndex, o: Number(id) })).filter(c => Number.isFinite(c.o));
   if (cancels.length === 0) return { ok: false, error: "No valid numeric order IDs", results: [] };
 
-  const hipDex = bot.hlCache?.hipDex;
   try {
-    let statuses;
-    if (hipDex) {
-      // SDK's cancel() strips unknown fields (incl. dex) — sign and POST directly.
-      const nonce   = Date.now();
-      const action  = { type: "cancel", cancels, dex: hipDex };
-      const isTestnet = bot.hlCache?.isTestnet ?? (String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true");
-      const wallet_  = bot.hlCache?.wallet ?? privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
-      const sig     = await signL1Action({ wallet: wallet_, action, nonce, isTestnet });
-      const hlHost  = isTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
-      const httpResp = await Promise.race([
-        fetch(`https://${hlHost}/exchange`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, signature: sig, nonce }),
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
-      ]);
-      if (!httpResp.ok) throw new Error(`HIP-3 cancel HTTP ${httpResp.status}`);
-      const data = await httpResp.json();
-      if (data?.status !== "ok") throw new Error(typeof data?.response === "string" ? data.response : JSON.stringify(data));
-      statuses = data?.response?.data?.statuses || [];
-    } else {
-      const resp = await Promise.race([
-        exchClient.cancel({ cancels }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
-      ]);
-      statuses = resp?.response?.data?.statuses || [];
-    }
+    // assetIndex is the encoded HIP-3 builder asset id when applicable; the
+    // Exchange API routes cancels by that id alone (no "dex" field on the action).
+    const resp = await Promise.race([
+      exchClient.cancel({ cancels }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
+    ]);
+    // Response shape: { status: "ok", response: { type: "cancel", data: { statuses: [...] } } }
+    const statuses = resp?.response?.data?.statuses || [];
     return { ok: true, results: cancels.map((c, i) => ({ id: c.o, status: statuses[i] })) };
   } catch (e) {
     // The SDK throws ApiRequestError when ANY individual cancel in a batch
@@ -3648,11 +3625,15 @@ app.post("/api/start", async (req, res) => {
             }
           }
         } else if (isHip3) {
-          // HIP-3 perp dex — fetch market meta with dex parameter via raw fetch.
-          // The response may be a COMBINED universe (main HL + dex assets) where
-          // dex assets have names prefixed "xyz:". For order placement the xyz dex
-          // clearinghouse uses LOCAL indices (position within dex-only subset),
-          // so we filter to dex-prefixed assets and find the local index.
+          // HIP-3 (builder-deployed) perp dex. Two-step resolution:
+          //   1. meta?dex=<name> gives the per-dex universe and the LOCAL index of
+          //      the asset within that dex.
+          //   2. perpDexs gives the array of all dexes; the dex's POSITION in that
+          //      array (perpDexIndex) determines the asset-id offset.
+          // The Exchange API has NO "dex" field on the order/cancel action — the dex
+          // is encoded into the asset id itself:
+          //      assetId = 100000 + perpDexIndex * 10000 + localIndex
+          // (see SymbolConverter._processBuilderDexResult in the SDK).
           const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
           const mr = await fetch(`https://${hlHost}/info`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -3662,24 +3643,38 @@ app.post("/api/start", async (req, res) => {
           const m = await mr.json();
           const allAssets  = m.universe || [];
           const dexPrefix  = hipDex + ":";
-          // Dex-only subset: assets whose name starts with "xyz:" (or whichever dex)
           const dexOnly    = allAssets.filter(u => u.name?.startsWith(dexPrefix));
-          // We may receive a combined (all HL + xyz) or a dex-only universe.
-          // If dexOnly is a strict subset, use it for local indices.
           const searchList = dexOnly.length > 0 ? dexOnly : allAssets;
-          // Accept match on full name ("xyz:SPCX") OR suffix ("SPCX")
           const baseSuffix = base.includes(":") ? base.split(":").slice(1).join(":") : base;
+          let localIndex = -1;
           for (let i = 0; i < searchList.length; i++) {
             const nm = searchList[i].name || "";
             if (nm === base || nm === baseSuffix || nm === dexPrefix + baseSuffix) {
-              assetIndex = i;
+              localIndex = i;
               szDecimals = searchList[i].szDecimals ?? 4;
               maxSig = 5;
               coinId = nm.startsWith(dexPrefix) ? nm : dexPrefix + nm;
               break;
             }
           }
-          log(botId, `[HIP-3 meta] total=${allAssets.length} dex_only=${dexOnly.length} base=${base} localIdx=${assetIndex} coin=${coinId}`, "info");
+          // Resolve perpDexIndex (position of this dex in the perpDexs array).
+          let perpDexIndex = -1;
+          const pdr = await fetch(`https://${hlHost}/info`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "perpDexs" }),
+          });
+          if (pdr.ok) {
+            const pds = await pdr.json();
+            if (Array.isArray(pds)) {
+              for (let k = 0; k < pds.length; k++) {
+                if (pds[k]?.name === hipDex) { perpDexIndex = k; break; }
+              }
+            }
+          }
+          if (localIndex >= 0 && perpDexIndex >= 0) {
+            assetIndex = 100000 + perpDexIndex * 10000 + localIndex;
+          }
+          log(botId, `[HIP-3 meta] localIdx=${localIndex} perpDexIdx=${perpDexIndex} assetId=${assetIndex} coin=${coinId} szDec=${szDecimals}`, "info");
         } else {
           let m;
           for (let attempt = 0; attempt < 3; attempt++) {
@@ -3702,7 +3697,7 @@ app.post("/api/start", async (req, res) => {
           }
         }
         if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
-        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex, wallet, isTestnet: useTestnet };
+        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
         bot.exchange = exchange;  // also needed for non-HL paths
         log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
       } catch (e) {
