@@ -19,6 +19,7 @@ const path      = require("path");
 // Native Hyperliquid SDK — used as fallback because CCXT's Hyperliquid
 // integration has known bugs with fetchOpenOrders and cancelOrder.
 const hl        = require("@nktkas/hyperliquid");
+const { signL1Action } = require("@nktkas/hyperliquid/signing");
 const { privateKeyToAccount } = require("viem/accounts");
 const db        = require("./db");
 
@@ -2734,32 +2735,48 @@ async function hyperliquidNativeOrders(bot, orders) {
     t: { limit: { tif: "Alo" } },
   }));
 
-  try {
-    const orderAction = { orders: orderRequests, grouping: "na" };
-    if (cache.hipDex) orderAction.dex = cache.hipDex;
-    const resp = await Promise.race([
-      cache.exchClient.order(orderAction),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
-    ]);
-    const statuses = resp?.response?.data?.statuses || [];
-    return orders.map((_, i) => {
-      const s = statuses[i];
+  const parseStatuses = (statuses, n) =>
+    Array.from({ length: n }, (_, i) => {
+      const s = statuses?.[i];
       if (s?.resting) return { id: String(s.resting.oid), error: null };
       if (s?.filled)  return { id: String(s.filled.oid),  error: null, filled: true };
       if (s?.error)   return { id: null, error: s.error };
       return { id: null, error: "unknown status" };
     });
+
+  try {
+    let statuses;
+    if (cache.hipDex) {
+      // SDK's order() validates against a fixed schema that strips unknown fields (incl. dex).
+      // Sign and POST directly so dex is included in the signed action.
+      const nonce  = Date.now();
+      const action = { type: "order", orders: orderRequests, grouping: "na", dex: cache.hipDex };
+      const sig    = await signL1Action({ wallet: cache.wallet, action, nonce, isTestnet: cache.isTestnet });
+      const hlHost = cache.isTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+      const httpResp = await Promise.race([
+        fetch(`https://${hlHost}/exchange`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, signature: sig, nonce }),
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
+      ]);
+      if (!httpResp.ok) throw new Error(`HIP-3 order HTTP ${httpResp.status}`);
+      const data = await httpResp.json();
+      if (data?.status !== "ok") throw new Error(typeof data?.response === "string" ? data.response : JSON.stringify(data));
+      statuses = data?.response?.data?.statuses;
+    } else {
+      const resp = await Promise.race([
+        cache.exchClient.order({ orders: orderRequests, grouping: "na" }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
+      ]);
+      statuses = resp?.response?.data?.statuses;
+    }
+    return parseStatuses(statuses, orders.length);
   } catch (e) {
     // Parse partial-success from error.response (same pattern as cancel)
     const statuses = e?.response?.response?.data?.statuses;
     if (Array.isArray(statuses) && statuses.length === orders.length) {
-      return orders.map((_, i) => {
-        const s = statuses[i];
-        if (s?.resting) return { id: String(s.resting.oid), error: null };
-        if (s?.filled)  return { id: String(s.filled.oid),  error: null, filled: true };
-        if (s?.error)   return { id: null, error: s.error };
-        return { id: null, error: "unknown status" };
-      });
+      return parseStatuses(statuses, orders.length);
     }
     return orders.map(() => ({ id: null, error: e.message }));
   }
@@ -2878,15 +2895,35 @@ async function hyperliquidNativeCancel(bot, orderIds) {
   const cancels = orderIds.map(id => ({ a: assetIndex, o: Number(id) })).filter(c => Number.isFinite(c.o));
   if (cancels.length === 0) return { ok: false, error: "No valid numeric order IDs", results: [] };
 
+  const hipDex = bot.hlCache?.hipDex;
   try {
-    const cancelAction = { cancels };
-    if (bot.hlCache?.hipDex) cancelAction.dex = bot.hlCache.hipDex;
-    const resp = await Promise.race([
-      exchClient.cancel(cancelAction),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
-    ]);
-    // Response shape: { status: "ok", response: { type: "cancel", data: { statuses: [...] } } }
-    const statuses = resp?.response?.data?.statuses || [];
+    let statuses;
+    if (hipDex) {
+      // SDK's cancel() strips unknown fields (incl. dex) — sign and POST directly.
+      const nonce   = Date.now();
+      const action  = { type: "cancel", cancels, dex: hipDex };
+      const isTestnet = bot.hlCache?.isTestnet ?? (String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true");
+      const wallet_  = bot.hlCache?.wallet ?? privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+      const sig     = await signL1Action({ wallet: wallet_, action, nonce, isTestnet });
+      const hlHost  = isTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+      const httpResp = await Promise.race([
+        fetch(`https://${hlHost}/exchange`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, signature: sig, nonce }),
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
+      ]);
+      if (!httpResp.ok) throw new Error(`HIP-3 cancel HTTP ${httpResp.status}`);
+      const data = await httpResp.json();
+      if (data?.status !== "ok") throw new Error(typeof data?.response === "string" ? data.response : JSON.stringify(data));
+      statuses = data?.response?.data?.statuses || [];
+    } else {
+      const resp = await Promise.race([
+        exchClient.cancel({ cancels }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
+      ]);
+      statuses = resp?.response?.data?.statuses || [];
+    }
     return { ok: true, results: cancels.map((c, i) => ({ id: c.o, status: statuses[i] })) };
   } catch (e) {
     // The SDK throws ApiRequestError when ANY individual cancel in a batch
@@ -3665,7 +3702,7 @@ app.post("/api/start", async (req, res) => {
           }
         }
         if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
-        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
+        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex, wallet, isTestnet: useTestnet };
         bot.exchange = exchange;  // also needed for non-HL paths
         log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
       } catch (e) {
