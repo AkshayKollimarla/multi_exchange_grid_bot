@@ -268,6 +268,7 @@ const MAKER_FEE_RATE = {
   // Hyperliquid
   hyperliquid       : 0.000144,  // perps maker (your tier shows 0.0144%)
   hyperliquid_spot  : 0.000384,  // spot maker (your tier shows 0.0384%)
+  hyperliquid_hip3  : 0.000144,  // HIP-3 perp dexs use same maker rate as HL perps
   // Binance
   binance_spot      : 0.001000,  // 0.10% standard spot maker (BNB pays 0.075%)
   binance_usdm      : 0.000200,  // 0.02% USDM futures maker
@@ -1704,8 +1705,10 @@ async function hyperliquidNativeTicker(bot, timeoutMs = 5000) {
   if (!cache?.infoClient || !cache.coinId) {
     throw new Error("Hyperliquid SDK not initialized");
   }
+  const l2Args = { coin: cache.coinId };
+  if (cache.hipDex) l2Args.dex = cache.hipDex;
   const book = await Promise.race([
-    cache.infoClient.l2Book({ coin: cache.coinId }),
+    cache.infoClient.l2Book(l2Args),
     new Promise((_, rej) => setTimeout(() => rej(new Error(`l2Book timeout ${timeoutMs/1000}s`)), timeoutMs)),
   ]);
   // book.levels = [bids[], asks[]]; each level = { px, sz, n }
@@ -1927,8 +1930,10 @@ async function checkAndHandleFills(botId, currentPrice) {
     const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
     let exchangeOrders;
     try {
+      const openOrdersArgs = { user: wallet };
+      if (cache.hipDex) openOrdersArgs.dex = cache.hipDex;
       exchangeOrders = await Promise.race([
-        cache.infoClient.openOrders({ user: wallet }),
+        cache.infoClient.openOrders(openOrdersArgs),
         new Promise((_, rej) => setTimeout(() => rej(new Error("openOrders timeout 5s")), 5000)),
       ]);
     } catch (err) {
@@ -2719,8 +2724,10 @@ async function hyperliquidNativeOrders(bot, orders) {
   }));
 
   try {
+    const orderAction = { orders: orderRequests, grouping: "na" };
+    if (cache.hipDex) orderAction.dex = cache.hipDex;
     const resp = await Promise.race([
-      cache.exchClient.order({ orders: orderRequests, grouping: "na" }),
+      cache.exchClient.order(orderAction),
       new Promise((_, rej) => setTimeout(() => rej(new Error("Native order timeout 10s")), 10000)),
     ]);
     const statuses = resp?.response?.data?.statuses || [];
@@ -2827,6 +2834,17 @@ async function hyperliquidNativeCancel(bot, orderIds) {
           const baseToken = m.tokens[m.universe[i].tokens[0]];
           if (baseToken?.name === base) { assetIndex = 10000 + m.universe[i].index; break; }
         }
+      } else if (cfg.priceSource === "hyperliquid_hip3") {
+        const hipDex = cfg.hipDex || "xyz";
+        const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+        const mr = await fetch(`https://${hlHost}/info`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "meta", dex: hipDex }),
+        });
+        const m = await mr.json();
+        for (let i = 0; i < (m.universe || []).length; i++) {
+          if (m.universe[i].name === base) { assetIndex = i; break; }
+        }
       } else {
         const m = await infoClient.meta();
         for (let i = 0; i < m.universe.length; i++) {
@@ -2844,8 +2862,10 @@ async function hyperliquidNativeCancel(bot, orderIds) {
   if (cancels.length === 0) return { ok: false, error: "No valid numeric order IDs", results: [] };
 
   try {
+    const cancelAction = { cancels };
+    if (bot.hlCache?.hipDex) cancelAction.dex = bot.hlCache.hipDex;
     const resp = await Promise.race([
-      exchClient.cancel({ cancels }),
+      exchClient.cancel(cancelAction),
       new Promise((_, rej) => setTimeout(() => rej(new Error("Native cancel timeout 10s")), 10000)),
     ]);
     // Response shape: { status: "ok", response: { type: "cancel", data: { statuses: [...] } } }
@@ -3557,6 +3577,8 @@ app.post("/api/start", async (req, res) => {
         const infoClient = new hl.InfoClient({ transport });
 
         const isSpot = (cfg.priceSource === "hyperliquid_spot");
+        const isHip3 = (cfg.priceSource === "hyperliquid_hip3");
+        const hipDex = isHip3 ? (cfg.hipDex || "xyz") : null;
         const base   = cfg.symbol.split("/")[0];
         let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
         if (isSpot) {
@@ -3567,6 +3589,24 @@ app.post("/api/start", async (req, res) => {
               assetIndex = 10000 + m.universe[i].index;
               szDecimals = baseToken.szDecimals ?? 4;
               maxSig = 8;
+              coinId = m.universe[i].name;
+              break;
+            }
+          }
+        } else if (isHip3) {
+          // HIP-3 perp dex — fetch market meta with dex parameter via raw fetch
+          const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+          const mr = await fetch(`https://${hlHost}/info`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "meta", dex: hipDex }),
+          });
+          if (!mr.ok) throw new Error(`HIP-3 meta fetch failed: HTTP ${mr.status}`);
+          const m = await mr.json();
+          for (let i = 0; i < (m.universe || []).length; i++) {
+            if (m.universe[i].name === base) {
+              assetIndex = i;
+              szDecimals = m.universe[i].szDecimals ?? 4;
+              maxSig = 5;
               coinId = m.universe[i].name;
               break;
             }
@@ -3593,7 +3633,7 @@ app.post("/api/start", async (req, res) => {
           }
         }
         if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
-        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot };
+        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
         bot.exchange = exchange;  // also needed for non-HL paths
         log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
       } catch (e) {

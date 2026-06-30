@@ -855,7 +855,7 @@
             <option value="deribit_spot">Deribit Spot</option>
             <option value="hyperliquid">Hyperliquid Perpetual</option>
             <option value="hyperliquid_spot">Hyperliquid Spot</option>
-            <option value="hyperliquid_hip3">Hyperliquid HIP-3 (coming soon)</option>
+            <option value="hyperliquid_hip3">Hyperliquid HIP-3</option>
           </select>
         </div>
         <div class="field">
@@ -872,6 +872,13 @@
               <div class="sym-item msg">Select a price source first...</div>
             </div>
           </div>
+        </div>
+
+        <div class="field" id="hipDexField" style="display:none;">
+          <label>HIP-3 Dex Name</label>
+          <input type="text" id="hipDexName" value="xyz" placeholder="e.g. xyz"
+                 style="text-transform:lowercase"
+                 oninput="this.value=this.value.toLowerCase(); loadSymbols(document.getElementById('priceSource').value)"/>
         </div>
 
         <div class="section-title">Grid Parameters</div>
@@ -1411,9 +1418,12 @@ async function onSourceChange() {
     deribit_spot     : "Deribit Spot",
     hyperliquid      : "Hyperliquid Perpetuals",
     hyperliquid_spot : "Hyperliquid Spot",
-    hyperliquid_hip3 : "Hyperliquid HIP-3 (coming soon)",
+    hyperliquid_hip3 : "Hyperliquid HIP-3",
   };
   document.getElementById("exchangeName").value = names[source] || "—";
+  // Show the dex-name field only for HIP-3
+  const hipField = document.getElementById("hipDexField");
+  if (hipField) hipField.style.display = (source === "hyperliquid_hip3") ? "" : "none";
   selectedSymbol = "";
   document.getElementById("symbolInput").value = "";
   document.getElementById("symbolClear").style.display = "none";
@@ -1574,9 +1584,32 @@ async function loadSymbols(source) {
       return;
 
     } else if (source === "hyperliquid_hip3") {
-      // Placeholder: HIP-3 markets need a dex-name picker before listing symbols
-      dd.innerHTML = `<div class="sym-item msg">HIP-3 markets are not yet supported in this UI. Coming soon.</div>`;
-      allSymbols = []; symbolsLoaded = true;
+      const hipDex = document.getElementById("hipDexName")?.value?.trim().toLowerCase() || "xyz";
+      const host   = serverConfig.hyperliquidTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+      const all = [];
+      try {
+        const r = await fetch(`https://${host}/info`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "meta", dex: hipDex }),
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        if (j.universe) {
+          for (const u of j.universe) {
+            if (u.isDelisted) continue;
+            all.push({ ccxt: `${u.name}/USDC:USDC`, native: u.name + "-PERP" });
+          }
+        }
+      } catch(e) { console.warn("HIP-3 meta fetch failed:", e.message); }
+      allSymbols = all.sort((a,b) => a.native.localeCompare(b.native));
+      symbolsLoaded = true;
+      if (allSymbols.length === 0) {
+        dd.innerHTML = `<div class="sym-item msg">No markets found in "${hipDex}" dex. Check the dex name.</div>`;
+        return;
+      }
+      renderDropdown(allSymbols.slice(0, 80));
+      document.getElementById("symbolInput").placeholder = `Search ${allSymbols.length} markets in [${hipDex}]...`;
       return;
 
     } else {
@@ -1777,6 +1810,10 @@ async function startBot() {
       targetSpread  : document.getElementById("targetSpread").value,
       qtyPerStep    : document.getElementById("qtyPerStep").value,
     };
+    // HIP-3: include which dex to trade on
+    if (body.priceSource === "hyperliquid_hip3") {
+      body.hipDex = document.getElementById("hipDexName")?.value?.trim().toLowerCase() || "xyz";
+    }
     // Hedge only for Binance
     if (currentExchange === "binance") {
       body.hedgeEnabled   = hedgeEnabled;
