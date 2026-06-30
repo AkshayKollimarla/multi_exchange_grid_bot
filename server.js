@@ -1180,42 +1180,10 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     await exchange.loadMarkets();
     if (exchangeKey === "binance") await syncExchangeTime(exchange);
 
-    // Pre-warm Hyperliquid native SDK before ticker fetch
+    // Pre-warm Hyperliquid native SDK before ticker fetch (HIP-3 aware; shared
+    // with /api/start and gridLoop self-heal).
     if (exchangeKey === "hyperliquid") {
-      try {
-        const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
-        const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
-        const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
-        const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
-        const infoClient = new hl.InfoClient({ transport });
-        const isSpot = (cfg.priceSource === "hyperliquid_spot");
-        const base   = cfg.symbol.split("/")[0];
-        let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
-        if (isSpot) {
-          const m = await infoClient.spotMeta();
-          for (let i = 0; i < m.universe.length; i++) {
-            const baseToken = m.tokens[m.universe[i].tokens[0]];
-            if (baseToken?.name === base) {
-              assetIndex = 10000 + m.universe[i].index;
-              szDecimals = baseToken.szDecimals ?? 4; maxSig = 8;
-              coinId = m.universe[i].name; break;
-            }
-          }
-        } else {
-          const m = await infoClient.meta();
-          for (let i = 0; i < m.universe.length; i++) {
-            if (m.universe[i].name === base) {
-              assetIndex = i; szDecimals = m.universe[i].szDecimals ?? 4;
-              maxSig = 5; coinId = m.universe[i].name; break;
-            }
-          }
-        }
-        if (assetIndex < 0) throw new Error(`Asset ${base} not found`);
-        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot };
-        bot.exchange = exchange;
-      } catch (e) {
-        log(exchangeKey, `Hyperliquid SDK prewarm failed: ${e.message}`, "warn");
-      }
+      await ensureHlCache(exchangeKey, bot, cfg, exchange);
     }
 
     const tick       = await getTickerSnapshot(exchange, cfg.symbol, 15000, bot);
@@ -1723,8 +1691,12 @@ async function hyperliquidNativeTicker(bot, timeoutMs = 5000) {
 }
 
 async function getTickerSnapshot(exchange, symbol, timeoutMs = 15000, bot = null) {
-  // Hyperliquid fast path: use native SDK (CCXT's fetchTicker is broken for HL)
-  if (bot && bot.exchangeKey === "hyperliquid" && bot.hlCache) {
+  // Hyperliquid ALWAYS uses the native SDK (CCXT's fetchTicker is broken for
+  // HL, and HIP-3 symbols aren't in CCXT's market list at all). Never fall
+  // back to CCXT here — if the cache isn't ready, raise a clear error instead
+  // of CCXT's misleading "does not have market symbol".
+  if (bot && bot.exchangeKey === "hyperliquid") {
+    if (!bot.hlCache) throw new Error("Hyperliquid SDK cache not ready");
     return await hyperliquidNativeTicker(bot, Math.min(timeoutMs, 6000));
   }
   const ticker = await Promise.race([
@@ -1792,6 +1764,114 @@ async function emergencyStop(botId, reason) {
 // ============================================================
 //  GRID LOOP (per exchange)
 // ============================================================
+// Build (or rebuild) the Hyperliquid native-SDK cache on a bot. Idempotent —
+// safe to call again if a prior prewarm failed (e.g. a transient network error
+// at start), so a bot is never left permanently without hlCache (which would
+// make it fall back to CCXT — broken for HL — on every tick). Returns true on
+// success. Pass `exchange` to also (re)bind bot.exchange; omit on self-heal.
+async function ensureHlCache(botId, bot, cfg, exchange = null) {
+  try {
+    const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
+    const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+    const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
+    const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
+    const infoClient = new hl.InfoClient({ transport });
+
+    const isSpot = (cfg.priceSource === "hyperliquid_spot");
+    const isHip3 = (cfg.priceSource === "hyperliquid_hip3");
+    const hipDex = isHip3 ? (cfg.hipDex || "xyz") : null;
+    const base   = cfg.symbol.split("/")[0];
+    let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
+
+    if (isSpot) {
+      const m = await infoClient.spotMeta();
+      for (let i = 0; i < m.universe.length; i++) {
+        const baseToken = m.tokens[m.universe[i].tokens[0]];
+        if (baseToken?.name === base) {
+          assetIndex = 10000 + m.universe[i].index;
+          szDecimals = baseToken.szDecimals ?? 4;
+          maxSig = 8;
+          coinId = m.universe[i].name;
+          break;
+        }
+      }
+    } else if (isHip3) {
+      // HIP-3 (builder-deployed) perp dex. The dex is encoded into the asset
+      // id: assetId = 100000 + perpDexIndex*10000 + localIndex (no "dex" field
+      // on the order action). See SymbolConverter._processBuilderDexResult.
+      const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
+      const mr = await fetch(`https://${hlHost}/info`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "meta", dex: hipDex }),
+      });
+      if (!mr.ok) throw new Error(`HIP-3 meta fetch failed: HTTP ${mr.status}`);
+      const m = await mr.json();
+      const allAssets  = m.universe || [];
+      const dexPrefix  = hipDex + ":";
+      const dexOnly    = allAssets.filter(u => u.name?.startsWith(dexPrefix));
+      const searchList = dexOnly.length > 0 ? dexOnly : allAssets;
+      const baseSuffix = base.includes(":") ? base.split(":").slice(1).join(":") : base;
+      let localIndex = -1;
+      for (let i = 0; i < searchList.length; i++) {
+        const nm = searchList[i].name || "";
+        if (nm === base || nm === baseSuffix || nm === dexPrefix + baseSuffix) {
+          localIndex = i;
+          szDecimals = searchList[i].szDecimals ?? 4;
+          maxSig = 5;
+          coinId = nm.startsWith(dexPrefix) ? nm : dexPrefix + nm;
+          break;
+        }
+      }
+      let perpDexIndex = -1;
+      const pdr = await fetch(`https://${hlHost}/info`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "perpDexs" }),
+      });
+      if (pdr.ok) {
+        const pds = await pdr.json();
+        if (Array.isArray(pds)) {
+          for (let k = 0; k < pds.length; k++) {
+            if (pds[k]?.name === hipDex) { perpDexIndex = k; break; }
+          }
+        }
+      }
+      if (localIndex >= 0 && perpDexIndex >= 0) {
+        assetIndex = 100000 + perpDexIndex * 10000 + localIndex;
+      }
+      log(botId, `[HIP-3 meta] localIdx=${localIndex} perpDexIdx=${perpDexIndex} assetId=${assetIndex} coin=${coinId} szDec=${szDecimals}`, "info");
+    } else {
+      let m;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { m = await infoClient.meta(); break; }
+        catch (me) {
+          if (/429|too many/i.test(me.message || "") && attempt < 2) {
+            log(botId, `Pre-warm meta() rate-limited, retrying in 4s (attempt ${attempt+1}/3)`, "warn");
+            await new Promise(r => setTimeout(r, 4000));
+          } else throw me;
+        }
+      }
+      for (let i = 0; i < m.universe.length; i++) {
+        if (m.universe[i].name === base) {
+          assetIndex = i;
+          szDecimals = m.universe[i].szDecimals ?? 4;
+          maxSig = 5;
+          coinId = m.universe[i].name;
+          break;
+        }
+      }
+    }
+
+    if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
+    bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
+    if (exchange) bot.exchange = exchange;  // also needed for non-HL paths
+    log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
+    return true;
+  } catch (e) {
+    log(botId, `Hyperliquid SDK pre-warm failed: ${e.message}`, "warn");
+    return false;
+  }
+}
+
 async function gridLoop(botId) {
   const bot = bots[botId];
   if (!bot || !bot.running) return;
@@ -1818,6 +1898,16 @@ async function gridLoop(botId) {
   }
 
   try {
+    // Self-heal: if a Hyperliquid bot is running without its native cache (a
+    // transient prewarm failure at start), rebuild it now. Without this the
+    // bot would fall back to CCXT — broken for HL, and HIP-3 symbols aren't
+    // even in CCXT's market list — and spam "does not have market symbol"
+    // errors every tick while never trading.
+    if (exchangeKey === "hyperliquid" && !bot.hlCache) {
+      const ok = await ensureHlCache(botId, bot, bot.config);
+      if (!ok) { return; }   // still not ready — retry next tick (finally clears the lock)
+    }
+
     // One ticker fetch per loop — 8s timeout (re-entrancy guard handles stacking)
     // Pass bot so Hyperliquid uses native SDK (CCXT fetchTicker is broken for HL)
     const tick = await getTickerSnapshot(bot.exchange, bot.config.symbol, 8000, bot);
@@ -3686,111 +3776,16 @@ app.post("/api/start", async (req, res) => {
     // For Hyperliquid: pre-warm the native SDK BEFORE the startup ticker,
     // because CCXT's fetchTicker is broken for Hyperliquid (consistent
     // timeouts). Once hlCache exists, getTickerSnapshot uses native l2Book.
+    // If this fails (transient network error), gridLoop self-heals by calling
+    // ensureHlCache again on the next tick.
     if (exchangeKey === "hyperliquid") {
-      try {
-        const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
-        const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
-        const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
-        const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
-        const infoClient = new hl.InfoClient({ transport });
-
-        const isSpot = (cfg.priceSource === "hyperliquid_spot");
-        const isHip3 = (cfg.priceSource === "hyperliquid_hip3");
-        const hipDex = isHip3 ? (cfg.hipDex || "xyz") : null;
-        const base   = cfg.symbol.split("/")[0];
-        let assetIndex = -1, szDecimals = 4, maxSig = 5, coinId = base;
-        if (isSpot) {
-          const m = await infoClient.spotMeta();
-          for (let i = 0; i < m.universe.length; i++) {
-            const baseToken = m.tokens[m.universe[i].tokens[0]];
-            if (baseToken?.name === base) {
-              assetIndex = 10000 + m.universe[i].index;
-              szDecimals = baseToken.szDecimals ?? 4;
-              maxSig = 8;
-              coinId = m.universe[i].name;
-              break;
-            }
-          }
-        } else if (isHip3) {
-          // HIP-3 (builder-deployed) perp dex. Two-step resolution:
-          //   1. meta?dex=<name> gives the per-dex universe and the LOCAL index of
-          //      the asset within that dex.
-          //   2. perpDexs gives the array of all dexes; the dex's POSITION in that
-          //      array (perpDexIndex) determines the asset-id offset.
-          // The Exchange API has NO "dex" field on the order/cancel action — the dex
-          // is encoded into the asset id itself:
-          //      assetId = 100000 + perpDexIndex * 10000 + localIndex
-          // (see SymbolConverter._processBuilderDexResult in the SDK).
-          const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
-          const mr = await fetch(`https://${hlHost}/info`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: "meta", dex: hipDex }),
-          });
-          if (!mr.ok) throw new Error(`HIP-3 meta fetch failed: HTTP ${mr.status}`);
-          const m = await mr.json();
-          const allAssets  = m.universe || [];
-          const dexPrefix  = hipDex + ":";
-          const dexOnly    = allAssets.filter(u => u.name?.startsWith(dexPrefix));
-          const searchList = dexOnly.length > 0 ? dexOnly : allAssets;
-          const baseSuffix = base.includes(":") ? base.split(":").slice(1).join(":") : base;
-          let localIndex = -1;
-          for (let i = 0; i < searchList.length; i++) {
-            const nm = searchList[i].name || "";
-            if (nm === base || nm === baseSuffix || nm === dexPrefix + baseSuffix) {
-              localIndex = i;
-              szDecimals = searchList[i].szDecimals ?? 4;
-              maxSig = 5;
-              coinId = nm.startsWith(dexPrefix) ? nm : dexPrefix + nm;
-              break;
-            }
-          }
-          // Resolve perpDexIndex (position of this dex in the perpDexs array).
-          let perpDexIndex = -1;
-          const pdr = await fetch(`https://${hlHost}/info`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: "perpDexs" }),
-          });
-          if (pdr.ok) {
-            const pds = await pdr.json();
-            if (Array.isArray(pds)) {
-              for (let k = 0; k < pds.length; k++) {
-                if (pds[k]?.name === hipDex) { perpDexIndex = k; break; }
-              }
-            }
-          }
-          if (localIndex >= 0 && perpDexIndex >= 0) {
-            assetIndex = 100000 + perpDexIndex * 10000 + localIndex;
-          }
-          log(botId, `[HIP-3 meta] localIdx=${localIndex} perpDexIdx=${perpDexIndex} assetId=${assetIndex} coin=${coinId} szDec=${szDecimals}`, "info");
-        } else {
-          let m;
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try { m = await infoClient.meta(); break; }
-            catch (me) {
-              if (/429|too many/i.test(me.message || "") && attempt < 2) {
-                log(botId, `Pre-warm meta() rate-limited, retrying in 4s (attempt ${attempt+1}/3)`, "warn");
-                await new Promise(r => setTimeout(r, 4000));
-              } else throw me;
-            }
-          }
-          for (let i = 0; i < m.universe.length; i++) {
-            if (m.universe[i].name === base) {
-              assetIndex = i;
-              szDecimals = m.universe[i].szDecimals ?? 4;
-              maxSig = 5;
-              coinId = m.universe[i].name;
-              break;
-            }
-          }
-        }
-        if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
-        bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
-        bot.exchange = exchange;  // also needed for non-HL paths
-        log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
-      } catch (e) {
-        log(botId, `Hyperliquid SDK pre-warm failed: ${e.message}`, "warn");
-      }
+      await ensureHlCache(botId, bot, cfg, exchange);
     }
+
+    // Resume flags (needed early so a failed startup ticker can fall back to
+    // saved state instead of aborting the whole resume).
+    const isResume    = req.body?.resume === true;
+    const resumeState = req.body?._resumeState || null;
 
     // Startup ticker. For Hyperliquid uses native l2Book (CCXT fetchTicker
     // is broken). Retry once if it times out.
@@ -3800,8 +3795,19 @@ app.post("/api/start", async (req, res) => {
     } catch (e) {
       if (/timeout/i.test(e.message)) {
         log(botId, `First ticker fetch timed out, retrying once...`, "warn");
-        tick = await getTickerSnapshot(exchange, cfg.symbol, 20000, bot);
-      } else throw e;
+        try { tick = await getTickerSnapshot(exchange, cfg.symbol, 20000, bot); }
+        catch (e2) { if (!(isResume && resumeState)) throw e2; }
+      } else if (!(isResume && resumeState)) {
+        throw e;
+      }
+    }
+    if (!tick) {
+      // Resume with no live price yet (e.g. Hyperliquid cache not ready due to
+      // a transient prewarm failure). Use saved state and let gridLoop's
+      // self-heal rebuild hlCache; live prices resume on the next tick.
+      const px = resumeState?.lastPrice ?? resumeState?.entryPrice ?? 0;
+      tick = { last: px, bid: px, ask: px };
+      log(botId, `Startup ticker unavailable — resuming from saved price $${px}, will self-heal`, "warn");
     }
     let entryPrice = tick.last;
     let upperLimit = parseFloat((entryPrice + cfg.distance).toFixed(8));
@@ -3843,9 +3849,7 @@ app.post("/api/start", async (req, res) => {
 
     // True-continuation resume: restore in-memory state and DO NOT touch
     // open orders. Frontend never sets these — only resumeSessions does.
-    const isResume   = req.body?.resume === true;
-    const resumeState = req.body?._resumeState || null;
-
+    // (isResume / resumeState are declared above, before the startup ticker.)
     if (isResume && resumeState) {
       if (Array.isArray(resumeState.openOrders))          bot.openOrders          = resumeState.openOrders;
       if (Array.isArray(resumeState.pendingRoundTrips))   bot.pendingRoundTrips   = resumeState.pendingRoundTrips;
