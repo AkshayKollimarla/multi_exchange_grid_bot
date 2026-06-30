@@ -1629,7 +1629,7 @@ function buildExchange(priceSource, apiKey, secretKey) {
     }
 
     if (isHip3) {
-      console.warn("[HYPERLIQUID HIP-3] HIP-3 markets require a 'dex' parameter on each order. Not yet supported by this bot — falling back to perpetuals.");
+      console.log("[HYPERLIQUID HIP-3] 🟣 HIP-3 perp dex mode — orders route via the native SDK with the dex-encoded asset id.");
     }
     return ex;
   }
@@ -1750,11 +1750,19 @@ async function getMarketInfo(exchange, symbol, bot = null) {
     const tickSize = szDec >= 4 ? 0.0001 : 0.001;
     return { tickSize, stepSize, market: {} };
   }
-  await exchange.loadMarkets();
-  const market   = exchange.market(symbol);
-  const tickSize = market.precision?.price  || 0.01;
-  const stepSize = market.precision?.amount || 0.001;
-  return { tickSize, stepSize, market };
+  // CCXT path (Binance/Deribit, or HL without a warmed cache). HIP-3 symbols
+  // (e.g. xyz:SPCX/USDC:USDC) are NOT in CCXT's Hyperliquid market list, so
+  // exchange.market() throws for them. Never let that crash the grid loop —
+  // fall back to safe defaults so fill handling / round trips keep working.
+  try {
+    await exchange.loadMarkets();
+    const market   = exchange.market(symbol);
+    const tickSize = market.precision?.price  || 0.01;
+    const stepSize = market.precision?.amount || 0.001;
+    return { tickSize, stepSize, market };
+  } catch (e) {
+    return { tickSize: 0.001, stepSize: 0.001, market: {} };
+  }
 }
 
 // ============================================================
