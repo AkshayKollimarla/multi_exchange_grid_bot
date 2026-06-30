@@ -389,14 +389,25 @@ function tgSendDocument(chatId, filename, contentBuffer, caption) {
 }
 
 // ── Telegram menus ──────────────────────────────────────────
+// Count running bots on an exchange (legacy slot + dynamic instances).
+function runningCount(exchangeKey) {
+  return botsForExchange(exchangeKey).filter(b => b.running).length;
+}
 function exchangeSelectorMenu(action) {
+  // Show a 🟢/🔴 dot per exchange reflecting ANY running bot, plus a count
+  // badge when more than one bot runs on that exchange.
+  const lbl = (emoji, name, key) => {
+    const n = runningCount(key);
+    const dot = n > 0 ? "🟢" : "🔴";
+    return `${emoji} ${name} ${dot}${n > 1 ? ` (${n})` : ""}`;
+  };
   return [
     [
-      {text:`🟦 Binance ${bots.binance.running?"🟢":"🔴"}`, callback_data:`pick_binance_${action}`},
-      {text:`🟧 Deribit ${bots.deribit.running?"🟢":"🔴"}`, callback_data:`pick_deribit_${action}`},
+      {text:lbl("🟦","Binance","binance"),         callback_data:`pick_binance_${action}`},
+      {text:lbl("🟧","Deribit","deribit"),         callback_data:`pick_deribit_${action}`},
     ],
     [
-      {text:`🟣 Hyperliquid ${bots.hyperliquid.running?"🟢":"🔴"}`, callback_data:`pick_hyperliquid_${action}`},
+      {text:lbl("🟣","Hyperliquid","hyperliquid"), callback_data:`pick_hyperliquid_${action}`},
     ],
     [{text:"⬅ Back to Menu", callback_data:"main_menu"}],
   ];
@@ -411,6 +422,19 @@ function mainMenu() {
   ];
 }
 
+// Control-panel header showing each exchange's running-bot count (so multiple
+// bots on one exchange — e.g. SPCX + HYPE on Hyperliquid — are visible).
+function panelStatusText() {
+  const line = (emoji, name, key) => {
+    const n = runningCount(key);
+    return `${emoji} ${name}: <b>${n > 0 ? `🟢 ${n} RUNNING` : "🔴 STOPPED"}</b>`;
+  };
+  return `👋 <b>Grid Bot Control Panel</b>\n\n` +
+    `${line("🟦","Binance","binance")}\n` +
+    `${line("🟧","Deribit","deribit")}\n` +
+    `${line("🟣","Hyperliquid","hyperliquid")}\n\nChoose an action:`;
+}
+
 function exchangeMenu(exchangeKey) {
   const e = exchangeKey;
   const tag = EXCHANGE_TAG[e];
@@ -422,16 +446,61 @@ function exchangeMenu(exchangeKey) {
   ];
 }
 
-function tgStatusText(exchangeKey) {
-  const s   = bots[exchangeKey];
-  const tag = EXCHANGE_TAG[exchangeKey];
+// When several bots run on one exchange, let the user pick which one. The
+// callback_data is "bot:<botId>:<action>" — ":" delimited because dynamic
+// botIds (e.g. "hyperliquid_2") contain underscores.
+function botSelectorMenu(exchangeKey, action, list) {
+  const rows = list.map(b => {
+    const dot = b.running ? "🟢" : "🔴";
+    return [{ text: `${coinShort(b.config?.symbol)} ${dot}`, callback_data: `bot:${b.botId}:${action}` }];
+  });
+  rows.push([{ text: "⬅ Back to Menu", callback_data: "main_menu" }]);
+  return rows;
+}
+
+// Per-bot action menu (shown with a single bot's status).
+function botMenu(botId) {
+  const b = bots[botId];
+  const e = b?.exchangeKey;
+  return [
+    [{text:"🔄 Refresh", callback_data:`bot:${botId}:status`}, {text:"⏹ Stop", callback_data:`bot:${botId}:stop`}],
+    [{text:"💼 Portfolio", callback_data:`do_portfolio_${e}`}, {text:"📈 PnL Report", callback_data:`do_report_${e}`}],
+    [{text:"⬅ Back", callback_data:"act_status"}],
+  ];
+}
+
+// Short coin label from a stored symbol:
+//   "HYPE/USDC:USDC"     -> "HYPE"
+//   "xyz:SPCX/USDC:USDC" -> "SPCX"
+//   "BTC-PERPETUAL"      -> "BTC-PERPETUAL"
+function coinShort(sym) {
+  if (!sym) return "—";
+  let base = String(sym).split("/")[0];
+  if (base.includes(":")) base = base.split(":").pop();
+  return base;
+}
+
+// All bot instances (legacy slot + dynamic) for an exchange family. Running
+// bots first. Used to drive the Telegram per-bot selector when several coins
+// run on the same exchange.
+function botsForExchange(exchangeKey) {
+  return listBots()
+    .filter(b => b.exchangeKey === exchangeKey)
+    .sort((a, b) => (b.running ? 1 : 0) - (a.running ? 1 : 0));
+}
+
+function tgStatusText(botId) {
+  const s   = bots[botId];
+  if (!s) return "Bot not found (it may have been stopped).";
+  const tag = EXCHANGE_TAG[s.exchangeKey] || s.exchangeKey;
   const cfg = s.config;
-  if (!s.running) return `<b>${tag} — 🔴 STOPPED</b>\n\nBot is not running.\nTap 🔄 Restart to bring it back.`;
-  const st = s.stats || {};
+  const coin = coinShort(cfg?.symbol);
+  if (!s.running) return `<b>${tag} ${coin} — 🔴 STOPPED</b>\n\nBot is not running.\nTap 🔄 Restart to bring it back.`;
+  const st = calcLiveStats(botId);
   const runtime = s.startedAt ? formatDuration(Date.now() - s.startedAt) : "—";
   const netPnl  = st.netPnl ?? st.totalPnl ?? 0;
   const netSign = netPnl >= 0 ? "+" : "";
-  return `<b>${tag} — 🟢 RUNNING</b>
+  return `<b>${tag} ${coin} — 🟢 RUNNING</b>
 
 📌 <b>Symbol :</b> <code>${cfg?.symbol||"—"}</code>
 ⏱ <b>Runtime:</b> <code>${runtime}</code>
@@ -1245,15 +1314,23 @@ async function handleTgUpdate(update) {
     const data = cb.data || "";
 
     if (data === "main_menu") {
-      await tgEdit(fromId, msgId,
-        `👋 <b>Grid Bot Control Panel</b>\n\n🟦 Binance: <b>${bots.binance.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟧 Deribit: <b>${bots.deribit.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n\nChoose an action:`,
-        mainMenu());
+      await tgEdit(fromId, msgId, panelStatusText(), mainMenu());
       return;
     }
     if (data.startsWith("act_")) {
       const action = data.slice(4);
       if (action === "help") { await tgEdit(fromId, msgId, tgHelpText(), mainMenu()); return; }
       await tgEdit(fromId, msgId, `Pick an exchange for <b>${action.toUpperCase()}</b>:`, exchangeSelectorMenu(action));
+      return;
+    }
+    // Per-bot action: "bot:<botId>:<action>" (":" delimited because dynamic
+    // botIds like "hyperliquid_2" contain underscores).
+    if (data.startsWith("bot:")) {
+      const idx1 = data.indexOf(":");
+      const idx2 = data.lastIndexOf(":");
+      const botId  = data.slice(idx1 + 1, idx2);
+      const action = data.slice(idx2 + 1);
+      await runBotAction(fromId, msgId, botId, action);
       return;
     }
     if (data.startsWith("pick_")) {
@@ -1349,9 +1426,7 @@ async function handleTgUpdate(update) {
     switch (cmd) {
       case "/start":
       case "/menu":
-        await tgSend(fromId,
-          `👋 <b>Grid Bot Control Panel</b>\n\n🟦 Binance: <b>${bots.binance.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟧 Deribit: <b>${bots.deribit.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n🟣 Hyperliquid: <b>${bots.hyperliquid.running?"🟢 RUNNING":"🔴 STOPPED"}</b>\n\nChoose an action:`,
-          mainMenu()); break;
+        await tgSend(fromId, panelStatusText(), mainMenu()); break;
       case "/status":    await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("status")); break;
       case "/portfolio": await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("portfolio")); break;
       case "/report":    await tgSend(fromId, "Pick an exchange:", exchangeSelectorMenu("report")); break;
@@ -1370,9 +1445,18 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
   const tag = EXCHANGE_TAG[exchangeKey];
 
   switch (action) {
-    case "status":
-      await tgEdit(chatId, msgId, tgStatusText(exchangeKey), exchangeMenu(exchangeKey));
+    case "status": {
+      // Multiple bots on this exchange (e.g. SPCX + HYPE on Hyperliquid) →
+      // let the user pick which one. One bot → show it directly.
+      const list = botsForExchange(exchangeKey).filter(b => b.running);
+      if (list.length > 1) {
+        await tgEdit(chatId, msgId, `${tag} — pick a bot:`, botSelectorMenu(exchangeKey, "status", list));
+        return;
+      }
+      const targetId = list[0]?.botId || exchangeKey;
+      await tgEdit(chatId, msgId, tgStatusText(targetId), botMenu(targetId));
       return;
+    }
     case "portfolio": {
       await tgEdit(chatId, msgId, `⏳ Fetching ${tag} balances...`, null);
       let txt;
@@ -1406,24 +1490,57 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
       }
       return;
     }
-    case "stop":
-      if (!bot.running) {
-        await tgEdit(chatId, msgId, `ℹ️ ${tag} is already stopped.`, exchangeMenu(exchangeKey));
+    case "stop": {
+      // If several bots run on this exchange, pick which one to stop.
+      const list = botsForExchange(exchangeKey).filter(b => b.running);
+      if (list.length > 1) {
+        await tgEdit(chatId, msgId, `${tag} — pick a bot to stop:`, botSelectorMenu(exchangeKey, "stop", list));
         return;
       }
-      clearInterval(bot.loopTimer); bot.running = false;
-      try { await cancelAllOrders(exchangeKey); } catch(e){}
-      db.clearSession(exchangeKey);
-      log(exchangeKey, "Telegram stop", "warn");
-      broadcast("state", buildStateSnapshot());
-      await tgEdit(chatId, msgId,
-        `🛑 <b>${tag} Stopped</b>\n\nSymbol: <code>${bot.config?.symbol||"—"}</code>\nLast Price: <code>$${bot.lastPrice||"—"}</code>\nTime: ${new Date().toLocaleString()}`,
-        exchangeMenu(exchangeKey));
+      const targetId = list[0]?.botId || exchangeKey;
+      await stopBotById(chatId, msgId, targetId);
       return;
+    }
     case "restart":
       tgConv[chatId] = { step: "awaiting_params", exchangeKey };
       await tgEdit(chatId, msgId, restartPromptText(exchangeKey, bot.config),
         [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
+      return;
+    default:
+      await tgEdit(chatId, msgId, "Unknown action.", mainMenu());
+  }
+}
+
+// Stop one specific bot instance (by botId, not exchange family).
+async function stopBotById(chatId, msgId, botId) {
+  const bot = bots[botId];
+  if (!bot) { await tgEdit(chatId, msgId, "Bot not found (it may have stopped).", mainMenu()); return; }
+  const tag  = EXCHANGE_TAG[bot.exchangeKey] || bot.exchangeKey;
+  const coin = coinShort(bot.config?.symbol);
+  if (!bot.running) {
+    await tgEdit(chatId, msgId, `ℹ️ ${tag} ${coin} is already stopped.`, mainMenu());
+    return;
+  }
+  clearInterval(bot.loopTimer); bot.running = false;
+  try { await cancelAllOrders(botId); } catch (e) {}
+  db.clearSession(botId);
+  log(botId, "Telegram stop", "warn");
+  broadcast("state", buildStateSnapshot());
+  await tgEdit(chatId, msgId,
+    `🛑 <b>${tag} ${coin} Stopped</b>\n\nSymbol: <code>${bot.config?.symbol||"—"}</code>\nLast Price: <code>$${bot.lastPrice||"—"}</code>\nTime: ${new Date().toLocaleString()}`,
+    mainMenu());
+}
+
+// Per-bot action from the bot selector ("bot:<botId>:<action>").
+async function runBotAction(chatId, msgId, botId, action) {
+  const bot = bots[botId];
+  if (!bot) { await tgEdit(chatId, msgId, "Bot not found (it may have stopped).", mainMenu()); return; }
+  switch (action) {
+    case "status":
+      await tgEdit(chatId, msgId, tgStatusText(botId), botMenu(botId));
+      return;
+    case "stop":
+      await stopBotById(chatId, msgId, botId);
       return;
     default:
       await tgEdit(chatId, msgId, "Unknown action.", mainMenu());
