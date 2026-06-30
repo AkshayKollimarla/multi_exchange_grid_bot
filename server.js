@@ -2853,8 +2853,14 @@ async function hyperliquidNativeCancel(bot, orderIds) {
           body: JSON.stringify({ type: "meta", dex: hipDex }),
         });
         const m = await mr.json();
-        for (let i = 0; i < (m.universe || []).length; i++) {
-          if (m.universe[i].name === base) { assetIndex = i; break; }
+        const allA = m.universe || [];
+        const dexPfx = hipDex + ":";
+        const dexA   = allA.filter(u => u.name?.startsWith(dexPfx));
+        const srcA   = dexA.length > 0 ? dexA : allA;
+        const sfx    = base.includes(":") ? base.split(":").slice(1).join(":") : base;
+        for (let i = 0; i < srcA.length; i++) {
+          const nm = srcA[i].name || "";
+          if (nm === base || nm === sfx || nm === dexPfx + sfx) { assetIndex = i; break; }
         }
       } else {
         const m = await infoClient.meta();
@@ -3605,7 +3611,11 @@ app.post("/api/start", async (req, res) => {
             }
           }
         } else if (isHip3) {
-          // HIP-3 perp dex — fetch market meta with dex parameter via raw fetch
+          // HIP-3 perp dex — fetch market meta with dex parameter via raw fetch.
+          // The response may be a COMBINED universe (main HL + dex assets) where
+          // dex assets have names prefixed "xyz:". For order placement the xyz dex
+          // clearinghouse uses LOCAL indices (position within dex-only subset),
+          // so we filter to dex-prefixed assets and find the local index.
           const hlHost = useTestnet ? "api.hyperliquid-testnet.xyz" : "api.hyperliquid.xyz";
           const mr = await fetch(`https://${hlHost}/info`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -3613,15 +3623,26 @@ app.post("/api/start", async (req, res) => {
           });
           if (!mr.ok) throw new Error(`HIP-3 meta fetch failed: HTTP ${mr.status}`);
           const m = await mr.json();
-          for (let i = 0; i < (m.universe || []).length; i++) {
-            if (m.universe[i].name === base) {
+          const allAssets  = m.universe || [];
+          const dexPrefix  = hipDex + ":";
+          // Dex-only subset: assets whose name starts with "xyz:" (or whichever dex)
+          const dexOnly    = allAssets.filter(u => u.name?.startsWith(dexPrefix));
+          // We may receive a combined (all HL + xyz) or a dex-only universe.
+          // If dexOnly is a strict subset, use it for local indices.
+          const searchList = dexOnly.length > 0 ? dexOnly : allAssets;
+          // Accept match on full name ("xyz:SPCX") OR suffix ("SPCX")
+          const baseSuffix = base.includes(":") ? base.split(":").slice(1).join(":") : base;
+          for (let i = 0; i < searchList.length; i++) {
+            const nm = searchList[i].name || "";
+            if (nm === base || nm === baseSuffix || nm === dexPrefix + baseSuffix) {
               assetIndex = i;
-              szDecimals = m.universe[i].szDecimals ?? 4;
+              szDecimals = searchList[i].szDecimals ?? 4;
               maxSig = 5;
-              coinId = m.universe[i].name;
+              coinId = nm.startsWith(dexPrefix) ? nm : dexPrefix + nm;
               break;
             }
           }
+          log(botId, `[HIP-3 meta] total=${allAssets.length} dex_only=${dexOnly.length} base=${base} localIdx=${assetIndex} coin=${coinId}`, "info");
         } else {
           let m;
           for (let attempt = 0; attempt < 3; attempt++) {
