@@ -1738,7 +1738,18 @@ async function getTickerSnapshot(exchange, symbol, timeoutMs = 15000, bot = null
   };
 }
 
-async function getMarketInfo(exchange, symbol) {
+async function getMarketInfo(exchange, symbol, bot = null) {
+  // For Hyperliquid (all variants incl. HIP-3): skip CCXT market lookup.
+  // HIP-3 symbols like xyz:SPCX/USDC:USDC are not in CCXT's HL market list.
+  // Precision comes from the SDK meta prewarm stored in bot.hlCache.
+  if (bot?.hlCache) {
+    const szDec    = bot.hlCache.szDecimals ?? 4;
+    const stepSize = parseFloat(Math.pow(10, -szDec).toFixed(szDec));
+    // HL uses 5 sig figs for prices. For assets ~$10-$9999 this is 0.001;
+    // for sub-dollar assets 0.0001. Use szDec as a rough proxy.
+    const tickSize = szDec >= 4 ? 0.0001 : 0.001;
+    return { tickSize, stepSize, market: {} };
+  }
   await exchange.loadMarkets();
   const market   = exchange.market(symbol);
   const tickSize = market.precision?.price  || 0.01;
@@ -2196,7 +2207,7 @@ async function placeTargetOrder(botId, filledSide, fillPrice, fillQty) {
   if (!bot) return;
   const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
-  const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+  const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
 
   const targetSide  = filledSide === "sell" ? "buy" : "sell";
   const targetPrice = filledSide === "sell"
@@ -2308,7 +2319,7 @@ async function maintainGrid(botId, currentPrice) {
   const exchangeKey = bot.exchangeKey;
   if (!bot.running) return;
   const cfg = bot.config;
-  const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol);
+  const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
   const qty = roundQty(cfg.qtyPerStep, stepSize);
   const PER_SIDE = 3;            // exactly 3 above + 3 below = 6 total
   const isDeribit = exchangeKey === "deribit";
