@@ -1195,12 +1195,37 @@
   <div class="page" style="align-items:start;">
     <!-- Add account -->
     <div class="card">
-      <div class="card-header">➕ Add Hyperliquid Account</div>
+      <div class="card-header">➕ Add Account</div>
       <div class="card-body">
-        <div class="note">🔐 Saved to your MySQL database. Use the <b>API wallet</b> private key — it can place orders but cannot withdraw.</div>
+        <div class="field">
+          <label>Exchange</label>
+          <select id="accExchange" onchange="onAccExchangeChange()">
+            <option value="hyperliquid">🟣 Hyperliquid</option>
+            <option value="binance">🟦 Binance</option>
+            <option value="deribit">🟧 Deribit</option>
+          </select>
+        </div>
         <div class="field"><label>Account Name</label><input type="text" id="accName" placeholder="e.g. Hype Main" autocomplete="off"/></div>
-        <div class="field"><label>Wallet Address (public)</label><input type="text" id="accWallet" placeholder="0x..." autocomplete="off"/></div>
-        <div class="field"><label>API Wallet Private Key</label><input type="password" id="accKey" placeholder="0x..." autocomplete="new-password"/></div>
+
+        <!-- Hyperliquid credentials -->
+        <div id="accFields-hyperliquid">
+          <div class="note">🔐 Use the <b>API wallet</b> private key — it can place orders but cannot withdraw.</div>
+          <div class="field"><label>Wallet Address (public)</label><input type="text" id="accWallet" placeholder="0x..." autocomplete="off"/></div>
+          <div class="field"><label>API Wallet Private Key</label><input type="password" id="accKey" placeholder="0x..." autocomplete="new-password"/></div>
+        </div>
+        <!-- Binance credentials -->
+        <div id="accFields-binance" style="display:none;">
+          <div class="note">🔐 Create an API key with <b>trade</b> permission (not withdrawal).</div>
+          <div class="field"><label>API Key</label><input type="text" id="accApiKey" placeholder="API key" autocomplete="off"/></div>
+          <div class="field"><label>Secret Key</label><input type="password" id="accApiSecret" placeholder="Secret key" autocomplete="new-password"/></div>
+        </div>
+        <!-- Deribit credentials -->
+        <div id="accFields-deribit" style="display:none;">
+          <div class="note">🔐 A Deribit API client with <b>trade</b> scope.</div>
+          <div class="field"><label>Client ID</label><input type="text" id="accClientId" placeholder="Client ID" autocomplete="off"/></div>
+          <div class="field"><label>Client Secret</label><input type="password" id="accClientSecret" placeholder="Client secret" autocomplete="new-password"/></div>
+        </div>
+
         <div class="btn-row"><button class="btn btn-start" id="accAddBtn" onclick="addAccount()">＋ Add Account</button></div>
         <div id="accMsg" style="font-size:12px;margin-top:8px;"></div>
       </div>
@@ -1516,6 +1541,7 @@ function renderBotsBar() {
   add.onclick = () => {
     focusedBotId = null;
     newBotMode = true;
+    showSection("config");   // always jump to Bot Configuration
     // Reset the start button explicitly
     const sb = document.getElementById("startBtn");
     const xb = document.getElementById("stopBtn");
@@ -1523,7 +1549,7 @@ function renderBotsBar() {
     if (xb) { xb.disabled = true; }
     renderBotsBar();
     renderActiveExchange();
-    document.querySelector(".page")?.scrollIntoView({ behavior:"smooth" });
+    document.getElementById("sec-config")?.scrollIntoView({ behavior:"smooth" });
   };
   bar.appendChild(add);
   syncActiveBotUI();   // keep the sidebar "Active Bot" badge + picker in sync
@@ -1597,12 +1623,13 @@ async function loadAccounts() {
       tb.innerHTML = `<tr><td colspan="4" class="empty-td">No accounts yet — add one on the left</td></tr>`;
       return;
     }
+    const ICON = { hyperliquid:"🟣", binance:"🟦", deribit:"🟧" };
     tb.innerHTML = list.map(a => {
-      const w = a.walletAddress || "";
-      const masked = w.length > 12 ? `${w.slice(0,6)}…${w.slice(-4)}` : w;
+      const idv = a.identifier || a.walletAddress || "";
+      const masked = idv.length > 14 ? `${idv.slice(0,6)}…${idv.slice(-4)}` : idv;
       return `<tr>
         <td><b>${escapeHtml(a.name)}</b></td>
-        <td>🟣 ${escapeHtml(a.exchange || "hyperliquid")}</td>
+        <td>${ICON[a.exchange]||""} ${escapeHtml(a.exchange || "hyperliquid")}</td>
         <td style="font-family:var(--font-mono,monospace);font-size:11px;">${escapeHtml(masked)}</td>
         <td><button class="btn-refresh" style="color:var(--red,#e5484d);" onclick="deleteAccount(${a.id})">✕ Delete</button></td>
       </tr>`;
@@ -1616,25 +1643,41 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 
+// Show only the credential fields for the selected exchange.
+function onAccExchangeChange() {
+  const ex = document.getElementById("accExchange").value;
+  for (const e of ["hyperliquid", "binance", "deribit"]) {
+    const el = document.getElementById("accFields-" + e);
+    if (el) el.style.display = (e === ex) ? "" : "none";
+  }
+}
+
 async function addAccount() {
-  const name   = document.getElementById("accName").value.trim();
-  const wallet = document.getElementById("accWallet").value.trim();
-  const key    = document.getElementById("accKey").value.trim();
-  const msg    = document.getElementById("accMsg");
-  const btn    = document.getElementById("accAddBtn");
-  if (!name || !wallet || !key) { msg.style.color = "var(--red,#e5484d)"; msg.textContent = "All three fields are required."; return; }
+  const exchange = document.getElementById("accExchange").value;
+  const name = document.getElementById("accName").value.trim();
+  const msg  = document.getElementById("accMsg");
+  const btn  = document.getElementById("accAddBtn");
+  const val  = id => (document.getElementById(id)?.value || "").trim();
+
+  let credentials = {};
+  if (exchange === "hyperliquid") credentials = { walletAddress: val("accWallet"), privateKey: val("accKey") };
+  else if (exchange === "binance") credentials = { apiKey: val("accApiKey"), secretKey: val("accApiSecret") };
+  else if (exchange === "deribit") credentials = { clientId: val("accClientId"), clientSecret: val("accClientSecret") };
+
+  if (!name || Object.values(credentials).some(v => !v)) {
+    msg.style.color = "var(--red,#e5484d)"; msg.textContent = "All fields are required."; return;
+  }
   btn.disabled = true; msg.style.color = "var(--muted,#888)"; msg.textContent = "Saving…";
   try {
     const r = await fetch("/api/accounts", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, walletAddress: wallet, privateKey: key, exchange: "hyperliquid" }),
+      body: JSON.stringify({ name, exchange, credentials }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
     msg.style.color = "var(--green,#16a34a)"; msg.textContent = "✓ Account saved.";
-    document.getElementById("accName").value = "";
-    document.getElementById("accWallet").value = "";
-    document.getElementById("accKey").value = "";
+    ["accName","accWallet","accKey","accApiKey","accApiSecret","accClientId","accClientSecret"]
+      .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
     loadAccounts();
   } catch (e) {
     msg.style.color = "var(--red,#e5484d)"; msg.textContent = "Failed: " + e.message;

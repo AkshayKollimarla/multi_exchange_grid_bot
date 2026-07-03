@@ -71,19 +71,28 @@ async function pingDb() {
     // Persisted in-memory state for true continuation across restarts.
     try { await conn.query("ALTER TABLE bot_sessions ADD COLUMN state_json JSON NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
-    // Trading accounts (e.g. multiple Hyperliquid wallets). The private key is
-    // stored here so a bot can trade on the selected account.
+    // Trading accounts (multiple wallets/keys per exchange). Credentials are
+    // stored as JSON so each exchange can keep its own shape:
+    //   hyperliquid → { walletAddress, privateKey }
+    //   binance     → { apiKey, secretKey }
+    //   deribit     → { clientId, clientSecret }
     await conn.query(`
       CREATE TABLE IF NOT EXISTS trading_accounts (
         id             INT AUTO_INCREMENT PRIMARY KEY,
         name           VARCHAR(64)  NOT NULL,
         exchange       VARCHAR(32)  NOT NULL DEFAULT 'hyperliquid',
-        wallet_address VARCHAR(128) NOT NULL,
-        private_key    VARCHAR(200) NOT NULL,
+        wallet_address VARCHAR(128) NULL,
+        private_key    VARCHAR(200) NULL,
+        credentials    JSON         NULL,
         created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
         UNIQUE KEY uq_name_exch (name, exchange)
       ) ENGINE=InnoDB
     `);
+    // Upgrade older installs: add credentials + relax the HL-only columns.
+    try { await conn.query("ALTER TABLE trading_accounts ADD COLUMN credentials JSON NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    try { await conn.query("ALTER TABLE trading_accounts MODIFY wallet_address VARCHAR(128) NULL"); } catch (e) {}
+    try { await conn.query("ALTER TABLE trading_accounts MODIFY private_key VARCHAR(200) NULL"); } catch (e) {}
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
@@ -368,46 +377,69 @@ async function loadRecentRoundTrips({ exchange, symbol, limit = 200 }) {
 // ── Trading accounts (multi-wallet) ─────────────────────────
 // listAccounts() never returns the private key. getAccount(id) does, for
 // internal use when starting a bot on that account.
+// mysql2 may return a JSON column already parsed or as a string — handle both.
+function parseCreds(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return raw;
+  try { return JSON.parse(raw); } catch (e) { return {}; }
+}
+
+// The non-secret identifier shown in the UI, per exchange.
+function accountIdentifier(exchange, c) {
+  if (exchange === "binance") return c.apiKey || "";
+  if (exchange === "deribit") return c.clientId || "";
+  return c.walletAddress || "";   // hyperliquid
+}
+
 async function listAccounts() {
   const p = getPool();
   if (!p) return [];
   try {
     const [rows] = await p.query(
-      "SELECT id, name, exchange, wallet_address, created_at FROM trading_accounts ORDER BY name ASC"
+      "SELECT id, name, exchange, wallet_address, credentials, created_at FROM trading_accounts ORDER BY name ASC"
     );
-    return rows.map(r => ({
-      id: r.id, name: r.name, exchange: r.exchange,
-      walletAddress: r.wallet_address, createdAt: r.created_at,
-    }));
+    return rows.map(r => {
+      const c = parseCreds(r.credentials);
+      return {
+        id: r.id, name: r.name, exchange: r.exchange,
+        identifier: accountIdentifier(r.exchange, c) || r.wallet_address || "",
+        createdAt: r.created_at,
+      };
+    });
   } catch (e) {
     console.error("[DB] listAccounts failed:", e.message);
     return [];
   }
 }
 
+// Returns credentials (incl. secrets) — internal use only, e.g. starting a bot.
 async function getAccount(id) {
   const p = getPool();
   if (!p) return null;
   try {
     const [rows] = await p.query(
-      "SELECT id, name, exchange, wallet_address, private_key FROM trading_accounts WHERE id = ?",
+      "SELECT id, name, exchange, wallet_address, private_key, credentials FROM trading_accounts WHERE id = ?",
       [id]
     );
     if (!rows.length) return null;
     const r = rows[0];
-    return { id: r.id, name: r.name, exchange: r.exchange, walletAddress: r.wallet_address, privateKey: r.private_key };
+    const c = parseCreds(r.credentials);
+    // Back-compat: legacy HL rows kept creds in dedicated columns.
+    if (!c.walletAddress && r.wallet_address) c.walletAddress = r.wallet_address;
+    if (!c.privateKey && r.private_key)       c.privateKey    = r.private_key;
+    return { id: r.id, name: r.name, exchange: r.exchange, credentials: c };
   } catch (e) {
     console.error("[DB] getAccount failed:", e.message);
     return null;
   }
 }
 
-async function addAccount({ name, exchange = "hyperliquid", walletAddress, privateKey }) {
+async function addAccount({ name, exchange = "hyperliquid", credentials = {} }) {
   const p = getPool();
   if (!p) throw new Error("MySQL not configured");
   const [res] = await p.execute(
-    "INSERT INTO trading_accounts (name, exchange, wallet_address, private_key) VALUES (?, ?, ?, ?)",
-    [name, exchange, walletAddress, privateKey]
+    "INSERT INTO trading_accounts (name, exchange, credentials) VALUES (?, ?, CAST(? AS JSON))",
+    [name, exchange, JSON.stringify(credentials)]
   );
   return res.insertId;
 }

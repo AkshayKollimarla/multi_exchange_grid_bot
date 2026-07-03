@@ -3791,27 +3791,36 @@ app.get("/api/accounts", async (req, res) => {
 
 app.post("/api/accounts", async (req, res) => {
   if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
-  const { name, walletAddress, privateKey, exchange } = req.body || {};
-  if (!name || !walletAddress || !privateKey) {
-    return res.status(400).json({ error: "name, walletAddress and privateKey are required" });
+  const name     = (req.body?.name || "").trim();
+  const exchange = req.body?.exchange || "hyperliquid";
+  const inCreds  = req.body?.credentials || {};
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  const s = v => String(v ?? "").trim();
+  let credentials;
+  if (exchange === "hyperliquid") {
+    const walletAddress = s(inCreds.walletAddress), privateKey = s(inCreds.privateKey);
+    if (!walletAddress || !privateKey) return res.status(400).json({ error: "walletAddress and privateKey are required" });
+    if (!/^0x[0-9a-fA-F]{6,}$/.test(walletAddress)) return res.status(400).json({ error: "walletAddress must be a 0x… hex address" });
+    if (!/^0x[0-9a-fA-F]{40,}$/.test(privateKey))   return res.status(400).json({ error: "privateKey must be a 0x… hex key" });
+    credentials = { walletAddress, privateKey };
+  } else if (exchange === "binance") {
+    const apiKey = s(inCreds.apiKey), secretKey = s(inCreds.secretKey);
+    if (!apiKey || !secretKey) return res.status(400).json({ error: "apiKey and secretKey are required" });
+    credentials = { apiKey, secretKey };
+  } else if (exchange === "deribit") {
+    const clientId = s(inCreds.clientId), clientSecret = s(inCreds.clientSecret);
+    if (!clientId || !clientSecret) return res.status(400).json({ error: "clientId and clientSecret are required" });
+    credentials = { clientId, clientSecret };
+  } else {
+    return res.status(400).json({ error: "Unknown exchange" });
   }
-  // Light validation: HL wallets/keys are 0x-prefixed hex.
-  if (!/^0x[0-9a-fA-F]{6,}$/.test(String(walletAddress).trim())) {
-    return res.status(400).json({ error: "walletAddress must be a 0x… hex address" });
-  }
-  if (!/^0x[0-9a-fA-F]{40,}$/.test(String(privateKey).trim())) {
-    return res.status(400).json({ error: "privateKey must be a 0x… hex key" });
-  }
+
   try {
-    const id = await db.addAccount({
-      name: String(name).trim(),
-      exchange: exchange || "hyperliquid",
-      walletAddress: String(walletAddress).trim(),
-      privateKey: String(privateKey).trim(),
-    });
+    const id = await db.addAccount({ name, exchange, credentials });
     res.json({ ok: true, id });
   } catch (e) {
-    if (/Duplicate entry/i.test(e.message)) return res.status(409).json({ error: "An account with that name already exists" });
+    if (/Duplicate entry/i.test(e.message)) return res.status(409).json({ error: "An account with that name already exists for this exchange" });
     res.status(500).json({ error: e.message });
   }
 });
