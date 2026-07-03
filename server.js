@@ -1182,10 +1182,11 @@ ${posLines}
 //      (8 values total)
 // Either way: no UI is required. Frontend just shows the running state.
 // ─────────────────────────────────────────────────────────────
-async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpread, qty, distance, priceSource, symbol) {
-  const bot = bots[exchangeKey];
+async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, qty, distance, priceSource, symbol) {
+  const bot = bots[botId];
+  const exchangeKey = bot?.exchangeKey || botId;   // exchange family (env keys, tag)
   const tag = EXCHANGE_TAG[exchangeKey];
-  const prev = bot.config;
+  const prev = bot?.config;
 
   // If no prev config, the caller MUST have given priceSource + symbol
   if (!prev && (!priceSource || !symbol)) {
@@ -1211,8 +1212,8 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
   // Stop the previous session if running
   if (bot.running) {
     clearInterval(bot.loopTimer); bot.running = false;
-    try{ await cancelAllOrders(exchangeKey); } catch(e){}
-    log(exchangeKey, "Telegram restart: stopped previous session", "warn");
+    try{ await cancelAllOrders(botId); } catch(e){}
+    log(botId, "Telegram restart: stopped previous session", "warn");
   }
 
   // Build cfg — either patch prev, or build from scratch
@@ -1252,7 +1253,7 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     // Pre-warm Hyperliquid native SDK before ticker fetch (HIP-3 aware; shared
     // with /api/start and gridLoop self-heal).
     if (exchangeKey === "hyperliquid") {
-      await ensureHlCache(exchangeKey, bot, cfg, exchange);
+      await ensureHlCache(botId, bot, cfg, exchange);
     }
 
     const tick       = await getTickerSnapshot(exchange, cfg.symbol, 15000, bot);
@@ -1261,7 +1262,7 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
     const lowerLimit = parseFloat((entryPrice - cfg.distance).toFixed(8));
 
     Object.assign(bot, {
-      botId: exchangeKey, exchangeKey,
+      botId, exchangeKey,
       config: cfg, exchange, entryPrice, lastPrice: entryPrice,
       bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true, startedAt: Date.now(), openOrders: [],
@@ -1277,11 +1278,11 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
       } catch(_){}
     }
 
-    await maintainGrid(exchangeKey, entryPrice);
+    await maintainGrid(botId, entryPrice);
     const runningCount = listBots().filter(b => b.running).length;
     const loopMs = runningCount <= 1 ? 4000 : runningCount === 2 ? 5000 : runningCount === 3 ? 7000 : 9000;
-    bot.loopTimer = setInterval(() => gridLoop(exchangeKey), loopMs);
-    log(exchangeKey, `Telegram ${prev ? "restart" : "launch"}: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
+    bot.loopTimer = setInterval(() => gridLoop(botId), loopMs);
+    log(botId, `Telegram ${prev ? "restart" : "launch"}: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
     broadcast("state", buildStateSnapshot());
 
     await tgSend(chatId,
@@ -1290,11 +1291,11 @@ async function tgDoRestart(chatId, exchangeKey, sellSpread, buySpread, targetSpr
       `Entry : <code>$${entryPrice.toFixed(4)}</code>\n` +
       `Upper : <code>$${upperLimit.toFixed(4)}</code>\n` +
       `Lower : <code>$${lowerLimit.toFixed(4)}</code>\n` +
-      `Log   : <code>logs/${exchangeKey}.log</code>`,
+      `Log   : <code>logs/${botId}.log</code>`,
       mainMenu()
     );
   } catch(err) {
-    log(exchangeKey, `Telegram ${prev ? "restart" : "launch"} failed: ${err.message}`, "error");
+    log(botId, `Telegram ${prev ? "restart" : "launch"} failed: ${err.message}`, "error");
     await tgSend(chatId, `❌ ${tag} ${prev ? "Restart" : "Launch"} failed:\n<code>${err.message}</code>`, mainMenu());
   }
 }
@@ -1363,8 +1364,12 @@ async function handleTgUpdate(update) {
     const conv = tgConv[fromId];
     if (conv?.step === "awaiting_params" && !text.startsWith("/")) {
       const parts = text.trim().split(/\s+/);
-      const exch = conv.exchangeKey;
-      const prev = bots[exch]?.config;
+      // Restart targets a specific bot instance (conv.botId), so two coins on
+      // one exchange each restart with their own saved config. Falls back to
+      // the legacy slot for a fresh launch.
+      const targetId = conv.botId || conv.exchangeKey;
+      const exch = bots[targetId]?.exchangeKey || conv.exchangeKey || targetId;
+      const prev = bots[targetId]?.config;
       // Two valid shapes:
       //   5 values (numbers): sell buy target qty distance  → needs prev config
       //   7 values: sell buy target qty distance priceSource symbol → cold launch
@@ -1392,7 +1397,7 @@ async function handleTgUpdate(update) {
         }
         delete tgConv[fromId];
         const [ss, bs, ts, q, dist] = nums;
-        await tgDoRestart(fromId, exch, ss, bs, ts, q, dist);
+        await tgDoRestart(fromId, targetId, ss, bs, ts, q, dist);
         return;
       }
       if (parts.length === 7) {
@@ -1410,7 +1415,7 @@ async function handleTgUpdate(update) {
           return;
         }
         delete tgConv[fromId];
-        await tgDoRestart(fromId, exch, ss, bs, ts, q, dist, priceSource, symbol);
+        await tgDoRestart(fromId, targetId, ss, bs, ts, q, dist, priceSource, symbol);
         return;
       }
       await tgSend(fromId,
@@ -1501,11 +1506,22 @@ async function runExchangeAction(chatId, msgId, exchangeKey, action) {
       await stopBotById(chatId, msgId, targetId);
       return;
     }
-    case "restart":
-      tgConv[chatId] = { step: "awaiting_params", exchangeKey };
-      await tgEdit(chatId, msgId, restartPromptText(exchangeKey, bot.config),
+    case "restart": {
+      // Candidates = every bot on this exchange that has a saved config
+      // (running OR stopped). If more than one, let the user pick which coin
+      // to restart so it shows that bot's own previous inputs.
+      const candidates = botsForExchange(exchangeKey).filter(b => b.config);
+      if (candidates.length > 1) {
+        await tgEdit(chatId, msgId, `${tag} — pick a bot to restart:`, botSelectorMenu(exchangeKey, "restart", candidates));
+        return;
+      }
+      const targetId = candidates[0]?.botId || exchangeKey;
+      const tbot = bots[targetId];
+      tgConv[chatId] = { step: "awaiting_params", botId: targetId };
+      await tgEdit(chatId, msgId, restartPromptText(tbot?.exchangeKey || exchangeKey, tbot?.config),
         [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
       return;
+    }
     default:
       await tgEdit(chatId, msgId, "Unknown action.", mainMenu());
   }
@@ -1541,6 +1557,12 @@ async function runBotAction(chatId, msgId, botId, action) {
       return;
     case "stop":
       await stopBotById(chatId, msgId, botId);
+      return;
+    case "restart":
+      // Restart THIS bot — show its own previous inputs, then await params.
+      tgConv[chatId] = { step: "awaiting_params", botId };
+      await tgEdit(chatId, msgId, restartPromptText(bot.exchangeKey, bot.config),
+        [[{text:"❌ Cancel", callback_data:"cancel_restart"}]]);
       return;
     default:
       await tgEdit(chatId, msgId, "Unknown action.", mainMenu());
