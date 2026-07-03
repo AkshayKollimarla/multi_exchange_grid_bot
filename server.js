@@ -1236,6 +1236,7 @@ async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, q
     telegramChatId : process.env.TELEGRAM_CHAT_ID,
   };
   injectKeysIntoCfg(exchangeKey, cfg);
+  await applyAccountCreds(cfg);   // override with the selected account's keys, if any
 
   if (!cfg.apiKey || !cfg.secretKey) {
     const which = exchangeKey === "deribit"     ? "DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET"
@@ -1763,6 +1764,23 @@ function injectKeysIntoCfg(exchangeKey, cfg) {
   cfg.telegramChatId = process.env.TELEGRAM_CHAT_ID;
 }
 
+// If cfg.accountId points to a saved account, override the credentials with
+// that account's keys so the bot trades on THAT account. Call after
+// injectKeysIntoCfg. HL keeps creds in the apiKey(=walletAddress) /
+// secretKey(=privateKey) slots, matching buildExchange + ensureHlCache.
+async function applyAccountCreds(cfg) {
+  if (!cfg.accountId) return false;
+  let acc;
+  try { acc = await db.getAccount(parseInt(cfg.accountId, 10)); } catch (e) { acc = null; }
+  if (!acc) return false;
+  const c = acc.credentials || {};
+  if (acc.exchange === "hyperliquid")   { cfg.apiKey = c.walletAddress; cfg.secretKey = c.privateKey; }
+  else if (acc.exchange === "binance")  { cfg.apiKey = c.apiKey;        cfg.secretKey = c.secretKey; }
+  else if (acc.exchange === "deribit")  { cfg.apiKey = c.clientId;      cfg.secretKey = c.clientSecret; }
+  cfg.accountName = acc.name;
+  return true;
+}
+
 // ============================================================
 //  TIME SYNC (Binance only)
 // ============================================================
@@ -1911,7 +1929,11 @@ async function emergencyStop(botId, reason) {
 async function ensureHlCache(botId, bot, cfg, exchange = null) {
   try {
     const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
-    const wallet     = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+    // Per-account creds live in cfg (apiKey=walletAddress, secretKey=privateKey);
+    // fall back to .env for the default account.
+    const privKey       = cfg.secretKey || process.env.HYPERLIQUID_PRIVATE_KEY;
+    const walletAddress = cfg.apiKey    || process.env.HYPERLIQUID_WALLET_ADDRESS;
+    const wallet     = privateKeyToAccount(privKey);
     const transport  = new hl.HttpTransport({ isTestnet: useTestnet });
     const exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
     const infoClient = new hl.InfoClient({ transport });
@@ -2001,7 +2023,7 @@ async function ensureHlCache(botId, bot, cfg, exchange = null) {
     }
 
     if (assetIndex < 0) throw new Error(`Asset ${base} not found in Hyperliquid universe`);
-    bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex };
+    bot.hlCache = { exchClient, infoClient, assetIndex, base, coinId, szDecimals, maxSig, isSpot, hipDex, walletAddress };
     if (exchange) bot.exchange = exchange;  // also needed for non-HL paths
     log(botId, `Hyperliquid SDK pre-warmed: ${base} idx=${assetIndex} coin=${coinId} szDec=${szDecimals} sig=${maxSig}${isSpot ? " [SPOT]" : " [PERP]"}`, "info");
     return true;
@@ -2175,7 +2197,7 @@ async function checkAndHandleFills(botId, currentPrice) {
       // No cache yet — skip this cycle, will retry next loop
       return;
     }
-    const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+    const wallet = cache.walletAddress || process.env.HYPERLIQUID_WALLET_ADDRESS;
     let exchangeOrders;
     try {
       const openOrdersArgs = { user: wallet };
@@ -2920,7 +2942,7 @@ async function maintainGrid(botId, currentPrice) {
 async function hyperliquidNativeSpotBalance(bot, token) {
   const cache = bot.hlCache;
   if (!cache?.infoClient) return null;
-  const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+  const wallet = cache.walletAddress || process.env.HYPERLIQUID_WALLET_ADDRESS;
   try {
     const state = await Promise.race([
       cache.infoClient.spotClearinghouseState({ user: wallet }),
@@ -3063,9 +3085,9 @@ async function hyperliquidNativeCancel(bot, orderIds) {
     infoClient = bot.hlCache.infoClient;
     assetIndex = bot.hlCache.assetIndex;
   } else {
-    // Fresh lookup (slow path)
+    // Fresh lookup (slow path) — use the bot's per-account key if present.
     const useTestnet = String(process.env.HYPERLIQUID_TESTNET || "").toLowerCase() === "true";
-    const wallet = privateKeyToAccount(process.env.HYPERLIQUID_PRIVATE_KEY);
+    const wallet = privateKeyToAccount(bot.config?.secretKey || process.env.HYPERLIQUID_PRIVATE_KEY);
     const transport = new hl.HttpTransport({ isTestnet: useTestnet });
     exchClient = new hl.ExchangeClient({ wallet, transport, isTestnet: useTestnet });
     infoClient = new hl.InfoClient({ transport });
@@ -3283,7 +3305,7 @@ async function syncOrdersFromExchange(botId) {
   if (exchangeKey === "hyperliquid") {
     const cache = bot.hlCache;
     if (!cache?.infoClient) return;
-    const wallet = process.env.HYPERLIQUID_WALLET_ADDRESS;
+    const wallet = cache.walletAddress || process.env.HYPERLIQUID_WALLET_ADDRESS;
     let exchangeOrders;
     try {
       const orphanArgs = { user: wallet };
@@ -3935,6 +3957,7 @@ app.post("/api/start", async (req, res) => {
   bot.label = `${cfg.symbol || exchangeKey}`;
 
   injectKeysIntoCfg(exchangeKey, cfg);
+  await applyAccountCreds(cfg);   // override with the selected account's keys, if any
 
   if (!cfg.apiKey || !cfg.secretKey) {
     removeBotInstance(botId);
@@ -4304,8 +4327,31 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
   console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
-  db.pingDb().then(ok => { if (ok) resumeSessions(); });
+  db.pingDb().then(ok => { if (ok) { seedEnvAccounts(); resumeSessions(); } });
 });
+
+// Seed a default account per exchange from the .env keys (HYPE-MAIN /
+// BINANCE-MAIN / DERIBIT-MAIN) so the dashboard's account dropdown works out
+// of the box. Idempotent — skips any that already exist or lack env keys.
+async function seedEnvAccounts() {
+  const defaults = [
+    { name: "HYPE-MAIN", exchange: "hyperliquid",
+      credentials: { walletAddress: process.env.HYPERLIQUID_WALLET_ADDRESS, privateKey: process.env.HYPERLIQUID_PRIVATE_KEY } },
+    { name: "BINANCE-MAIN", exchange: "binance",
+      credentials: { apiKey: process.env.BINANCE_API_KEY, secretKey: process.env.BINANCE_SECRET_KEY } },
+    { name: "DERIBIT-MAIN", exchange: "deribit",
+      credentials: { clientId: process.env.DERIBIT_CLIENT_ID, clientSecret: process.env.DERIBIT_CLIENT_SECRET } },
+  ];
+  let existing;
+  try { existing = await db.listAccounts(); } catch (e) { return; }
+  const have = new Set((existing || []).map(a => `${a.exchange}:${a.name}`));
+  for (const d of defaults) {
+    if (Object.values(d.credentials).some(v => !v)) continue;   // env keys missing
+    if (have.has(`${d.exchange}:${d.name}`)) continue;          // already seeded
+    try { await db.addAccount(d); console.log(`[ACCOUNTS] Seeded ${d.name} (${d.exchange}) from .env`); }
+    catch (e) { if (!/Duplicate entry/i.test(e.message)) console.error("[ACCOUNTS] seed failed:", e.message); }
+  }
+}
 
 // Re-launch any bot whose session was persisted to MySQL. Runs once on
 // startup after the DB ping succeeds. Each resume is best-effort — if one

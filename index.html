@@ -920,6 +920,13 @@
           <input type="text" id="exchangeName" value="Binance Spot" readonly/>
         </div>
         <div class="field">
+          <label>Account</label>
+          <select id="accountSelect">
+            <option value="">Default (.env keys)</option>
+          </select>
+          <div class="hint">Trades run on the selected account. Manage accounts in the <b>Accounts</b> tab.</div>
+        </div>
+        <div class="field">
           <label>Symbol</label>
           <div class="symbol-wrap" id="symbolWrap">
             <input type="text" id="symbolInput" placeholder="Type to search..." autocomplete="off"
@@ -1568,6 +1575,7 @@ function showSection(name, el) {
   if (name === "accounts") loadAccounts();
   if (name === "active")   renderActiveBotPicker();
   if (name === "report")   loadReport();
+  if (name === "config")   loadConfigAccounts();
 }
 
 // Update the sidebar badge (count of running bots) + the Active Bot picker.
@@ -1714,7 +1722,34 @@ async function onSourceChange() {
   selectedSymbol = "";
   document.getElementById("symbolInput").value = "";
   document.getElementById("symbolClear").style.display = "none";
+  loadConfigAccounts();
   await loadSymbols(source);
+}
+
+// Exchange family for a given price source.
+function exchangeFamilyOf(source) {
+  if (!source) return "binance";
+  if (source.startsWith("deribit"))     return "deribit";
+  if (source.startsWith("hyperliquid")) return "hyperliquid";
+  return "binance";
+}
+
+// Populate the Bot Configuration account dropdown with the saved accounts for
+// the currently selected exchange. "Default (.env keys)" is always first.
+async function loadConfigAccounts() {
+  const sel = document.getElementById("accountSelect");
+  if (!sel) return;
+  const fam = exchangeFamilyOf(document.getElementById("priceSource")?.value);
+  const prev = sel.value;
+  try {
+    const r = await fetch("/api/accounts");
+    const list = r.ok ? await r.json() : [];
+    const mine = (Array.isArray(list) ? list : []).filter(a => a.exchange === fam);
+    let opts = '<option value="">Default (.env keys)</option>';
+    for (const a of mine) opts += `<option value="${a.id}">${escapeHtml(a.name)}</option>`;
+    sel.innerHTML = opts;
+    if (prev && mine.some(a => String(a.id) === prev)) sel.value = prev;
+  } catch (e) { /* keep default option */ }
 }
 
 async function loadSymbols(source) {
@@ -2101,6 +2136,9 @@ async function startBot() {
     if (body.priceSource === "hyperliquid_hip3") {
       body.hipDex = document.getElementById("hipDexName")?.value?.trim().toLowerCase() || "xyz";
     }
+    // Which saved account to trade on ("" = default .env keys)
+    const accId = document.getElementById("accountSelect")?.value;
+    if (accId) body.accountId = accId;
     // Hedge only for Binance
     if (currentExchange === "binance") {
       body.hedgeEnabled   = hedgeEnabled;
