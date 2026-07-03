@@ -922,7 +922,7 @@
         <div class="field">
           <label>Account</label>
           <select id="accountSelect">
-            <option value="">Default (.env keys)</option>
+            <option value="">Loading accounts…</option>
           </select>
           <div class="hint">Trades run on the selected account. Manage accounts in the <b>Accounts</b> tab.</div>
         </div>
@@ -1735,7 +1735,8 @@ function exchangeFamilyOf(source) {
 }
 
 // Populate the Bot Configuration account dropdown with the saved accounts for
-// the currently selected exchange. "Default (.env keys)" is always first.
+// the currently selected exchange (named accounts only — the -MAIN account
+// seeded from .env represents the default keys).
 async function loadConfigAccounts() {
   const sel = document.getElementById("accountSelect");
   if (!sel) return;
@@ -1745,9 +1746,11 @@ async function loadConfigAccounts() {
     const r = await fetch("/api/accounts");
     const list = r.ok ? await r.json() : [];
     const mine = (Array.isArray(list) ? list : []).filter(a => a.exchange === fam);
-    let opts = '<option value="">Default (.env keys)</option>';
-    for (const a of mine) opts += `<option value="${a.id}">${escapeHtml(a.name)}</option>`;
-    sel.innerHTML = opts;
+    if (!mine.length) {
+      sel.innerHTML = `<option value="">No accounts — add one in the Accounts tab</option>`;
+      return;
+    }
+    sel.innerHTML = mine.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
     if (prev && mine.some(a => String(a.id) === prev)) sel.value = prev;
   } catch (e) { /* keep default option */ }
 }
