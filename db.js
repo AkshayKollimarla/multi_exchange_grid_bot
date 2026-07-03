@@ -71,6 +71,19 @@ async function pingDb() {
     // Persisted in-memory state for true continuation across restarts.
     try { await conn.query("ALTER TABLE bot_sessions ADD COLUMN state_json JSON NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Trading accounts (e.g. multiple Hyperliquid wallets). The private key is
+    // stored here so a bot can trade on the selected account.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS trading_accounts (
+        id             INT AUTO_INCREMENT PRIMARY KEY,
+        name           VARCHAR(64)  NOT NULL,
+        exchange       VARCHAR(32)  NOT NULL DEFAULT 'hyperliquid',
+        wallet_address VARCHAR(128) NOT NULL,
+        private_key    VARCHAR(200) NOT NULL,
+        created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        UNIQUE KEY uq_name_exch (name, exchange)
+      ) ENGINE=InnoDB
+    `);
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
@@ -352,8 +365,63 @@ async function loadRecentRoundTrips({ exchange, symbol, limit = 200 }) {
   }
 }
 
+// ── Trading accounts (multi-wallet) ─────────────────────────
+// listAccounts() never returns the private key. getAccount(id) does, for
+// internal use when starting a bot on that account.
+async function listAccounts() {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const [rows] = await p.query(
+      "SELECT id, name, exchange, wallet_address, created_at FROM trading_accounts ORDER BY name ASC"
+    );
+    return rows.map(r => ({
+      id: r.id, name: r.name, exchange: r.exchange,
+      walletAddress: r.wallet_address, createdAt: r.created_at,
+    }));
+  } catch (e) {
+    console.error("[DB] listAccounts failed:", e.message);
+    return [];
+  }
+}
+
+async function getAccount(id) {
+  const p = getPool();
+  if (!p) return null;
+  try {
+    const [rows] = await p.query(
+      "SELECT id, name, exchange, wallet_address, private_key FROM trading_accounts WHERE id = ?",
+      [id]
+    );
+    if (!rows.length) return null;
+    const r = rows[0];
+    return { id: r.id, name: r.name, exchange: r.exchange, walletAddress: r.wallet_address, privateKey: r.private_key };
+  } catch (e) {
+    console.error("[DB] getAccount failed:", e.message);
+    return null;
+  }
+}
+
+async function addAccount({ name, exchange = "hyperliquid", walletAddress, privateKey }) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  const [res] = await p.execute(
+    "INSERT INTO trading_accounts (name, exchange, wallet_address, private_key) VALUES (?, ?, ?, ?)",
+    [name, exchange, walletAddress, privateKey]
+  );
+  return res.insertId;
+}
+
+async function deleteAccount(id) {
+  const p = getPool();
+  if (!p) return;
+  try { await p.execute("DELETE FROM trading_accounts WHERE id = ?", [id]); }
+  catch (e) { console.error("[DB] deleteAccount failed:", e.message); }
+}
+
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
   loadAllSessions, dbConfigured,
+  listAccounts, getAccount, addAccount, deleteAccount,
 };

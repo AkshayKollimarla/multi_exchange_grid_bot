@@ -793,6 +793,60 @@
 </head>
 <body>
 
+<style>
+  /* ── Sidebar shell (redesign) ───────────────────────────── */
+  .app-shell { display:flex; min-height:100vh; align-items:stretch; }
+  .sidebar {
+    width:232px; flex:0 0 232px; background:#0f1729; color:#cdd5e3;
+    display:flex; flex-direction:column; padding:18px 12px; gap:3px;
+    position:sticky; top:0; height:100vh; overflow-y:auto;
+  }
+  .sidebar .brand {
+    display:flex; align-items:center; gap:10px; font-weight:800; font-size:18px;
+    color:#fff; padding:6px 10px 18px; letter-spacing:.2px;
+  }
+  .sidebar .brand .logo {
+    width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,#3b82f6,#1e40af);
+    display:flex; align-items:center; justify-content:center; color:#fff; font-size:14px;
+  }
+  .nav-group { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#5d6b85; padding:16px 12px 5px; font-weight:700; }
+  .nav-item {
+    display:flex; align-items:center; gap:11px; padding:10px 12px; border-radius:9px;
+    color:#aeb9cc; font-size:13.5px; font-weight:600; cursor:pointer; user-select:none;
+    transition:background .15s, color .15s;
+  }
+  .nav-item:hover { background:#1b2740; color:#fff; }
+  .nav-item.active { background:#2563eb; color:#fff; box-shadow:0 4px 14px rgba(37,99,235,.35); }
+  .nav-item .ic { width:18px; text-align:center; font-size:14px; }
+  .nav-item .badge { margin-left:auto; background:#22c55e; color:#04210f; font-size:10px; font-weight:800;
+                     border-radius:10px; padding:1px 7px; min-width:18px; text-align:center; }
+  .content { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .section { display:none; padding:0 18px 26px; }
+  .section.active { display:block; }
+  .section > .sec-head { font-size:18px; font-weight:700; color:var(--ink,#0b1220); margin:18px 2px 14px; }
+  @media (max-width:880px){
+    .app-shell{flex-direction:column;}
+    .sidebar{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;gap:6px;}
+    .sidebar .brand{width:100%;}
+  }
+</style>
+
+<div class="app-shell">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">▲</span> GridBot</div>
+    <div class="nav-group">Trading</div>
+    <div class="nav-item active" id="nav-config"   onclick="showSection('config', this)"><span class="ic">⚙️</span> Bot Configuration</div>
+    <div class="nav-item"        id="nav-accounts" onclick="showSection('accounts', this)"><span class="ic">👤</span> Accounts</div>
+    <div class="nav-item"        id="nav-report"   onclick="showSection('report', this)"><span class="ic">📈</span> PnL Report</div>
+    <div class="nav-item"        id="nav-logs"     onclick="showSection('logs', this)"><span class="ic">📜</span> Bot Logs</div>
+    <div class="nav-item"        id="nav-active"   onclick="showSection('active', this)"><span class="ic">🟢</span> Active Bot <span class="badge" id="navActiveBadge" style="display:none;">0</span></div>
+  </aside>
+
+  <!-- ══ CONTENT ══ -->
+  <main class="content">
+
 <!-- ══ HEADER ══ -->
 <div class="header">
   <div class="header-logo">Grid<span>Bot</span> — Multi-Exchange</div>
@@ -816,6 +870,9 @@
   <span id="botsBarEmpty" style="color:var(--muted,#888);font-size:13px;">None yet — configure below and click Start</span>
   <!-- bot chips injected here -->
 </div>
+
+<!-- ══════════ SECTION: BOT CONFIGURATION ══════════ -->
+<section id="sec-config" class="section active">
 
 <!-- ══ EXCHANGE TABS ══ -->
 <div class="ex-tabs">
@@ -1003,7 +1060,16 @@
       </div>
     </div>
 
-    <!-- ── Shared per-exchange views (re-rendered on tab switch) ── -->
+  </div><!-- end right -->
+</div><!-- end page -->
+</section><!-- end sec-config -->
+
+<!-- ══════════ SECTION: ACTIVE BOT (live details) ══════════ -->
+<section id="sec-active" class="section">
+  <div class="sec-head">🟢 Active Bot — Live Details</div>
+  <div id="activeBotPicker" style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px;"></div>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
     <!-- Price / Limit Stats -->
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">Live Price</div><div class="stat-value green" id="livePrice">—</div></div>
@@ -1055,6 +1121,14 @@
       </div>
     </div>
 
+  </div>
+</section><!-- end sec-active -->
+
+<!-- ══════════ SECTION: PNL REPORT ══════════ -->
+<section id="sec-report" class="section">
+  <div class="sec-head">📈 PnL Report</div>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
     <!-- Report -->
     <div class="card">
       <div class="card-header">
@@ -1098,6 +1172,12 @@
       </div>
     </div>
 
+  </div>
+</section><!-- end sec-report -->
+
+<!-- ══════════ SECTION: BOT LOGS ══════════ -->
+<section id="sec-logs" class="section">
+  <div class="sec-head">📜 Bot Logs</div>
     <!-- Logs -->
     <div class="card">
       <div class="card-header">📜 Bot Logs (current exchange)</div>
@@ -1107,9 +1187,44 @@
         </div>
       </div>
     </div>
+</section><!-- end sec-logs -->
 
-  </div><!-- end right -->
-</div><!-- end page -->
+<!-- ══════════ SECTION: ACCOUNTS ══════════ -->
+<section id="sec-accounts" class="section">
+  <div class="sec-head">👤 Accounts</div>
+  <div class="page" style="align-items:start;">
+    <!-- Add account -->
+    <div class="card">
+      <div class="card-header">➕ Add Hyperliquid Account</div>
+      <div class="card-body">
+        <div class="note">🔐 Saved to your MySQL database. Use the <b>API wallet</b> private key — it can place orders but cannot withdraw.</div>
+        <div class="field"><label>Account Name</label><input type="text" id="accName" placeholder="e.g. Hype Main" autocomplete="off"/></div>
+        <div class="field"><label>Wallet Address (public)</label><input type="text" id="accWallet" placeholder="0x..." autocomplete="off"/></div>
+        <div class="field"><label>API Wallet Private Key</label><input type="password" id="accKey" placeholder="0x..." autocomplete="new-password"/></div>
+        <div class="btn-row"><button class="btn btn-start" id="accAddBtn" onclick="addAccount()">＋ Add Account</button></div>
+        <div id="accMsg" style="font-size:12px;margin-top:8px;"></div>
+      </div>
+    </div>
+    <!-- Account list -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-header-row">
+          <span>🟣 Saved Accounts</span>
+          <button class="btn-refresh" onclick="loadAccounts()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <table class="ord-table">
+          <thead><tr><th>Name</th><th>Exchange</th><th>Wallet</th><th></th></tr></thead>
+          <tbody id="accountsBody"><tr><td colspan="4" class="empty-td">No accounts yet — add one on the left</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+  </main><!-- end content -->
+</div><!-- end app-shell -->
 
 <script>
 // ══════════════════════════════════════════════════════════════
@@ -1411,6 +1526,127 @@ function renderBotsBar() {
     document.querySelector(".page")?.scrollIntoView({ behavior:"smooth" });
   };
   bar.appendChild(add);
+  syncActiveBotUI();   // keep the sidebar "Active Bot" badge + picker in sync
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SIDEBAR NAVIGATION + ACTIVE BOT + ACCOUNTS
+// ══════════════════════════════════════════════════════════════
+let currentSection = "config";
+function showSection(name, el) {
+  currentSection = name;
+  document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+  document.getElementById("sec-" + name)?.classList.add("active");
+  document.querySelectorAll(".sidebar .nav-item").forEach(n => n.classList.remove("active"));
+  (el || document.getElementById("nav-" + name))?.classList.add("active");
+  if (name === "accounts") loadAccounts();
+  if (name === "active")   renderActiveBotPicker();
+  if (name === "report")   loadReport();
+}
+
+// Update the sidebar badge (count of running bots) + the Active Bot picker.
+function syncActiveBotUI() {
+  const running = (allBots || []).filter(b => b.running);
+  const badge = document.getElementById("navActiveBadge");
+  if (badge) {
+    badge.textContent = running.length;
+    badge.style.display = running.length ? "" : "none";
+  }
+  if (currentSection === "active") renderActiveBotPicker();
+}
+
+// Clickable chips of running bots inside the Active Bot section. Selecting one
+// focuses it so the live stats / open orders / round trips below show that bot.
+function renderActiveBotPicker() {
+  const wrap = document.getElementById("activeBotPicker");
+  if (!wrap) return;
+  const running = (allBots || []).filter(b => b.running);
+  if (!running.length) {
+    wrap.innerHTML = `<span style="color:var(--muted,#888);font-size:13px;">No running bots. Configure one in <b>Bot Configuration</b> and click Start.</span>`;
+    return;
+  }
+  const ICON = { binance:"🟦", deribit:"🟧", hyperliquid:"🟣" };
+  wrap.innerHTML = "";
+  for (const b of running) {
+    const focused = (focusedBotId ? b.botId === focusedBotId : b.exchangeKey === currentExchange);
+    const chip = document.createElement("div");
+    chip.style.cssText = `display:flex;align-items:center;gap:7px;padding:8px 13px;border-radius:10px;font-size:13px;cursor:pointer;font-weight:600;`
+      + `border:1px solid ${focused ? "var(--brand,#2563eb)" : "var(--border,#e3e7ec)"};`
+      + `background:${focused ? "var(--brand-soft,#eff5ff)" : "var(--surface,#fff)"};color:var(--ink,#0b1220);`;
+    chip.innerHTML = `🟢 ${ICON[b.exchangeKey]||""} <b>${coinLabel(b.symbol) || b.exchangeKey}</b> <span style="color:var(--muted,#888);font-size:11px;">${b.botId}</span>`;
+    chip.onclick = () => {
+      focusedBotId = b.botId;
+      if (b.exchangeKey && b.exchangeKey !== currentExchange) currentExchange = b.exchangeKey;
+      renderBotsBar();
+      renderActiveExchange();
+      renderActiveBotPicker();
+    };
+    wrap.appendChild(chip);
+  }
+}
+
+// ── Accounts (MySQL-backed) ──────────────────────────────────
+async function loadAccounts() {
+  const tb = document.getElementById("accountsBody");
+  if (!tb) return;
+  try {
+    const r = await fetch("/api/accounts");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const list = await r.json();
+    if (!Array.isArray(list) || !list.length) {
+      tb.innerHTML = `<tr><td colspan="4" class="empty-td">No accounts yet — add one on the left</td></tr>`;
+      return;
+    }
+    tb.innerHTML = list.map(a => {
+      const w = a.walletAddress || "";
+      const masked = w.length > 12 ? `${w.slice(0,6)}…${w.slice(-4)}` : w;
+      return `<tr>
+        <td><b>${escapeHtml(a.name)}</b></td>
+        <td>🟣 ${escapeHtml(a.exchange || "hyperliquid")}</td>
+        <td style="font-family:var(--font-mono,monospace);font-size:11px;">${escapeHtml(masked)}</td>
+        <td><button class="btn-refresh" style="color:var(--red,#e5484d);" onclick="deleteAccount(${a.id})">✕ Delete</button></td>
+      </tr>`;
+    }).join("");
+  } catch (e) {
+    tb.innerHTML = `<tr><td colspan="4" class="empty-td">Could not load accounts: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+async function addAccount() {
+  const name   = document.getElementById("accName").value.trim();
+  const wallet = document.getElementById("accWallet").value.trim();
+  const key    = document.getElementById("accKey").value.trim();
+  const msg    = document.getElementById("accMsg");
+  const btn    = document.getElementById("accAddBtn");
+  if (!name || !wallet || !key) { msg.style.color = "var(--red,#e5484d)"; msg.textContent = "All three fields are required."; return; }
+  btn.disabled = true; msg.style.color = "var(--muted,#888)"; msg.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/accounts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, walletAddress: wallet, privateKey: key, exchange: "hyperliquid" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    msg.style.color = "var(--green,#16a34a)"; msg.textContent = "✓ Account saved.";
+    document.getElementById("accName").value = "";
+    document.getElementById("accWallet").value = "";
+    document.getElementById("accKey").value = "";
+    loadAccounts();
+  } catch (e) {
+    msg.style.color = "var(--red,#e5484d)"; msg.textContent = "Failed: " + e.message;
+  } finally { btn.disabled = false; }
+}
+
+async function deleteAccount(id) {
+  if (!confirm("Delete this account?")) return;
+  try {
+    await fetch("/api/accounts/" + id, { method: "DELETE" });
+    loadAccounts();
+  } catch (e) { alert("Delete failed: " + e.message); }
 }
 
 // ══════════════════════════════════════════════════════════════

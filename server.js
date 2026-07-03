@@ -3781,6 +3781,47 @@ app.get("/api/db_report", async (req, res) => {
   }
 });
 
+// ── Trading accounts (multi-wallet) ─────────────────────────
+// List never exposes private keys.
+app.get("/api/accounts", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try { res.json(await db.listAccounts()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/accounts", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  const { name, walletAddress, privateKey, exchange } = req.body || {};
+  if (!name || !walletAddress || !privateKey) {
+    return res.status(400).json({ error: "name, walletAddress and privateKey are required" });
+  }
+  // Light validation: HL wallets/keys are 0x-prefixed hex.
+  if (!/^0x[0-9a-fA-F]{6,}$/.test(String(walletAddress).trim())) {
+    return res.status(400).json({ error: "walletAddress must be a 0x… hex address" });
+  }
+  if (!/^0x[0-9a-fA-F]{40,}$/.test(String(privateKey).trim())) {
+    return res.status(400).json({ error: "privateKey must be a 0x… hex key" });
+  }
+  try {
+    const id = await db.addAccount({
+      name: String(name).trim(),
+      exchange: exchange || "hyperliquid",
+      walletAddress: String(walletAddress).trim(),
+      privateKey: String(privateKey).trim(),
+    });
+    res.json({ ok: true, id });
+  } catch (e) {
+    if (/Duplicate entry/i.test(e.message)) return res.status(409).json({ error: "An account with that name already exists" });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/accounts/:id", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try { await db.deleteAccount(parseInt(req.params.id, 10)); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // CSV download (browser) — same period semantics as /api/report
 app.get("/api/csv", async (req, res) => {
   const exchangeKey = req.query.botId || req.query.exchange || "binance";
