@@ -4093,7 +4093,15 @@ app.post("/api/start", async (req, res) => {
       if (resumeState.entryPrice     != null) entryPrice         = resumeState.entryPrice;
       if (resumeState.lastPrice      != null) bot.lastPrice      = resumeState.lastPrice;
       if (resumeState.lastNotifiedRt != null) bot.lastNotifiedRt = resumeState.lastNotifiedRt;
-      if (resumeState.startedAt      != null) bot.startedAt      = resumeState.startedAt;
+      // Runtime should reflect actual UPTIME, not wall-clock since first start.
+      // Shift the start forward by the downtime (≈ time since the last state
+      // save) on each resume, so crash/outage/deploy gaps don't inflate it.
+      // This accumulates correctly across repeated restarts (e.g. a crash loop).
+      if (resumeState.startedAt != null) {
+        const savedAtMs = resumeState.savedAt ? new Date(resumeState.savedAt).getTime() : Date.now();
+        const downMs    = Math.max(0, Date.now() - savedAtMs);
+        bot.startedAt   = resumeState.startedAt + downMs;
+      }
       bot.upperLimit = upperLimit;
       bot.lowerLimit = lowerLimit;
       bot.entryPrice = entryPrice;
