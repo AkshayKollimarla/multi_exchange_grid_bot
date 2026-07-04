@@ -41,10 +41,17 @@ function stripSecrets(cfg) {
 const LOG_DIR = path.join(__dirname, "logs");
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch(e) {}
 const logStreams = {};   // { botId: WriteStream }
+const logBytes   = {};   // { botId: approx bytes written to the current file }
+const LOG_MAX_BYTES = 10 * 1024 * 1024;   // rotate at 10 MB (keep one .1 backup)
+
 function getLogStream(botId) {
   if (!logStreams[botId]) {
     const fp = path.join(LOG_DIR, `${botId}.log`);
+    try { logBytes[botId] = fs.existsSync(fp) ? fs.statSync(fp).size : 0; } catch (e) { logBytes[botId] = 0; }
     logStreams[botId] = fs.createWriteStream(fp, { flags: "a" });
+    // CRITICAL: without an error handler, a failed write (e.g. ENOSPC — disk
+    // full) emits an unhandled 'error' event that crashes the whole process.
+    logStreams[botId].on("error", (e) => { console.error(`[LOG] stream error (${botId}):`, e.message); });
     // Header for new sessions
     logStreams[botId].write(`\n${"=".repeat(60)}\n=== Session start: ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
   }
@@ -55,6 +62,17 @@ function closeLogStream(botId) {
     try { logStreams[botId].end(); } catch(e) {}
     delete logStreams[botId];
   }
+}
+// Prevent per-bot log files from growing unbounded and filling the disk.
+// When over the cap, close + rename to <botId>.log.1 (one backup) and reopen.
+function rotateLogIfNeeded(botId) {
+  if ((logBytes[botId] || 0) < LOG_MAX_BYTES) return;
+  const fp = path.join(LOG_DIR, `${botId}.log`);
+  try {
+    closeLogStream(botId);
+    try { fs.renameSync(fp, fp + ".1"); } catch (e) {}   // overwrites any previous .1
+    logBytes[botId] = 0;                                  // next getLogStream reopens fresh
+  } catch (e) { /* ignore */ }
 }
 
 const app    = express();
@@ -1061,20 +1079,15 @@ async function tgHyperliquidPortfolioText() {
       }
     } catch (e) { console.warn("[HL perpDexs] failed:", e.message); }
 
-    console.log(`[HL portfolio] HIP-3 dexs to query: ${dexList.join(", ") || "(none)"}`);
-
     const dexAcctEntries = []; // { name, total, free } — one per non-empty HIP-3 dex
     for (const dex of dexList) {
       try {
         const r = await hlPost({ type: "clearinghouseState", user: walletAddr, dex });
-        if (!r.ok || !r.body || typeof r.body !== "object") {
-          console.log(`[HL dex:${dex}] no state (HTTP ${r.status})`);
-          continue;
-        }
+        if (!r.ok || !r.body || typeof r.body !== "object") continue;
         const cs = r.body;
         const dexAcct = parseFloat(cs.marginSummary?.accountValue || 0);
         const dexFree = parseFloat(cs.withdrawable || 0);
-        console.log(`[HL dex:${dex}] accountValue=$${dexAcct.toFixed(2)} withdrawable=$${dexFree.toFixed(2)} positions=${cs.assetPositions?.length || 0}`);
+        // Skip empty dexes silently (there are dozens) — only keep funded ones.
         if (dexAcct === 0 && (!cs.assetPositions || cs.assetPositions.length === 0)) continue;
         dexAcctEntries.push({ name: dex, total: dexAcct, free: dexFree });
         if (Array.isArray(cs.assetPositions)) {
@@ -1627,9 +1640,14 @@ function log(botId, msg, level = "info") {
   }
   broadcast("log", entry);
   console.log(`[${String(botId).toUpperCase()}/${level.toUpperCase()}] ${msg}`);
-  // Per-bot log file (so `tail -f logs/<botId>.log` shows only this bot)
+  // Per-bot log file (so `tail -f logs/<botId>.log` shows only this bot).
+  // Size-capped with rotation so it can't fill the disk over long sessions.
   try {
-    getLogStream(botId).write(`${ts}  [${level.toUpperCase().padEnd(7)}] ${msg}\n`);
+    const line = `${ts}  [${level.toUpperCase().padEnd(7)}] ${msg}\n`;
+    getLogStream(botId);            // ensure stream + byte count initialized
+    rotateLogIfNeeded(botId);       // rotate if the current file is over the cap
+    getLogStream(botId).write(line);
+    logBytes[botId] = (logBytes[botId] || 0) + Buffer.byteLength(line);
   } catch (e) { /* never let logging break the bot */ }
 }
 
@@ -2139,15 +2157,17 @@ async function gridLoop(botId) {
 
     broadcast("state", buildStateSnapshot());
 
-    // Persist in-memory state every 10s so a deploy/reboot can resume in
-    // place without cancelling orders or recomputing the grid.
-    if (!bot._lastStateSave || Date.now() - bot._lastStateSave > 10000) {
+    // Persist in-memory state every 30s so a deploy/reboot can resume in
+    // place without cancelling orders or recomputing the grid. (30s not 10s
+    // keeps MySQL binlog churn — a full-disk risk on small volumes — low;
+    // openOrders are reconciled against the exchange on resume anyway.)
+    if (!bot._lastStateSave || Date.now() - bot._lastStateSave > 30000) {
       bot._lastStateSave = Date.now();
       db.saveSessionState(botId, {
         openOrders         : bot.openOrders,
         pendingRoundTrips  : bot.pendingRoundTrips,
         completedRoundTrips: bot.completedRoundTrips.slice(0, 200),
-        fillHistory        : bot.fillHistory.slice(0, 500),
+        fillHistory        : bot.fillHistory.slice(0, 100),
         gridAnchor         : bot.gridAnchor,
         entryPrice         : bot.entryPrice,
         upperLimit         : bot.upperLimit,
