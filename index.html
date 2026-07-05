@@ -1487,9 +1487,12 @@ function fmtRuntime(ms) {
 }
 setInterval(() => {
   const el = document.getElementById("runtimeStat");
-  if (!el || !el.dataset.startedAt) return;
-  const startedAt = parseInt(el.dataset.startedAt, 10);
-  el.textContent = fmtRuntime(Date.now() - startedAt);
+  if (!el || !el.dataset.rtMs || !el.dataset.rtAnchor) return;
+  const base   = parseInt(el.dataset.rtMs, 10);
+  const anchor = parseInt(el.dataset.rtAnchor, 10);
+  // Extrapolate from the last server reading using elapsed browser time only
+  // (a difference of Date.now() values — clock offset cancels out).
+  el.textContent = fmtRuntime(base + (Date.now() - anchor));
 }, 1000);
 
 // ── Dynamic Running-Bots bar ──
@@ -2254,13 +2257,22 @@ function renderState(state) {
   if (state.lowerLimit) { document.getElementById("lowerLimitStat").textContent = "$" + state.lowerLimit.toFixed(4); document.getElementById("lowerLimitPreview").value = "$" + state.lowerLimit.toFixed(4); }
   else                  { document.getElementById("lowerLimitStat").textContent = "—"; }
 
-  // Runtime (auto-updates every second below for live ticking)
+  // Runtime — anchor to the SERVER's runtimeMs and extrapolate locally, so the
+  // display never depends on the browser and server clocks agreeing (mixing a
+  // server-set startedAt with the browser's Date.now() caused the value to
+  // blink between two clock-skewed readings).
   const runtimeEl = document.getElementById("runtimeStat");
   if (state.running && state.startedAt) {
-    runtimeEl.textContent = state.runtimeStr || "—";
-    runtimeEl.dataset.startedAt = state.startedAt;   // for ticking
+    const rtMs = (typeof state.runtimeMs === "number")
+      ? state.runtimeMs
+      : Math.max(0, Date.now() - state.startedAt);
+    runtimeEl.dataset.rtMs     = rtMs;
+    runtimeEl.dataset.rtAnchor = Date.now();
+    runtimeEl.textContent      = fmtRuntime(rtMs);
   } else {
     runtimeEl.textContent = "—";
+    delete runtimeEl.dataset.rtMs;
+    delete runtimeEl.dataset.rtAnchor;
     delete runtimeEl.dataset.startedAt;
   }
 
