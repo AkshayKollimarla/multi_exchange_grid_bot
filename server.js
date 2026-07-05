@@ -3919,8 +3919,10 @@ app.delete("/api/accounts/:id", async (req, res) => {
 
 // CSV download (browser) — same period semantics as /api/report
 app.get("/api/csv", async (req, res) => {
-  const exchangeKey = req.query.botId || req.query.exchange || "binance";
-  if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });
+  // No exchange param = cross-exchange (matches the PnL Report). A specific
+  // exchange/botId still scopes it when provided.
+  const exchangeParam = req.query.botId || req.query.exchange || null;
+  if (exchangeParam && !bots[exchangeParam]) return res.status(400).json({ error: "Unknown exchange" });
   const symbol = req.query.symbol && req.query.symbol !== "all" ? req.query.symbol : null;
 
   const now    = Date.now();
@@ -3934,25 +3936,25 @@ app.get("/api/csv", async (req, res) => {
     toTs   = parseInt(req.query.to)   || now;
   } else fromTs = now - 24 * 60 * 60 * 1000;
 
-  if (exchangeKey === "deribit") await refreshDeribitFees().catch(()=>{});
+  if (exchangeParam === "deribit") await refreshDeribitFees().catch(()=>{});
 
   // Prefer the DB-backed builder so the CSV honours the coin filter and
   // persists across restarts. Fall back to in-memory if MySQL isn't set up.
   let csv;
   if (db.dbConfigured()) {
     try {
-      const report = await db.queryReport({ exchange: exchangeKey, fromTs, toTs, symbol });
-      csv = report ? buildCsvFromDbReport(report, { exchangeKey, symbol, fromTs, toTs })
-                   : buildCsvReport(exchangeKey, fromTs, toTs);
+      const report = await db.queryReport({ exchange: exchangeParam, fromTs, toTs, symbol });
+      csv = report ? buildCsvFromDbReport(report, { exchangeKey: exchangeParam || "all", symbol, fromTs, toTs })
+                   : buildCsvReport(exchangeParam || "binance", fromTs, toTs);
     } catch (e) {
-      csv = buildCsvReport(exchangeKey, fromTs, toTs);
+      csv = buildCsvReport(exchangeParam || "binance", fromTs, toTs);
     }
   } else {
-    csv = buildCsvReport(exchangeKey, fromTs, toTs);
+    csv = buildCsvReport(exchangeParam || "binance", fromTs, toTs);
   }
   const symTag   = symbol ? `_${String(symbol).replace(/[^A-Za-z0-9]+/g, "")}` : "";
   const dateStr  = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-  const filename = `gridbot_${exchangeKey}${symTag}_${period}_${dateStr}.csv`;
+  const filename = `gridbot_${exchangeParam || "all"}${symTag}_${period}_${dateStr}.csv`;
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(csv);

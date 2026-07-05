@@ -2432,7 +2432,9 @@ function setReportPeriod(period, btn) {
 
 // Build the report URL params (used by both loadReport and downloadCsv)
 function reportQueryString() {
-  let qs = `exchange=${currentExchange}&period=${currentPeriod}`;
+  // No exchange scope — the PnL Report is cross-exchange; the coin dropdown
+  // lists every coin from every exchange and filters by symbol.
+  let qs = `period=${currentPeriod}`;
   if (currentReportSymbol && currentReportSymbol !== "all") {
     qs += `&symbol=${encodeURIComponent(currentReportSymbol)}`;
   }
@@ -2494,11 +2496,17 @@ function downloadCsv() {
 function renderReport(data) {
   populateReportSymbols(data.symbols);
 
+  // Cross-exchange report label reflects the coin filter, not one exchange.
+  const lbl = document.getElementById("reportExLabel");
+  if (lbl) lbl.textContent = (currentReportSymbol && currentReportSymbol !== "all")
+    ? coinLabel(currentReportSymbol) : "All Exchanges";
+
   const pnl      = data.pnl      || 0;
   const rt       = data.count    || 0;
   const perRtPnl = data.perRtPnl || 0;
   const avgSpread = data.avgSpread || 0;
-  const isDeribit = currentExchange === "deribit";
+  // Rebates aren't tracked in the DB-backed cross-exchange report; hide them.
+  const isDeribit = false;
 
   const pnlEl = document.getElementById("rPnl");
   pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(4);
