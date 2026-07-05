@@ -2368,8 +2368,11 @@ async function checkAndHandleFills(botId, currentPrice) {
         const fillQty   = parseFloat(order.filled  || order.amount || tracked.qty);
         const feeCost   = parseFloat(order.fee?.cost ?? 0);
         const feeCcy    = order.fee?.currency || "";
+        // Did the exchange actually report a fee for this fill? (0 is a valid
+        // real fee — e.g. 0-maker promos — and must NOT be treated as missing.)
+        const feeKnown  = order.fee != null && order.fee.cost != null;
 
-        log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}`, "success");
+        log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee:${feeKnown ? "$"+feeCost.toFixed(4) : "n/a"}`, "success");
 
         const ccxtFill = {
           side: tracked.side, price: fillPrice, qty: fillQty,
@@ -2398,6 +2401,8 @@ async function checkAndHandleFills(botId, currentPrice) {
             targetPrice,
             qty             : fillQty,
             openTs          : fillTs,
+            openOrderId     : tracked.id,                  // to look up the real open-leg fee later
+            openFee         : feeKnown ? feeCost : null,   // actual open-leg fee (null = estimate/lookup later)
           });
           log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
 
@@ -2430,10 +2435,27 @@ async function checkAndHandleFills(botId, currentPrice) {
             const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
             const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
             const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
-            // Prefer real fee from THIS close fill (we have it from order data);
-            // estimate fee for the OPEN fill (it was recorded earlier).
-            const openFee   = estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
-            const closeFee  = feeCost > 0 ? feeCost : estimateFee(cfg.priceSource, fillPrice, rt.qty);
+            // Take ACTUAL exchange fees for both legs (incl. 0 — e.g. a 0-maker
+            // promo). fetchOrder omits the fee on some exchanges (Binance
+            // futures), so if either leg's fee is unknown, pull it from the
+            // trade history (one call, matched by order id). Estimate only when
+            // the exchange still gives us nothing.
+            let realOpen  = rt.openFee;
+            let realClose = feeKnown ? feeCost : null;
+            if (realOpen == null || realClose == null) {
+              try {
+                const trades = await bot.exchange.fetchMyTrades(cfg.symbol, undefined, 100);
+                const byOid = {};
+                for (const t of trades) {
+                  const oid = String(t.order ?? t.info?.orderId ?? t.info?.order_id ?? "");
+                  if (oid) byOid[oid] = (byOid[oid] || 0) + parseFloat(t.fee?.cost ?? 0);
+                }
+                if (realOpen  == null && byOid[String(rt.openOrderId)] !== undefined) realOpen  = byOid[String(rt.openOrderId)];
+                if (realClose == null && byOid[String(tracked.id)]     !== undefined) realClose = byOid[String(tracked.id)];
+              } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
+            }
+            const openFee   = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
+            const closeFee  = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty);
             const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
             const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
 
