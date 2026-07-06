@@ -1333,6 +1333,16 @@
               <div class="stat-value" id="optTodayDn" style="font-size:18px;">—</div>
               <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves −dist by EOD</div></div>
           </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+            <div class="pnl-card pnl-neutral" style="border-top:2px solid var(--green);">
+              <div class="stat-label">At Expiry ↑ <span id="optExpUpLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optExpUp" style="font-size:18px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
+            <div class="pnl-card pnl-neutral" style="border-top:2px solid var(--red);">
+              <div class="stat-label">At Expiry ↓ <span id="optExpDnLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optExpDn" style="font-size:18px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
+          </div>
           <table class="ord-table">
             <thead><tr><th>Leg</th><th>At +Dist</th><th>At −Dist</th></tr></thead>
             <tbody id="optBreakdown"><tr><td colspan="3" class="empty-td">Fill the inputs and Calculate</td></tr></tbody>
@@ -1958,6 +1968,18 @@ function calcOptionStrategy() {
   const tuEl = document.getElementById("optTodayUp"), tdEl = document.getElementById("optTodayDn");
   tuEl.textContent = fmt(tUp); tuEl.style.color = col(tUp);
   tdEl.textContent = fmt(tDn); tdEl.style.color = col(tDn);
+
+  // ── At expiry: intrinsic value only (no time value).
+  const scenExp = (Sp) => {
+    const val = (type === "call") ? Math.max(0, Sp - K) : Math.max(0, K - Sp);
+    return (val - premium) * lots * dirOpt + (Sp - perpEntry) * perpQty * dirPerp;
+  };
+  const eUp = scenExp(S + dist), eDn = scenExp(S - dist);
+  const euEl = document.getElementById("optExpUp"), edEl = document.getElementById("optExpDn");
+  euEl.textContent = fmt(eUp); euEl.style.color = col(eUp);
+  edEl.textContent = fmt(eDn); edEl.style.color = col(eDn);
+  document.getElementById("optExpUpLabel").textContent = `@ $${(S + dist).toFixed(0)}`;
+  document.getElementById("optExpDnLabel").textContent = `@ $${(S - dist).toFixed(0)}`;
 
   document.getElementById("optBreakdown").innerHTML = `
     <tr><td>Option (${type} ${dirOpt > 0 ? "long" : "short"} ×${lots})</td>
