@@ -1314,13 +1314,24 @@
       <div class="card">
         <div class="card-header">Estimated P&amp;L</div>
         <div class="card-body">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
             <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--green);">
-              <div class="stat-label">EST UPSIDE PnL <span id="optUpLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-label">EST UPSIDE PnL <span style="color:var(--muted);">(now)</span> <span id="optUpLabel" style="color:var(--muted);"></span></div>
               <div class="stat-value" id="optUpPnl" style="font-size:24px;">—</div></div>
             <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--red);">
-              <div class="stat-label">EST DOWNSIDE PnL <span id="optDnLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-label">EST DOWNSIDE PnL <span style="color:var(--muted);">(now)</span> <span id="optDnLabel" style="color:var(--muted);"></span></div>
               <div class="stat-value" id="optDnPnl" style="font-size:24px;">—</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Daily θ (decay)</div>
+              <div class="stat-value" id="optTheta" style="font-size:18px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">per day, price flat</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Today ↑ <span style="color:var(--muted);">(1d)</span></div>
+              <div class="stat-value" id="optTodayUp" style="font-size:18px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves +dist by EOD</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Today ↓ <span style="color:var(--muted);">(1d)</span></div>
+              <div class="stat-value" id="optTodayDn" style="font-size:18px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves −dist by EOD</div></div>
           </div>
           <table class="ord-table">
             <thead><tr><th>Leg</th><th>At +Dist</th><th>At −Dist</th></tr></thead>
@@ -1811,6 +1822,20 @@ function bsPrice(type, S, K, T, sigma, r) {
   if (type === "call") return S * _normCdf(d1) - K * Math.exp(-r * T) * _normCdf(d2);
   return K * Math.exp(-r * T) * _normCdf(-d2) - S * _normCdf(-d1);
 }
+// Standard normal PDF.
+function _normPdf(x) { return 0.3989422804014327 * Math.exp(-x * x / 2); }
+// Black-Scholes theta PER DAY (USD). Negative for long options (value decays).
+function bsThetaPerDay(type, S, K, T, sigma, r) {
+  if (!(S > 0) || !(K > 0) || T <= 0 || sigma <= 0) return 0;
+  const st = sigma * Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + sigma * sigma / 2) * T) / st;
+  const d2 = d1 - st;
+  const decay = -(S * _normPdf(d1) * sigma) / (2 * Math.sqrt(T));   // shared term
+  const perYear = (type === "call")
+    ? decay - r * K * Math.exp(-r * T) * _normCdf(d2)
+    : decay + r * K * Math.exp(-r * T) * _normCdf(-d2);
+  return perYear / 365;
+}
 
 const _deribitHost = () => (serverConfig.deribitTestnet ? "test.deribit.com" : "www.deribit.com");
 
@@ -1918,6 +1943,21 @@ function calcOptionStrategy() {
   dnEl.textContent = fmt(dn.total); dnEl.style.color = col(dn.total);
   document.getElementById("optUpLabel").textContent = `@ $${(S + dist).toFixed(0)}`;
   document.getElementById("optDnLabel").textContent = `@ $${(S - dist).toFixed(0)}`;
+
+  // ── Daily theta (position) + "today" scenarios (move happens over 1 day, so
+  //    the option also loses a day of time value). Perp has no time decay.
+  const thetaPos = bsThetaPerDay(type, S, K, T, sigma, r) * lots * dirOpt;
+  const Tday  = Math.max(0, T - 1 / 365);
+  const scenT = (Sp) => {
+    const val = bsPrice(type, Sp, K, Tday, sigma, r);
+    return (val - premium) * lots * dirOpt + (Sp - perpEntry) * perpQty * dirPerp;
+  };
+  const tUp = scenT(S + dist), tDn = scenT(S - dist);
+  const thEl = document.getElementById("optTheta");
+  thEl.textContent = fmt(thetaPos) + "/day"; thEl.style.color = col(thetaPos);
+  const tuEl = document.getElementById("optTodayUp"), tdEl = document.getElementById("optTodayDn");
+  tuEl.textContent = fmt(tUp); tuEl.style.color = col(tUp);
+  tdEl.textContent = fmt(tDn); tdEl.style.color = col(tDn);
 
   document.getElementById("optBreakdown").innerHTML = `
     <tr><td>Option (${type} ${dirOpt > 0 ? "long" : "short"} ×${lots})</td>
