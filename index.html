@@ -1848,9 +1848,11 @@ async function loadOptExpiries() {
   const note = document.getElementById("optQuoteNote");
   note.textContent = "Loading option chain…";
   try {
-    const r = await fetch(`https://${_deribitHost()}/api/v2/public/get_instruments?currency=${cur}&kind=option&expired=false`);
-    const j = await r.json();
-    optInstruments = (j.result || []);
+    // Fetched via our server (avoids browser CORS/CSP hangs on Deribit).
+    const r = await fetch(`/api/deribit/instruments?currency=${cur}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    optInstruments = await r.json();
+    if (!Array.isArray(optInstruments)) optInstruments = [];
     const expiries = [...new Set(optInstruments.map(i => i.expiration_timestamp))].sort((a, b) => a - b);
     document.getElementById("optExpiry").innerHTML = expiries.map(ts => {
       const label = new Date(ts).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" });
@@ -1886,9 +1888,9 @@ async function fetchOptQuote() {
   if (!inst) { note.textContent = "Instrument not found in chain"; return; }
   note.textContent = "Fetching quote…";
   try {
-    const r = await fetch(`https://${_deribitHost()}/api/v2/public/ticker?instrument_name=${encodeURIComponent(inst.instrument_name)}`);
-    const j = await r.json();
-    const t = j.result || {};
+    const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.json();
     const index = t.index_price || t.underlying_price || 0;
     // Deribit option premium is quoted in the coin; convert to USD via index.
     const bidC = t.best_bid_price || 0, askC = t.best_ask_price || 0, markC = t.mark_price || 0;
