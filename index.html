@@ -2536,10 +2536,12 @@ function renderState(state) {
   // Price stats
   document.getElementById("livePrice").textContent      = state.lastPrice  ? "$" + state.lastPrice.toFixed(4)  : "—";
   document.getElementById("entryPriceStat").textContent = state.entryPrice ? "$" + state.entryPrice.toFixed(4) : "—";
-  if (state.upperLimit) { document.getElementById("upperLimitStat").textContent = "$" + state.upperLimit.toFixed(4); document.getElementById("upperLimitPreview").value = "$" + state.upperLimit.toFixed(4); }
-  else                  { document.getElementById("upperLimitStat").textContent = "—"; }
-  if (state.lowerLimit) { document.getElementById("lowerLimitStat").textContent = "$" + state.lowerLimit.toFixed(4); document.getElementById("lowerLimitPreview").value = "$" + state.lowerLimit.toFixed(4); }
-  else                  { document.getElementById("lowerLimitStat").textContent = "—"; }
+  // The Active Bot stats show the focused bot's REAL limits. The Bot
+  // Configuration preview is intentionally NOT overwritten here — it stays a
+  // neutral "Live Price ± distance" hint so it never shows another coin's
+  // limit (e.g. HYPE's $69.45 while you're configuring SPCX).
+  document.getElementById("upperLimitStat").textContent = state.upperLimit ? "$" + state.upperLimit.toFixed(4) : "—";
+  document.getElementById("lowerLimitStat").textContent = state.lowerLimit ? "$" + state.lowerLimit.toFixed(4) : "—";
 
   // Runtime — anchor to the SERVER's runtimeMs and extrapolate locally, so the
   // display never depends on the browser and server clocks agreeing (mixing a
