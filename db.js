@@ -71,6 +71,56 @@ async function pingDb() {
     // Persisted in-memory state for true continuation across restarts.
     try { await conn.query("ALTER TABLE bot_sessions ADD COLUMN state_json JSON NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Options Multi-Agent Database — strategies logged via the Options DB
+    // sidebar section (Dashboard / Add Strategy / Combined Simulator /
+    // Analysis). Mirrors the schema of the standalone options_pnl_report app
+    // (same field set), stored here so it lives in the grid bot's own MySQL.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS options_trades (
+        id                          INT AUTO_INCREMENT PRIMARY KEY,
+        entry_date                  DATE          NULL,
+        token                       VARCHAR(50)   NOT NULL,
+        option_type                 VARCHAR(10)   DEFAULT 'PUT',
+        investment                  DECIMAL(20,4) DEFAULT 0,
+        options_strike              VARCHAR(50)   NULL,
+        expiry                      DATE          NULL,
+        opt_entry_qty               DECIMAL(20,4) DEFAULT 0,
+        opt_entry_price             DECIMAL(20,4) DEFAULT 0,
+        opt_exit_price              DECIMAL(20,4) DEFAULT 0,
+        fut_qty                     DECIMAL(20,4) DEFAULT 0,
+        fut_entry_price             DECIMAL(20,4) DEFAULT 0,
+        fut_exit_price              DECIMAL(20,4) DEFAULT 0,
+        upside_distance             DECIMAL(20,4) DEFAULT 0,
+        down_distance               DECIMAL(20,4) DEFAULT 0,
+        basket_distance             DECIMAL(20,4) DEFAULT 0,
+        basket_loss                 DECIMAL(20,4) DEFAULT 0,
+        net_booked_pnl              DECIMAL(20,4) DEFAULT 0,
+        market_making_pl            DECIMAL(20,4) DEFAULT 0,
+        end_date                    DATE          NULL,
+        status                      VARCHAR(10)   DEFAULT 'open',
+        group_id                    VARCHAR(64)   NULL,
+        days_to_expiry              INT           DEFAULT 0,
+        total_theta_gain_loss       DECIMAL(20,4) DEFAULT 0,
+        per_day_theta_gain_loss     DECIMAL(20,4) DEFAULT 0,
+        total_baskets               DECIMAL(20,4) DEFAULT 0,
+        total_mm_loss               DECIMAL(20,4) DEFAULT 0,
+        upper_limit                 DECIMAL(20,4) DEFAULT 0,
+        lower_limit                 DECIMAL(20,4) DEFAULT 0,
+        upside_opt_pnl              DECIMAL(20,4) DEFAULT 0,
+        down_opt_pnl                DECIMAL(20,4) DEFAULT 0,
+        upside_fut_pnl              DECIMAL(20,4) DEFAULT 0,
+        downside_fut_pnl            DECIMAL(20,4) DEFAULT 0,
+        estimated_upside_net_pnl    DECIMAL(20,4) DEFAULT 0,
+        estimated_downside_net_pnl  DECIMAL(20,4) DEFAULT 0,
+        apy                         DECIMAL(10,4) DEFAULT 0,
+        created_at                  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_opt_token  (token),
+        INDEX idx_opt_status (status),
+        INDEX idx_opt_group  (group_id),
+        INDEX idx_opt_entry_date (entry_date)
+      ) ENGINE=InnoDB
+    `);
+
     // Trading accounts (multiple wallets/keys per exchange). Credentials are
     // stored as JSON so each exchange can keep its own shape:
     //   hyperliquid → { walletAddress, privateKey }
@@ -451,9 +501,179 @@ async function deleteAccount(id) {
   catch (e) { console.error("[DB] deleteAccount failed:", e.message); }
 }
 
+// ============================================================
+//  OPTIONS MULTI-AGENT DATABASE
+//  Ported 1:1 from the standalone options_pnl_report app
+//  (lib/options-calculations.js "computeDerived") so the PnL
+//  formulas match exactly. Derived fields are recomputed
+//  server-side on every insert/update — never trusted from the client.
+// ============================================================
+const OPT_MANUAL_COLS = [
+  "entry_date","token","option_type","investment","options_strike","expiry",
+  "opt_entry_qty","opt_entry_price","opt_exit_price",
+  "fut_qty","fut_entry_price","fut_exit_price",
+  "upside_distance","down_distance","basket_distance","basket_loss",
+  "net_booked_pnl","market_making_pl","end_date","status","group_id",
+];
+const OPT_DERIVED_COLS = [
+  "days_to_expiry","total_theta_gain_loss","per_day_theta_gain_loss",
+  "total_baskets","total_mm_loss","upper_limit","lower_limit",
+  "upside_opt_pnl","down_opt_pnl","upside_fut_pnl","downside_fut_pnl",
+  "estimated_upside_net_pnl","estimated_downside_net_pnl","apy",
+];
+const OPT_ALL_COLS = [...OPT_MANUAL_COLS, ...OPT_DERIVED_COLS];
+
+function optStrikeNumber(strike) {
+  if (!strike) return 0.0;
+  const m = String(strike).replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return m ? parseFloat(m[0]) : 0.0;
+}
+function optF(v) { const n = parseFloat(v); return isNaN(n) ? 0.0 : n; }
+function optDiv(a, b) { return b === 0 ? 0.0 : a / b; }
+
+function computeOptionsDerived(d) {
+  const entryDate = d.entry_date ? new Date(d.entry_date) : new Date();
+  const expiry    = d.expiry     ? new Date(d.expiry)     : null;
+
+  let days_to_expiry = 0;
+  if (expiry && !isNaN(entryDate) && !isNaN(expiry)) {
+    days_to_expiry = Math.round((expiry - entryDate) / 86400000);
+  }
+
+  const opt_entry_qty    = optF(d.opt_entry_qty);
+  const opt_entry_price  = optF(d.opt_entry_price);
+  const fut_qty           = optF(d.fut_qty);
+  const fut_entry_price   = optF(d.fut_entry_price);
+  const upside_distance   = optF(d.upside_distance);
+  const down_distance     = optF(d.down_distance);
+  const basket_distance   = optF(d.basket_distance);
+  const basket_loss       = optF(d.basket_loss);
+  const market_making_pl  = optF(d.market_making_pl);
+  const investment        = optF(d.investment);
+  const option_type       = (d.option_type || "PUT").toUpperCase();
+  const strike_num        = optStrikeNumber(d.options_strike);
+
+  const total_theta_gain_loss   = opt_entry_qty * opt_entry_price;
+  const per_day_theta_gain_loss = optDiv(total_theta_gain_loss, days_to_expiry);
+  const total_baskets           = optDiv(down_distance, basket_distance);
+
+  const blbd          = optDiv(basket_loss, basket_distance);
+  const mm            = (basket_loss * total_baskets) + (blbd + blbd / 2 + blbd / 2) * (down_distance / 2);
+  const total_mm_loss = -mm;
+
+  const upper_limit = fut_entry_price + upside_distance;
+  const lower_limit = fut_entry_price - down_distance;
+
+  let upside_opt_pnl, down_opt_pnl;
+  if (option_type === "CALL") {
+    const breakeven = strike_num + opt_entry_price;
+    upside_opt_pnl = breakeven > upper_limit
+      ? -(opt_entry_price * opt_entry_qty)
+      : (upper_limit - breakeven) * opt_entry_qty;
+    down_opt_pnl = opt_entry_price * (-opt_entry_qty);
+  } else { // PUT
+    const net_strike = strike_num - opt_entry_price;
+    down_opt_pnl = net_strike < lower_limit
+      ? -(opt_entry_price * opt_entry_qty)
+      : (net_strike - lower_limit) * opt_entry_qty;
+    upside_opt_pnl = opt_entry_price * (-opt_entry_qty);
+  }
+
+  const upside_fut_pnl             = fut_qty * upside_distance;
+  const downside_fut_pnl           = -(fut_qty * down_distance);
+  const estimated_upside_net_pnl   = total_mm_loss + upside_opt_pnl + upside_fut_pnl;
+  const estimated_downside_net_pnl = total_mm_loss + down_opt_pnl + downside_fut_pnl;
+  const apy                        = investment ? (market_making_pl / investment) * 365 * 100 : 0;
+
+  return {
+    days_to_expiry, total_theta_gain_loss, per_day_theta_gain_loss,
+    total_baskets, total_mm_loss, upper_limit, lower_limit,
+    upside_opt_pnl, down_opt_pnl, upside_fut_pnl, downside_fut_pnl,
+    estimated_upside_net_pnl, estimated_downside_net_pnl, apy,
+  };
+}
+
+// Empty strings -> NULL for DATE/numeric columns (MySQL strict mode).
+function optSanitize(v) { return (v === "" || v === undefined) ? null : v; }
+
+async function listOptionsTrades({ status, token, groupId, dateFrom, dateTo, page = 1, limit = 50 } = {}) {
+  const p = getPool();
+  if (!p) return null;
+  const conditions = [], params = [];
+  if (groupId) {
+    conditions.push("group_id = ?"); params.push(groupId);
+  } else {
+    if (status && status !== "all") { conditions.push("status = ?"); params.push(status); }
+    if (token)   { conditions.push("token LIKE ?");      params.push(`%${token}%`); }
+    if (dateFrom){ conditions.push("entry_date >= ?");   params.push(dateFrom); }
+    if (dateTo)  { conditions.push("entry_date <= ?");   params.push(dateTo); }
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const order = `ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END, entry_date DESC, id DESC`;
+
+  if (groupId) {
+    const [rows] = await p.query(`SELECT * FROM options_trades ${where} ${order}`, params);
+    return { trades: rows };
+  }
+
+  const lim    = Math.min(9999, Math.max(10, parseInt(limit, 10) || 50));
+  const pg     = Math.max(1, parseInt(page, 10) || 1);
+  const offset = (pg - 1) * lim;
+  const [[countRows], [rows]] = await Promise.all([
+    p.query(`SELECT COUNT(*) AS total FROM options_trades ${where}`, params),
+    p.query(`SELECT * FROM options_trades ${where} ${order} LIMIT ? OFFSET ?`, [...params, lim, offset]),
+  ]);
+  const total = countRows[0].total;
+  return { trades: rows, total, page: pg, pages: Math.ceil(total / lim), limit: lim };
+}
+
+async function getOptionsTrade(id) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query("SELECT * FROM options_trades WHERE id = ? LIMIT 1", [id]);
+  return rows[0] || null;
+}
+
+async function addOptionsTrade(body) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  if (!body.token) throw new Error("Token is required.");
+  const derived = computeOptionsDerived(body);
+  const row  = { ...body, ...derived };
+  const cols = OPT_ALL_COLS.filter((c) => row[c] !== undefined && row[c] !== "");
+  const vals = cols.map((c) => optSanitize(row[c]));
+  const placeholders = cols.map(() => "?").join(", ");
+  const [result] = await p.query(
+    `INSERT INTO options_trades (${cols.join(", ")}) VALUES (${placeholders})`, vals
+  );
+  return result.insertId;
+}
+
+async function updateOptionsTrade(id, body) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  const existing = await getOptionsTrade(id);
+  if (!existing) throw new Error("Not found.");
+  const merged  = { ...existing, ...body };
+  const derived = computeOptionsDerived(merged);
+  const final   = { ...merged, ...derived };
+  const sets = OPT_ALL_COLS.map((c) => `${c} = ?`).join(", ");
+  const vals = [...OPT_ALL_COLS.map((c) => optSanitize(final[c])), id];
+  await p.query(`UPDATE options_trades SET ${sets} WHERE id = ?`, vals);
+}
+
+async function deleteOptionsTrade(id) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  const [result] = await p.query("DELETE FROM options_trades WHERE id = ?", [id]);
+  if (result.affectedRows === 0) throw new Error("Not found.");
+}
+
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
   loadAllSessions, dbConfigured,
   listAccounts, getAccount, addAccount, deleteAccount,
+  listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,
+  deleteOptionsTrade, computeOptionsDerived, optStrikeNumber,
 };

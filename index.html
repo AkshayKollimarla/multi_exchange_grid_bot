@@ -843,7 +843,8 @@
     <div class="nav-item"        id="nav-logs"     onclick="showSection('logs', this)"><span class="ic">📜</span> Bot Logs</div>
     <div class="nav-item"        id="nav-active"   onclick="showSection('active', this)"><span class="ic">🟢</span> Active Bot <span class="badge" id="navActiveBadge" style="display:none;">0</span></div>
     <div class="nav-group">Derivatives</div>
-    <div class="nav-item"        id="nav-options"  onclick="showSection('options', this)"><span class="ic">🎯</span> Options Strategy</div>
+    <div class="nav-item"        id="nav-options"   onclick="showSection('options', this)"><span class="ic">🎯</span> Options Strategy</div>
+    <div class="nav-item"        id="nav-optionsdb" onclick="showSection('optionsdb', this)"><span class="ic">🗄️</span> Options Multi-Agent DB</div>
   </aside>
 
   <!-- ══ CONTENT ══ -->
@@ -1354,6 +1355,195 @@
     </div>
   </section>
 
+  <!-- ══════════ SECTION: OPTIONS MULTI-AGENT DATABASE ══════════ -->
+  <section id="sec-optionsdb" class="section">
+    <div class="sec-head">🗄️ Options Multi-Agent Database</div>
+
+    <div class="tab-row" style="margin-bottom:16px;">
+      <button class="tab-btn active" id="odbTab-dashboard"  onclick="showOdbTab('dashboard')">📋 Dashboard</button>
+      <button class="tab-btn"        id="odbTab-add"        onclick="showOdbTab('add')">➕ Add Strategy</button>
+      <button class="tab-btn"        id="odbTab-sim"        onclick="showOdbTab('sim')">🧮 Combined Simulator</button>
+      <button class="tab-btn"        id="odbTab-analysis"   onclick="showOdbTab('analysis')">🔍 Analysis</button>
+    </div>
+
+    <!-- ── Dashboard ── -->
+    <div id="odbPanel-dashboard" class="odb-panel">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+        <div class="pnl-card pnl-neutral"><div class="stat-label">Total (page)</div><div class="stat-value blue" id="odbStatTotal">0 / 0</div></div>
+        <div class="pnl-card pnl-neutral"><div class="stat-label">Open (page)</div><div class="stat-value" id="odbStatOpen">0</div></div>
+        <div class="pnl-card pnl-neutral"><div class="stat-label">Closed (page)</div><div class="stat-value" id="odbStatClosed">0</div></div>
+        <div class="pnl-card pnl-neutral"><div class="stat-label">Booked PnL (page)</div><div class="stat-value" id="odbStatPnl">$0.00</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-body" style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
+          <div class="field" style="margin:0;min-width:150px;">
+            <label>Status</label>
+            <select id="odbFilterStatus" onchange="odbReload(true)">
+              <option value="all">All</option><option value="open">Open</option><option value="closed">Closed</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;min-width:150px;">
+            <label>Search Token</label>
+            <input type="text" id="odbFilterToken" placeholder="e.g. BTC" oninput="odbDebounceReload()"/>
+          </div>
+          <div class="field" style="margin:0;">
+            <label>From</label>
+            <input type="date" id="odbFilterFrom" onchange="odbReload(true)"/>
+          </div>
+          <div class="field" style="margin:0;">
+            <label>To</label>
+            <input type="date" id="odbFilterTo" onchange="odbReload(true)"/>
+          </div>
+          <button class="btn-refresh" onclick="odbClearFilters()">Clear filters</button>
+          <button class="btn btn-start" style="margin-left:auto;padding:10px 18px;" onclick="odbStartAdd()">➕ Add Strategy</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body" style="padding:0;">
+          <table class="ord-table">
+            <thead><tr><th>#</th><th>Date</th><th>Token</th><th>Type</th><th>Strike</th><th>Expiry</th><th>Days</th><th>Status</th><th>Investment</th><th>MM PL</th><th>Booked PnL</th><th>APY</th><th>Actions</th></tr></thead>
+            <tbody id="odbTradesBody"><tr><td colspan="13" class="empty-td">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="odbPagination" style="display:flex;justify-content:space-between;align-items:center;padding:10px 2px;font-size:12px;color:var(--muted);"></div>
+    </div>
+
+    <!-- ── Add Strategy ── -->
+    <div id="odbPanel-add" class="odb-panel" style="display:none;">
+      <div id="odbAddModeNote" style="display:none;margin-bottom:10px;font-size:12px;color:var(--muted);"></div>
+      <div class="page" style="align-items:start;">
+        <div class="card">
+          <div class="card-header">Strategy Details</div>
+          <div class="card-body">
+            <div class="section-title">Basic Info</div>
+            <div class="row-2">
+              <div class="field"><label>Entry Date *</label><input type="date" id="odbEntryDate"/></div>
+              <div class="field"><label>Token *</label><input type="text" id="odbToken" placeholder="e.g. BTC, HOOD"/></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Option Type</label>
+                <select id="odbOptType" onchange="odbLiveCalc()"><option value="PUT">PUT</option><option value="CALL">CALL</option></select></div>
+              <div class="field"><label>Investment</label><input type="number" id="odbInvestment" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Status</label>
+                <select id="odbStatus"><option value="open">Open</option><option value="closed">Closed</option></select></div>
+              <div class="field"><label>End Date</label><input type="date" id="odbEndDate"/></div>
+            </div>
+
+            <div class="section-title">Option Details</div>
+            <div class="row-2">
+              <div class="field"><label>Strike (free text) *</label><input type="text" id="odbStrike" placeholder='e.g. "96 PUT"' oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Expiry Date</label><input type="date" id="odbExpiry" oninput="odbLiveCalc()"/></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Entry Qty</label><input type="number" id="odbOptQty" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Entry Price</label><input type="number" id="odbOptEntryPrice" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Exit Price</label><input type="number" id="odbOptExitPrice" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Implied Vol σ (%)</label><input type="number" id="odbIv" step="0.5" placeholder="e.g. 30" oninput="odbLiveCalc()"/></div>
+            </div>
+
+            <div class="section-title">Futures Details</div>
+            <div class="row-2">
+              <div class="field"><label>Fut Qty</label><input type="number" id="odbFutQty" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Fut Entry Price</label><input type="number" id="odbFutEntryPrice" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+            <div class="field"><label>Fut Exit Price</label><input type="number" id="odbFutExitPrice" step="any" oninput="odbLiveCalc()"/></div>
+
+            <div class="section-title">Distances &amp; Basket</div>
+            <div class="row-2">
+              <div class="field"><label>Upside Distance</label><input type="number" id="odbUpDist" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Down Distance</label><input type="number" id="odbDnDist" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+            <div class="row-2">
+              <div class="field"><label>Basket Distance</label><input type="number" id="odbBasketDist" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Basket Loss</label><input type="number" id="odbBasketLoss" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+
+            <div class="section-title">Close / Booked</div>
+            <div class="row-2">
+              <div class="field"><label>Net Booked PnL</label><input type="number" id="odbBookedPnl" step="any"/></div>
+              <div class="field"><label>Market Making PL</label><input type="number" id="odbMmPl" step="any" oninput="odbLiveCalc()"/></div>
+            </div>
+
+            <div class="btn-row">
+              <button class="btn btn-start" id="odbSaveBtn" onclick="odbSaveStrategy()">💾 Save Strategy</button>
+              <button class="btn" style="background:var(--emerald,#16a34a);color:#fff;display:none;" id="odbSaveAsNewBtn" onclick="odbSaveAsNew()">💾 Save as New</button>
+              <button class="btn btn-stop" onclick="odbResetAddForm()">↺ Reset</button>
+            </div>
+            <div id="odbAddMsg" style="font-size:12px;margin-top:8px;"></div>
+          </div>
+        </div>
+
+        <div class="card" style="position:sticky;top:16px;">
+          <div class="card-header">🔒 Auto-Calculated (Live)</div>
+          <div class="card-body" id="odbCalcPanel" style="font-size:12px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Combined Simulator ── -->
+    <div id="odbPanel-sim" class="odb-panel" style="display:none;">
+      <div id="odbSimModeNote" style="display:none;margin-bottom:10px;font-size:12px;color:var(--muted);"></div>
+      <div id="odbSimLegs" style="display:flex;flex-direction:column;gap:16px;"></div>
+      <div class="btn-row" style="margin:14px 0;">
+        <button class="btn-refresh" onclick="odbAddLeg()">＋ Add Leg</button>
+        <button class="btn-refresh" onclick="odbSimResetNew()">🆕 New Combined Strategy</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">Combined Net PnL</div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Total Investment</div><div class="stat-value blue" id="odbSimInv">$0.00</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Booked PnL</div><div class="stat-value" id="odbSimBooked">$0.00</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">MM PL</div><div class="stat-value" id="odbSimMm">$0.00</div></div>
+            <div class="pnl-card pnl-neutral"><div class="stat-label">Combined APY</div><div class="stat-value" id="odbSimApy" style="color:var(--purple,#9333ea);">—</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div class="card-body" style="background:var(--surface-2,#f8fafc);border-radius:10px;padding:14px;" id="odbSimUpBlock"></div>
+            <div class="card-body" style="background:var(--surface-2,#f8fafc);border-radius:10px;padding:14px;" id="odbSimDnBlock"></div>
+          </div>
+          <div class="section-title" style="margin-top:14px;">Side-by-Side Breakdown</div>
+          <table class="ord-table">
+            <thead id="odbSimTableHead"></thead>
+            <tbody id="odbSimTableBody"></tbody>
+          </table>
+          <div class="btn-row" style="margin-top:16px;">
+            <button class="btn btn-start" id="odbSimSaveBtn" onclick="odbSimSaveAll()">💾 Save All Legs</button>
+            <button class="btn" style="background:var(--emerald,#16a34a);color:#fff;display:none;" id="odbSimSaveNewBtn" onclick="odbSimSaveAsNew()">💾 Add as New Strategy</button>
+          </div>
+          <div id="odbSimMsg" style="font-size:12px;margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Analysis ── -->
+    <div id="odbPanel-analysis" class="odb-panel" style="display:none;">
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">
+            <div class="field" style="margin:0;"><label>Symbol</label><select id="odbAnSymbol" onchange="odbAnRefreshList()"><option value="all">All Symbols</option></select></div>
+            <div class="field" style="margin:0;"><label>Status</label><select id="odbAnStatus" onchange="odbAnRefreshList()"><option value="all">All</option><option value="open">Open</option><option value="closed">Closed</option></select></div>
+            <div class="field" style="margin:0;"><label>From</label><input type="date" id="odbAnFrom" onchange="odbAnRefreshList()"/></div>
+            <div class="field" style="margin:0;"><label>To</label><input type="date" id="odbAnTo" onchange="odbAnRefreshList()"/></div>
+          </div>
+          <div class="field" style="margin:0;">
+            <label>Select Strategy</label>
+            <select id="odbAnSelect" onchange="odbAnLoadTrade()"><option value="">— Select a strategy —</option></select>
+          </div>
+        </div>
+      </div>
+      <div id="odbAnBody"></div>
+    </div>
+
+  </section>
+
   </main><!-- end content -->
 </div><!-- end app-shell -->
 
@@ -1679,6 +1869,7 @@ function showSection(name, el) {
   if (name === "report")   loadReport();
   if (name === "config")   loadConfigAccounts();
   if (name === "options" && !optInstruments.length) loadOptExpiries();
+  if (name === "optionsdb") { if (!odbInited) { odbInited = true; odbReload(true); } }
 }
 
 // Update the sidebar badge (count of running bots) + the Active Bot picker.
@@ -2900,6 +3091,827 @@ function makeLogEl(entry) {
   el.className = "log-line";
   el.innerHTML = `<span class="log-time">${new Date(entry.ts).toLocaleTimeString()}</span><span class="log-text ${entry.level}">${entry.msg}</span>`;
   return el;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  OPTIONS MULTI-AGENT DATABASE
+//  Dashboard / Add Strategy / Combined Simulator / Analysis
+//  Ported from the standalone options_pnl_report Next.js app;
+//  data persists to the grid bot's own MySQL (options_trades table).
+// ══════════════════════════════════════════════════════════════
+let odbInited = false;
+let odbTrades = [], odbTotal = 0, odbPage = 1, odbPages = 1;
+let odbEditId = null, odbEditGroupId = null;
+let odbSimLegs = [], odbSimEditIds = [];
+let odbDebounceTimer = null;
+let odbAnAllTrades = [], odbAnCurrentTrade = null;
+
+function showOdbTab(name) {
+  ["dashboard","add","sim","analysis"].forEach(n => {
+    const panel = document.getElementById("odbPanel-" + n);
+    const tab   = document.getElementById("odbTab-" + n);
+    if (panel) panel.style.display = (n === name) ? "" : "none";
+    if (tab)   tab.classList.toggle("active", n === name);
+  });
+  if (name === "sim")      odbInitSimIfEmpty();
+  if (name === "analysis") odbAnEnsureLoaded();
+}
+
+/* ── Formatters ─────────────────────────────────────────── */
+function odbFmtCcy(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || isNaN(n)) return "—";
+  return (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function odbFmtNum(v, dec = 2) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || isNaN(n)) return "—";
+  return n.toFixed(dec);
+}
+function odbFmtDate(d) {
+  if (!d) return "—";
+  const s = String(d);
+  const dt = new Date(s.length === 10 ? s + "T00:00:00" : s.replace(" ", "T"));
+  if (isNaN(dt)) return s;
+  return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function odbToInputDate(d) {
+  if (!d) return "";
+  const s = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const dt = new Date(s.replace(" ", "T"));
+  if (isNaN(dt)) return "";
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+}
+
+/* ── Derived-field formulas (mirrors db.js computeOptionsDerived exactly,
+     used here only for the live client-side preview — the server always
+     recomputes authoritatively on save) ───────────────────── */
+function odbStrikeNumber(strike) {
+  if (!strike) return 0.0;
+  const m = String(strike).replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return m ? parseFloat(m[0]) : 0.0;
+}
+function odbF(v) { const n = parseFloat(v); return isNaN(n) ? 0.0 : n; }
+function odbDiv(a, b) { return b === 0 ? 0.0 : a / b; }
+function odbComputeDerived(d) {
+  const entryDate = d.entry_date ? new Date(d.entry_date) : new Date();
+  const expiry    = d.expiry     ? new Date(d.expiry)     : null;
+  let days_to_expiry = 0;
+  if (expiry && !isNaN(entryDate) && !isNaN(expiry)) days_to_expiry = Math.round((expiry - entryDate) / 86400000);
+
+  const opt_entry_qty   = odbF(d.opt_entry_qty),   opt_entry_price = odbF(d.opt_entry_price);
+  const fut_qty          = odbF(d.fut_qty),          fut_entry_price = odbF(d.fut_entry_price);
+  const upside_distance  = odbF(d.upside_distance),  down_distance   = odbF(d.down_distance);
+  const basket_distance  = odbF(d.basket_distance),  basket_loss     = odbF(d.basket_loss);
+  const market_making_pl = odbF(d.market_making_pl), investment      = odbF(d.investment);
+  const option_type      = (d.option_type || "PUT").toUpperCase();
+  const strike_num       = odbStrikeNumber(d.options_strike);
+
+  const total_theta_gain_loss   = opt_entry_qty * opt_entry_price;
+  const per_day_theta_gain_loss = odbDiv(total_theta_gain_loss, days_to_expiry);
+  const total_baskets           = odbDiv(down_distance, basket_distance);
+
+  const blbd          = odbDiv(basket_loss, basket_distance);
+  const mm            = (basket_loss * total_baskets) + (blbd + blbd / 2 + blbd / 2) * (down_distance / 2);
+  const total_mm_loss = -mm;
+
+  const upper_limit = fut_entry_price + upside_distance;
+  const lower_limit = fut_entry_price - down_distance;
+
+  let upside_opt_pnl, down_opt_pnl;
+  if (option_type === "CALL") {
+    const breakeven = strike_num + opt_entry_price;
+    upside_opt_pnl = breakeven > upper_limit ? -(opt_entry_price * opt_entry_qty) : (upper_limit - breakeven) * opt_entry_qty;
+    down_opt_pnl = opt_entry_price * (-opt_entry_qty);
+  } else {
+    const net_strike = strike_num - opt_entry_price;
+    down_opt_pnl = net_strike < lower_limit ? -(opt_entry_price * opt_entry_qty) : (net_strike - lower_limit) * opt_entry_qty;
+    upside_opt_pnl = opt_entry_price * (-opt_entry_qty);
+  }
+
+  const upside_fut_pnl             = fut_qty * upside_distance;
+  const downside_fut_pnl           = -(fut_qty * down_distance);
+  const estimated_upside_net_pnl   = total_mm_loss + upside_opt_pnl + upside_fut_pnl;
+  const estimated_downside_net_pnl = total_mm_loss + down_opt_pnl + downside_fut_pnl;
+  const apy                        = investment ? (market_making_pl / investment) * 365 * 100 : 0;
+
+  return { days_to_expiry, total_theta_gain_loss, per_day_theta_gain_loss, total_baskets, total_mm_loss,
+    upper_limit, lower_limit, upside_opt_pnl, down_opt_pnl, upside_fut_pnl, downside_fut_pnl,
+    estimated_upside_net_pnl, estimated_downside_net_pnl, apy };
+}
+
+/* ══════════════════════ DASHBOARD ══════════════════════ */
+function odbDebounceReload() {
+  clearTimeout(odbDebounceTimer);
+  odbDebounceTimer = setTimeout(() => odbReload(true), 400);
+}
+function odbClearFilters() {
+  document.getElementById("odbFilterStatus").value = "all";
+  document.getElementById("odbFilterToken").value  = "";
+  document.getElementById("odbFilterFrom").value   = "";
+  document.getElementById("odbFilterTo").value     = "";
+  odbReload(true);
+}
+async function odbReload(resetPage) {
+  if (resetPage) odbPage = 1;
+  const tb = document.getElementById("odbTradesBody");
+  tb.innerHTML = `<tr><td colspan="13" class="empty-td">Loading…</td></tr>`;
+  const qs = new URLSearchParams();
+  const status = document.getElementById("odbFilterStatus").value;
+  const token  = document.getElementById("odbFilterToken").value.trim();
+  const from   = document.getElementById("odbFilterFrom").value;
+  const to     = document.getElementById("odbFilterTo").value;
+  if (status !== "all") qs.set("status", status);
+  if (token)  qs.set("token", token);
+  if (from)   qs.set("date_from", from);
+  if (to)     qs.set("date_to", to);
+  qs.set("page", odbPage); qs.set("limit", 50);
+  try {
+    const r = await fetch(`/api/options-db/trades?${qs}`);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    odbTrades = j.trades || []; odbTotal = j.total ?? 0; odbPages = j.pages ?? 1;
+    odbRenderTable(); odbRenderPagination(); odbRenderStats();
+  } catch (e) {
+    tb.innerHTML = `<tr><td colspan="13" class="empty-td">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+function odbRenderStats() {
+  const open   = odbTrades.filter(t => t.status === "open").length;
+  const closed = odbTrades.filter(t => t.status === "closed").length;
+  const booked = odbTrades.filter(t => t.status === "closed").reduce((s,t) => s + Number(t.net_booked_pnl||0), 0);
+  document.getElementById("odbStatTotal").textContent  = `${odbTrades.length} / ${odbTotal}`;
+  document.getElementById("odbStatOpen").textContent   = open;
+  document.getElementById("odbStatClosed").textContent = closed;
+  document.getElementById("odbStatPnl").textContent    = odbFmtCcy(booked);
+}
+function odbRenderTable() {
+  const tb = document.getElementById("odbTradesBody");
+  if (!odbTrades.length) {
+    tb.innerHTML = `<tr><td colspan="13" class="empty-td">No strategies found. <a href="#" onclick="odbStartAdd();return false;">Add one.</a></td></tr>`;
+    return;
+  }
+  const seen = new Set(); const rows = [];
+  for (const t of odbTrades) {
+    if (t.group_id) {
+      if (seen.has(t.group_id)) continue;
+      seen.add(t.group_id);
+      const members = odbTrades.filter(x => x.group_id === t.group_id);
+      const combinedPnl = members.reduce((s,m) => s + Number(m.net_booked_pnl||0), 0);
+      rows.push(`<tr style="background:#f5f3ff;"><td colspan="13" style="padding:8px 12px;border-left:4px solid #7c3aed;">
+        <span style="background:#7c3aed;color:#fff;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;">COMBINED · ${members.length} legs</span>
+        <span style="margin-left:10px;font-size:12px;font-weight:700;color:${combinedPnl>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">Combined PnL: ${odbFmtCcy(combinedPnl)}</span>
+      </td></tr>`);
+      for (const m of members) rows.push(odbTradeRow(m, true, t.group_id));
+    } else {
+      rows.push(odbTradeRow(t, false, null));
+    }
+  }
+  tb.innerHTML = rows.join("");
+}
+function odbTradeRow(t, combined, groupId) {
+  const typeColor   = t.option_type === "PUT" ? "var(--red,#dc2626)" : "var(--green,#16a34a)";
+  const statusStyle = t.status === "open" ? "background:#d1fae5;color:#059669;" : "background:#f1f5f9;color:#475569;";
+  const pnlColor    = Number(t.net_booked_pnl) >= 0 ? "var(--green,#16a34a)" : "var(--red,#dc2626)";
+  const editLink = combined
+    ? `<a href="#" onclick="odbStartEditCombined('${groupId}');return false;" style="color:#7c3aed;font-weight:600;">Edit Combined</a>`
+    : `<a href="#" onclick="odbStartEdit(${t.id});return false;" style="color:var(--brand,#1e40af);font-weight:600;">Edit / Close</a>`;
+  return `<tr style="${combined?"border-left:4px solid #ddd6fe;":""}">
+    <td style="font-family:monospace;color:var(--muted);font-size:11px;">${t.id}</td>
+    <td style="white-space:nowrap;">${odbFmtDate(t.entry_date)}</td>
+    <td><b>${escapeHtml(t.token)}</b>${combined?'<div style="font-size:10px;color:#a78bfa;">leg</div>':""}</td>
+    <td><span style="color:${typeColor};font-weight:700;font-size:11px;">${t.option_type}</span></td>
+    <td>${escapeHtml(t.options_strike||"—")}</td>
+    <td style="white-space:nowrap;">${odbFmtDate(t.expiry)}</td>
+    <td>${t.days_to_expiry ?? "—"}</td>
+    <td><span style="${statusStyle}padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;text-transform:capitalize;">${t.status}</span></td>
+    <td>${odbFmtCcy(t.investment)}</td>
+    <td style="color:${Number(t.market_making_pl)>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};font-weight:600;">${odbFmtCcy(t.market_making_pl)}</td>
+    <td style="color:${pnlColor};font-weight:600;">${t.net_booked_pnl!=null?odbFmtCcy(t.net_booked_pnl):"—"}</td>
+    <td style="color:#7c3aed;font-weight:600;">${t.apy!=null?Number(t.apy).toFixed(2)+"%":"—"}</td>
+    <td style="white-space:nowrap;">${editLink} &nbsp; <a href="#" onclick="odbDeleteTrade(${t.id});return false;" style="color:var(--red,#dc2626);">Delete</a></td>
+  </tr>`;
+}
+function odbRenderPagination() {
+  const el = document.getElementById("odbPagination");
+  if (odbPages <= 1) { el.innerHTML = ""; return; }
+  el.innerHTML = `<span>Page ${odbPage} of ${odbPages} · ${odbTotal} records</span>
+    <span>
+      <button class="btn-refresh" ${odbPage<=1?"disabled":""} onclick="odbGotoPage(${odbPage-1})">‹ Prev</button>
+      <button class="btn-refresh" ${odbPage>=odbPages?"disabled":""} onclick="odbGotoPage(${odbPage+1})">Next ›</button>
+    </span>`;
+}
+function odbGotoPage(p) { odbPage = p; odbReload(false); }
+async function odbDeleteTrade(id) {
+  if (!confirm("Delete this strategy?")) return;
+  try {
+    const r = await fetch(`/api/options-db/trades/${id}`, { method: "DELETE" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    odbReload(false);
+  } catch (e) { alert("Delete failed: " + e.message); }
+}
+
+/* ══════════════════════ ADD STRATEGY ══════════════════════ */
+const ODB_FIELD_MAP = {
+  entry_date:"odbEntryDate", token:"odbToken", option_type:"odbOptType",
+  investment:"odbInvestment", status:"odbStatus", end_date:"odbEndDate",
+  options_strike:"odbStrike", expiry:"odbExpiry",
+  opt_entry_qty:"odbOptQty", opt_entry_price:"odbOptEntryPrice", opt_exit_price:"odbOptExitPrice",
+  fut_qty:"odbFutQty", fut_entry_price:"odbFutEntryPrice", fut_exit_price:"odbFutExitPrice",
+  upside_distance:"odbUpDist", down_distance:"odbDnDist",
+  basket_distance:"odbBasketDist", basket_loss:"odbBasketLoss",
+  net_booked_pnl:"odbBookedPnl", market_making_pl:"odbMmPl",
+};
+function odbReadForm() {
+  const f = {};
+  for (const [k, id] of Object.entries(ODB_FIELD_MAP)) f[k] = document.getElementById(id).value;
+  return f;
+}
+function odbFillForm(t) {
+  document.getElementById("odbEntryDate").value     = odbToInputDate(t.entry_date);
+  document.getElementById("odbToken").value         = t.token || "";
+  document.getElementById("odbOptType").value       = t.option_type || "PUT";
+  document.getElementById("odbInvestment").value    = t.investment ?? "";
+  document.getElementById("odbStatus").value        = t.status || "open";
+  document.getElementById("odbEndDate").value       = odbToInputDate(t.end_date);
+  document.getElementById("odbStrike").value        = t.options_strike || "";
+  document.getElementById("odbExpiry").value        = odbToInputDate(t.expiry);
+  document.getElementById("odbOptQty").value        = t.opt_entry_qty ?? "";
+  document.getElementById("odbOptEntryPrice").value = t.opt_entry_price ?? "";
+  document.getElementById("odbOptExitPrice").value  = t.opt_exit_price ?? "";
+  document.getElementById("odbIv").value            = "";
+  document.getElementById("odbFutQty").value        = t.fut_qty ?? "";
+  document.getElementById("odbFutEntryPrice").value = t.fut_entry_price ?? "";
+  document.getElementById("odbFutExitPrice").value  = t.fut_exit_price ?? "";
+  document.getElementById("odbUpDist").value        = t.upside_distance ?? "";
+  document.getElementById("odbDnDist").value        = t.down_distance ?? "";
+  document.getElementById("odbBasketDist").value    = t.basket_distance ?? "";
+  document.getElementById("odbBasketLoss").value    = t.basket_loss ?? "";
+  document.getElementById("odbBookedPnl").value     = t.net_booked_pnl ?? "";
+  document.getElementById("odbMmPl").value          = t.market_making_pl ?? "";
+}
+function odbEmptyForm() {
+  for (const id of Object.values(ODB_FIELD_MAP)) {
+    const el = document.getElementById(id);
+    if (el.tagName !== "SELECT") el.value = "";
+  }
+  document.getElementById("odbOptType").value = "PUT";
+  document.getElementById("odbStatus").value  = "open";
+  document.getElementById("odbIv").value      = "";
+  document.getElementById("odbEntryDate").value = new Date().toISOString().slice(0,10);
+}
+function odbStartAdd() {
+  odbEditId = null; odbEditGroupId = null;
+  odbEmptyForm();
+  document.getElementById("odbAddModeNote").style.display = "none";
+  document.getElementById("odbSaveBtn").textContent = "💾 Save Strategy";
+  document.getElementById("odbSaveAsNewBtn").style.display = "none";
+  document.getElementById("odbAddMsg").textContent = "";
+  showOdbTab("add");
+  odbLiveCalc();
+}
+async function odbStartEdit(id) {
+  showOdbTab("add");
+  document.getElementById("odbAddMsg").textContent = "";
+  try {
+    const r = await fetch(`/api/options-db/trades/${id}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    odbEditId = id; odbEditGroupId = null;
+    odbFillForm(j.trade);
+    document.getElementById("odbAddModeNote").style.display = "";
+    document.getElementById("odbAddModeNote").innerHTML = `Editing strategy <b>#${id}</b>`;
+    document.getElementById("odbSaveBtn").textContent = "💾 Update Strategy";
+    document.getElementById("odbSaveAsNewBtn").style.display = "";
+    odbLiveCalc();
+  } catch (e) { document.getElementById("odbAddMsg").textContent = "Load failed: " + e.message; }
+}
+function odbResetAddForm() { odbEmptyForm(); odbLiveCalc(); }
+async function odbSaveStrategy() {
+  const form = odbReadForm();
+  if (!form.token.trim()) { alert("Token is required."); return; }
+  const msg = document.getElementById("odbAddMsg"), btn = document.getElementById("odbSaveBtn");
+  btn.disabled = true; msg.style.color = "var(--muted)"; msg.textContent = "Saving…";
+  try {
+    const isEdit = odbEditId != null;
+    const url = isEdit ? `/api/options-db/trades/${odbEditId}` : "/api/options-db/trades";
+    const r = await fetch(url, { method: isEdit?"PUT":"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(form) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Save failed");
+    msg.style.color = "var(--green,#16a34a)";
+    msg.textContent = isEdit ? "✓ Strategy updated." : `✓ Saved as strategy #${j.id}.`;
+    if (!isEdit) odbEmptyForm();
+    odbReload(true);
+  } catch (e) { msg.style.color = "var(--red,#dc2626)"; msg.textContent = "Failed: " + e.message; }
+  finally { btn.disabled = false; }
+}
+async function odbSaveAsNew() {
+  const form = odbReadForm();
+  const msg = document.getElementById("odbAddMsg");
+  try {
+    const r = await fetch("/api/options-db/trades", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(form) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    msg.style.color = "var(--green,#16a34a)"; msg.textContent = `✓ Saved as new strategy #${j.id}.`;
+    odbReload(true);
+    setTimeout(() => odbStartEdit(j.id), 700);
+  } catch (e) { msg.style.color = "var(--red,#dc2626)"; msg.textContent = "Failed: " + e.message; }
+}
+function odbLiveCalc() {
+  const form = odbReadForm();
+  const derived = odbComputeDerived(form);
+
+  const K = odbStrikeNumber(form.options_strike);
+  const ep = parseFloat(form.opt_entry_price) || 0;
+  const qty = parseFloat(form.opt_entry_qty) || 0;
+  const S = parseFloat(form.fut_entry_price) || K || 0;
+  const ivPct = parseFloat(document.getElementById("odbIv").value) || 30;
+  const sigma = Math.max(0.01, ivPct/100);
+  const optType = (form.option_type || "PUT").toUpperCase();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const expD = form.expiry ? new Date(form.expiry+"T00:00:00") : null;
+  const dte = expD && !isNaN(expD) ? Math.max(0, Math.round((expD-today)/86400000)) : 0;
+  const T = dte/365;
+  const Sup = S + (parseFloat(form.upside_distance)||0);
+  const Sdn = S - (parseFloat(form.down_distance)||0);
+  const hasBS = K>0 && qty!==0;
+  const bsExpiry = (Sp) => { const iv = optType==="CALL"?Math.max(Sp-K,0):Math.max(K-Sp,0); return (iv-ep)*qty; };
+  const bsTodayFn = (Sp) => T>0 ? (bsPrice(optType.toLowerCase(), Sp, K, T, sigma, 0.05)-ep)*qty : bsExpiry(Sp);
+
+  const bsUp = hasBS ? bsExpiry(Sup) : null;
+  const bsDn = hasBS ? bsExpiry(Sdn) : null;
+  const bsUpToday = hasBS && Sup>0 ? bsTodayFn(Sup) : null;
+  const bsDnToday = hasBS && Sdn>0 ? bsTodayFn(Sdn) : null;
+  const bsNow = hasBS && S>0 ? bsTodayFn(S) : null;
+  const breakeven = K>0 ? (optType==="CALL"?K+ep:K-ep) : null;
+  const futUp = Number(derived.upside_fut_pnl)||0, futDn = Number(derived.downside_fut_pnl)||0;
+  const netUpToday = bsUpToday!=null ? bsUpToday+futUp : null;
+  const netDnToday = bsDnToday!=null ? bsDnToday+futDn : null;
+  const netUpExpiry = bsUp!=null ? bsUp+futUp : null;
+  const netDnExpiry = bsDn!=null ? bsDn+futDn : null;
+
+  document.getElementById("odbCalcPanel").innerHTML =
+    odbCalcGroup("General / Theta",
+      odbCalcRow("Days to Expiry", odbFmtNum(derived.days_to_expiry,0)) +
+      odbCalcRow("Total Theta", odbFmtCcy(derived.total_theta_gain_loss)) +
+      odbCalcRow("Per Day Theta", odbFmtCcy(derived.per_day_theta_gain_loss), {signed:true}) +
+      odbCalcRow("Total Baskets", odbFmtNum(derived.total_baskets)) +
+      odbCalcRow("Total MM Loss", odbFmtCcy(derived.total_mm_loss), {loss:true})) +
+    odbCalcGroup("Limits",
+      odbCalcRow("Upper Limit", odbFmtNum(derived.upper_limit)) +
+      odbCalcRow("Lower Limit", odbFmtNum(derived.lower_limit))) +
+    odbCalcGroup("📈 Upside",
+      odbCalcRow("Opt PnL (Upside)", odbFmtCcy(derived.upside_opt_pnl), {signed:true}) +
+      odbCalcRow("Fut PnL (Upside)", odbFmtCcy(derived.upside_fut_pnl), {signed:true}) +
+      odbCalcRow("Est. Net (Upside)", odbFmtCcy(derived.estimated_upside_net_pnl), {signed:true,big:true})) +
+    odbCalcGroup("📉 Downside",
+      odbCalcRow("Opt PnL (Down)", odbFmtCcy(derived.down_opt_pnl), {signed:true}) +
+      odbCalcRow("Fut PnL (Down)", odbFmtCcy(derived.downside_fut_pnl), {signed:true}) +
+      odbCalcRow("Est. Net (Down)", odbFmtCcy(derived.estimated_downside_net_pnl), {signed:true,big:true})) +
+    odbCalcGroup("Return", odbCalcRow("APY", derived.apy!=null?Number(derived.apy).toFixed(2)+"%":"—", {signed:true,big:true})) +
+    odbCalcGroup(`📊 BS Option PnL (IV ${ivPct}%, ${dte}d)`,
+      odbCalcRow("Upside Opt (Today BS)", odbFmtCcy(bsUpToday), {signed:true}) +
+      odbCalcRow("Fut PnL (Upside)", odbFmtCcy(futUp), {signed:true}) +
+      odbCalcRow("Net BS Upside (Today)", odbFmtCcy(netUpToday), {signed:true,big:true}) +
+      odbCalcRow("Downside Opt (Today BS)", odbFmtCcy(bsDnToday), {signed:true}) +
+      odbCalcRow("Fut PnL (Downside)", odbFmtCcy(futDn), {signed:true}) +
+      odbCalcRow("Net BS Downside (Today)", odbFmtCcy(netDnToday), {signed:true,big:true}) +
+      odbCalcRow("Upside Opt (Expiry)", odbFmtCcy(bsUp), {signed:true}) +
+      odbCalcRow("Fut PnL (Upside)", odbFmtCcy(futUp), {signed:true}) +
+      odbCalcRow("Est Net Upside (Expiry)", odbFmtCcy(netUpExpiry), {signed:true,big:true}) +
+      odbCalcRow("Downside Opt (Expiry)", odbFmtCcy(bsDn), {signed:true}) +
+      odbCalcRow("Fut PnL (Downside)", odbFmtCcy(futDn), {signed:true}) +
+      odbCalcRow("Est Net Downside (Expiry)", odbFmtCcy(netDnExpiry), {signed:true,big:true}) +
+      odbCalcRow("At Current Price (Today BS)", odbFmtCcy(bsNow), {signed:true,big:true}) +
+      odbCalcRow("Breakeven Price", breakeven!=null ? breakeven.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"));
+}
+function odbCalcRow(label, val, opts = {}) {
+  const n = Number(String(val).replace(/[^0-9.-]/g,"")); const isNum = !isNaN(n) && val !== "—";
+  const color = opts.loss ? "var(--red,#dc2626)" : (opts.signed && isNum ? (n>=0?"var(--green,#16a34a)":"var(--red,#dc2626)") : "var(--ink,#0b1220)");
+  return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--border,#e5e7eb);">
+    <span style="${opts.big?"font-weight:700;":"color:var(--muted);"}font-size:11px;">${label}</span>
+    <span style="${opts.big?"font-size:13px;font-weight:800;":"font-size:11px;font-weight:600;"}color:${color};">${val}</span></div>`;
+}
+function odbCalcGroup(title, html) {
+  return `<div style="margin-bottom:10px;"><div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.05em;margin-bottom:4px;">${title}</div>${html}</div>`;
+}
+
+/* ══════════════════════ COMBINED SIMULATOR ══════════════════════ */
+const ODB_LEG_TYPES = ["CALL LONG","CALL SHORT","PUT LONG","PUT SHORT"];
+const ODB_LEG_COLORS = { "CALL LONG":"#10b981", "CALL SHORT":"#f97316", "PUT LONG":"#3b82f6", "PUT SHORT":"#ef4444" };
+function odbEmptyLegForm() {
+  return { entry_date:"", token:"", investment:"", options_strike:"", expiry:"",
+    opt_entry_qty:"", opt_entry_price:"", opt_exit_price:"", iv:"",
+    fut_qty:"", fut_entry_price:"", fut_exit_price:"",
+    upside_distance:"", down_distance:"", basket_distance:"", basket_loss:"",
+    net_booked_pnl:"", market_making_pl:"", end_date:"", status:"open", option_type:"CALL" };
+}
+function odbMakeLeg(type) { return { type, form: { ...odbEmptyLegForm(), option_type: type.startsWith("CALL")?"CALL":"PUT" } }; }
+function odbInitSimIfEmpty() {
+  if (!odbSimLegs.length) {
+    odbSimLegs = [odbMakeLeg("CALL LONG"), odbMakeLeg("PUT LONG")];
+    odbSimEditIds = []; odbEditGroupId = null;
+    document.getElementById("odbSimModeNote").style.display = "none";
+    document.getElementById("odbSimSaveBtn").textContent = "💾 Save All Legs";
+    document.getElementById("odbSimSaveNewBtn").style.display = "none";
+  }
+  odbRenderSim();
+}
+function odbSimResetNew() { odbSimLegs = []; odbSimEditIds = []; odbEditGroupId = null; odbInitSimIfEmpty(); }
+function odbAddLeg() { odbSimLegs.push(odbMakeLeg("CALL LONG")); odbSimEditIds.push(null); odbRenderSim(); }
+function odbRemoveLeg(idx) {
+  if (odbSimLegs.length <= 2) return;
+  odbSimLegs.splice(idx,1); odbSimEditIds.splice(idx,1);
+  odbRenderSim();
+}
+function odbChangeLegType(idx, type) {
+  const leg = odbSimLegs[idx];
+  leg.type = type; leg.form.option_type = type.startsWith("CALL") ? "CALL" : "PUT";
+  const isShort = type.endsWith("SHORT"), raw = leg.form.opt_entry_qty;
+  if (raw !== "" && !isNaN(Number(raw))) leg.form.opt_entry_qty = String(isShort ? -Math.abs(Number(raw)) : Math.abs(Number(raw)));
+  odbRenderSim();
+}
+function odbSetLegField(idx, key, value) { odbSimLegs[idx].form[key] = value; odbSimUpdateCalcs(); }
+function odbRenderSim() {
+  const wrap = document.getElementById("odbSimLegs");
+  wrap.innerHTML = odbSimLegs.map((leg, idx) => odbLegCardHtml(leg, idx)).join("");
+  odbSimUpdateCalcs();
+}
+function odbLegCardHtml(leg, idx) {
+  const color = ODB_LEG_COLORS[leg.type], f = leg.form;
+  const val = (k) => escapeHtml(String(f[k] ?? ""));
+  const fid = (k) => `simLeg${idx}_${k}`;
+  const inp = (k, type="number") => `<input type="${type}" id="${fid(k)}" value="${val(k)}" ${type==="number"?'step="any"':""}
+    oninput="odbSetLegField(${idx},'${k}',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border,#e5e7eb);border-radius:6px;font-size:12px;"/>`;
+  const lbl = (t) => `<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;">${t}</label>`;
+  const f2 = (label,inputHtml) => `<div style="margin-bottom:8px;">${lbl(label)}${inputHtml}</div>`;
+  return `
+  <div class="card" style="border-top:3px solid ${color};">
+    <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <b>Leg ${idx+1}</b>
+      <select onchange="odbChangeLegType(${idx}, this.value)" style="border:1px solid ${color};color:${color};font-weight:700;border-radius:14px;padding:3px 10px;font-size:11px;background:#fff;">
+        ${ODB_LEG_TYPES.map(t=>`<option value="${t}" ${t===leg.type?"selected":""}>${t}</option>`).join("")}
+      </select>
+      ${leg.type.endsWith("SHORT")?'<span style="font-size:10px;color:#f97316;">⚠ negative qty</span>':""}
+      ${odbSimLegs.length>2 ? `<button class="btn-refresh" style="margin-left:auto;color:var(--red,#dc2626);" onclick="odbRemoveLeg(${idx})">Remove</button>` : ""}
+    </div>
+    <div class="card-body">
+      <div class="row-2">${f2("Entry Date", inp("entry_date","date"))}${f2("Token", inp("token","text"))}</div>
+      <div class="row-2">${f2("Investment", inp("investment"))}${f2("Strike", inp("options_strike","text"))}</div>
+      <div class="row-2">${f2("Expiry Date", inp("expiry","date"))}${f2(`Entry Qty${leg.type.endsWith("SHORT")?" (neg)":""}`, inp("opt_entry_qty"))}</div>
+      <div class="row-2">${f2("Entry Price", inp("opt_entry_price"))}${f2("Exit Price", inp("opt_exit_price"))}</div>
+      <div class="row-2">${f2("Fut Qty", inp("fut_qty"))}${f2("Fut Entry Price", inp("fut_entry_price"))}</div>
+      <div class="row-2">${f2("Fut Exit Price", inp("fut_exit_price"))}${f2("IV (%) for BS", inp("iv"))}</div>
+      <div class="row-2">${f2("Upside Distance", inp("upside_distance"))}${f2("Down Distance", inp("down_distance"))}</div>
+      <div class="row-2">${f2("Basket Distance", inp("basket_distance"))}${f2("Basket Loss", inp("basket_loss"))}</div>
+      <div class="row-2">${f2("Net Booked PnL", inp("net_booked_pnl"))}${f2("Market Making PL", inp("market_making_pl"))}</div>
+      <div class="row-2">
+        ${f2("Status", `<select id="${fid('status')}" onchange="odbSetLegField(${idx},'status',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border,#e5e7eb);border-radius:6px;font-size:12px;">
+          <option value="open" ${f.status==="open"?"selected":""}>Open</option><option value="closed" ${f.status==="closed"?"selected":""}>Closed</option></select>`)}
+        ${f2("End Date", inp("end_date","date"))}
+      </div>
+      <div id="simLegCalc${idx}" style="background:var(--surface-2,#f8fafc);border-radius:8px;padding:10px;margin-top:6px;"></div>
+    </div>
+  </div>`;
+}
+function odbLegCalcHtml(d) {
+  const row = (label,val,signed) => {
+    const n = Number(String(val).replace(/[^0-9.-]/g,"")); const isNum = !isNaN(n) && val!=="—";
+    const color = signed && isNum ? (n>=0?"var(--green,#16a34a)":"var(--red,#dc2626)") : "var(--ink,#0b1220)";
+    return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span style="color:var(--muted);">${label}</span><span style="font-weight:700;color:${color};">${val}</span></div>`;
+  };
+  return `<div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Auto-Calculated</div>
+    ${row("Days to Expiry", odbFmtNum(d.days_to_expiry,0))}
+    ${row("Total MM Loss", odbFmtCcy(d.total_mm_loss), true)}
+    ${row("Est. Net (Upside)", odbFmtCcy(d.estimated_upside_net_pnl), true)}
+    ${row("Est. Net (Down)", odbFmtCcy(d.estimated_downside_net_pnl), true)}
+    ${row("APY", d.apy!=null?Number(d.apy).toFixed(2)+"%":"—", true)}`;
+}
+function odbScenarioBlockHtml(title, scenario, totals, deriveds, bsToday) {
+  const legsHtml = odbSimLegs.map((l,i) => {
+    const v = scenario==="up" ? Number(deriveds[i].upside_opt_pnl) : Number(deriveds[i].down_opt_pnl);
+    return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px dashed var(--border,#e5e7eb);">
+      <span style="color:${ODB_LEG_COLORS[l.type]};font-weight:700;">Opt PnL — Leg ${i+1} (${l.type})</span>
+      <span style="font-weight:700;color:${v>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(v)}</span></div>`;
+  }).join("");
+  return `<div style="font-size:12px;font-weight:800;margin-bottom:8px;">${title}</div>${legsHtml}
+    <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span style="color:var(--muted);">Fut PnL (combined)</span><span style="font-weight:700;color:${totals.fut>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.fut)}</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span style="color:var(--muted);">Total MM Loss</span><span style="font-weight:700;color:${totals.mm>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.mm)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border,#e5e7eb);margin-top:4px;"><span style="font-weight:800;font-size:12px;">Est. Net ${scenario==="up"?"Upside":"Downside"}</span><span style="font-weight:800;font-size:13px;color:${totals.net>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.net)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="font-weight:700;font-size:12px;color:#7c3aed;">Today BS ${scenario==="up"?"Upside":"Downside"}</span><span style="font-weight:800;font-size:13px;color:${bsToday>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(bsToday)}</span></div>`;
+}
+function odbSimUpdateCalcs() {
+  const n = (v) => Number(v)||0;
+  const deriveds = odbSimLegs.map(l => odbComputeDerived(l.form));
+  odbSimLegs.forEach((leg, idx) => {
+    const el = document.getElementById(`simLegCalc${idx}`);
+    if (el) el.innerHTML = odbLegCalcHtml(deriveds[idx]);
+  });
+
+  const totalInvestment = odbSimLegs.reduce((s,l)=>s+n(l.form.investment),0);
+  const bookedPnl = odbSimLegs.reduce((s,l)=>s+n(l.form.net_booked_pnl),0);
+  const mmPl = odbSimLegs.reduce((s,l)=>s+n(l.form.market_making_pl),0);
+  const combinedApy = totalInvestment ? (bookedPnl/totalInvestment)*365*100 : null;
+  document.getElementById("odbSimInv").textContent = odbFmtCcy(totalInvestment);
+  const bkEl = document.getElementById("odbSimBooked"); bkEl.textContent = odbFmtCcy(bookedPnl); bkEl.style.color = bookedPnl>=0?"var(--green,#16a34a)":"var(--red,#dc2626)";
+  const mmEl = document.getElementById("odbSimMm"); mmEl.textContent = odbFmtCcy(mmPl); mmEl.style.color = mmPl>=0?"var(--green,#16a34a)":"var(--red,#dc2626)";
+  document.getElementById("odbSimApy").textContent = combinedApy!=null ? combinedApy.toFixed(2)+"%" : "—";
+
+  const upside = {
+    opt: deriveds.reduce((s,d)=>s+n(d.upside_opt_pnl),0), fut: deriveds.reduce((s,d)=>s+n(d.upside_fut_pnl),0),
+    mm:  deriveds.reduce((s,d)=>s+n(d.total_mm_loss),0),  net: deriveds.reduce((s,d)=>s+n(d.estimated_upside_net_pnl),0),
+  };
+  const downside = {
+    opt: deriveds.reduce((s,d)=>s+n(d.down_opt_pnl),0),      fut: deriveds.reduce((s,d)=>s+n(d.downside_fut_pnl),0),
+    mm:  deriveds.reduce((s,d)=>s+n(d.total_mm_loss),0),     net: deriveds.reduce((s,d)=>s+n(d.estimated_downside_net_pnl),0),
+  };
+  function legBsTodayPnl(form, optType, Starget) {
+    const K = odbStrikeNumber(form.options_strike), ep = parseFloat(form.opt_entry_price)||0, qty = parseFloat(form.opt_entry_qty)||0;
+    if (!K || !qty) return 0;
+    const sigma = Math.max(0.01, (parseFloat(form.iv)||30)/100);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const expD = form.expiry ? new Date(form.expiry+"T00:00:00") : null;
+    const dte = expD && !isNaN(expD) ? Math.max(0,Math.round((expD-today)/86400000)) : 0;
+    const T = dte/365;
+    if (T>0) return (bsPrice(optType.toLowerCase(), Starget, K, T, sigma, 0.05) - ep) * qty;
+    const intrinsic = optType==="CALL" ? Math.max(Starget-K,0) : Math.max(K-Starget,0);
+    return (intrinsic-ep)*qty;
+  }
+  const bsUpsideCombined = odbSimLegs.reduce((s,l) => {
+    const S = parseFloat(l.form.fut_entry_price)||0, opt = (l.form.option_type||"PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance)||0));
+  }, 0);
+  const bsDownsideCombined = odbSimLegs.reduce((s,l) => {
+    const S = parseFloat(l.form.fut_entry_price)||0, opt = (l.form.option_type||"PUT").toUpperCase();
+    return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance)||0));
+  }, 0);
+  document.getElementById("odbSimUpBlock").innerHTML = odbScenarioBlockHtml("📈 Upside Scenario", "up", upside, deriveds, bsUpsideCombined);
+  document.getElementById("odbSimDnBlock").innerHTML = odbScenarioBlockHtml("📉 Downside Scenario", "down", downside, deriveds, bsDownsideCombined);
+
+  const head = `<tr><th>Metric</th>${odbSimLegs.map((l,i)=>`<th style="color:${ODB_LEG_COLORS[l.type]};">Leg ${i+1} · ${l.type}</th>`).join("")}<th>Combined</th></tr>`;
+  const rowsDef = [
+    {label:"Upside Opt PnL", key:"upside_opt_pnl", total:upside.opt},
+    {label:"Down Opt PnL",   key:"down_opt_pnl",   total:downside.opt},
+    {label:"Upside Fut PnL", key:"upside_fut_pnl", total:upside.fut},
+    {label:"Down Fut PnL",   key:"downside_fut_pnl", total:downside.fut},
+    {label:"MM Loss",        key:"total_mm_loss",  total:upside.mm},
+    {label:"Est. Net (Up)",  key:"estimated_upside_net_pnl",   total:upside.net,   bold:true},
+    {label:"Est. Net (Down)",key:"estimated_downside_net_pnl", total:downside.net, bold:true},
+  ];
+  document.getElementById("odbSimTableHead").innerHTML = head;
+  document.getElementById("odbSimTableBody").innerHTML = rowsDef.map(r => `<tr>
+    <td style="${r.bold?"font-weight:700;":"color:var(--muted);"}">${r.label}</td>
+    ${deriveds.map(d=>`<td style="color:${n(d[r.key])>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(d[r.key])}</td>`).join("")}
+    <td style="font-weight:800;color:${r.total>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(r.total)}</td>
+  </tr>`).join("");
+}
+function odbDetectLegType(t) {
+  const isCall = (t.option_type||"").toUpperCase()==="CALL", isShort = Number(t.opt_entry_qty)<0;
+  if (isCall && !isShort) return "CALL LONG";
+  if (isCall && isShort)  return "CALL SHORT";
+  if (!isCall && !isShort) return "PUT LONG";
+  return "PUT SHORT";
+}
+function odbTradeToLegForm(t) {
+  return { entry_date: odbToInputDate(t.entry_date), token: t.token||"", investment: t.investment??"",
+    options_strike: t.options_strike||"", expiry: odbToInputDate(t.expiry),
+    opt_entry_qty: t.opt_entry_qty??"", opt_entry_price: t.opt_entry_price??"", opt_exit_price: t.opt_exit_price??"",
+    iv:"", fut_qty: t.fut_qty??"", fut_entry_price: t.fut_entry_price??"", fut_exit_price: t.fut_exit_price??"",
+    upside_distance: t.upside_distance??"", down_distance: t.down_distance??"",
+    basket_distance: t.basket_distance??"", basket_loss: t.basket_loss??"",
+    net_booked_pnl: t.net_booked_pnl??"", market_making_pl: t.market_making_pl??"",
+    end_date: odbToInputDate(t.end_date), status: t.status||"open", option_type: t.option_type||"CALL" };
+}
+async function odbStartEditCombined(groupId) {
+  showOdbTab("sim");
+  document.getElementById("odbSimMsg").textContent = "";
+  try {
+    const r = await fetch(`/api/options-db/trades?group_id=${encodeURIComponent(groupId)}`);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const members = j.trades || [];
+    if (!members.length) throw new Error("No legs found for this group.");
+    odbSimLegs = members.map(t => ({ type: odbDetectLegType(t), form: odbTradeToLegForm(t) }));
+    odbSimEditIds = members.map(m => m.id);
+    odbEditGroupId = groupId;
+    document.getElementById("odbSimModeNote").style.display = "";
+    document.getElementById("odbSimModeNote").innerHTML = `Editing combined group <b>${escapeHtml(groupId)}</b> · <a href="#" onclick="odbSimResetNew();return false;">start a new one instead</a>`;
+    document.getElementById("odbSimSaveBtn").textContent = "💾 Update Strategy";
+    document.getElementById("odbSimSaveNewBtn").style.display = "";
+    odbRenderSim();
+  } catch (e) { document.getElementById("odbSimMsg").textContent = "Load failed: " + e.message; }
+}
+async function odbSimSaveAll() {
+  if (odbEditGroupId) return odbSimUpdateGroup();
+  const msg = document.getElementById("odbSimMsg"), btn = document.getElementById("odbSimSaveBtn");
+  btn.disabled = true; msg.style.color="var(--muted)"; msg.textContent="Saving…";
+  try {
+    const groupId = `combined_${Date.now()}`;
+    for (const leg of odbSimLegs) {
+      const r = await fetch("/api/options-db/trades", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({...leg.form, group_id: groupId}) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error || "Save failed");
+    }
+    msg.style.color="var(--green,#16a34a)"; msg.textContent = `✓ Saved ${odbSimLegs.length} legs.`;
+    odbSimLegs = []; odbSimEditIds = []; odbEditGroupId = null;
+    setTimeout(() => { showOdbTab("dashboard"); odbReload(true); }, 1200);
+  } catch (e) { msg.style.color="var(--red,#dc2626)"; msg.textContent="Failed: "+e.message; }
+  finally { btn.disabled = false; }
+}
+async function odbSimUpdateGroup() {
+  const msg = document.getElementById("odbSimMsg");
+  try {
+    for (let i=0;i<odbSimLegs.length;i++) {
+      const leg = odbSimLegs[i], id = odbSimEditIds[i], body = {...leg.form, group_id: odbEditGroupId};
+      const r = id
+        ? await fetch(`/api/options-db/trades/${id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) })
+        : await fetch("/api/options-db/trades", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error);
+    }
+    msg.style.color="var(--green,#16a34a)"; msg.textContent="✓ All strategies updated.";
+    setTimeout(() => { showOdbTab("dashboard"); odbReload(true); }, 1200);
+  } catch (e) { msg.style.color="var(--red,#dc2626)"; msg.textContent="Failed: "+e.message; }
+}
+async function odbSimSaveAsNew() {
+  const msg = document.getElementById("odbSimMsg");
+  try {
+    const newGroupId = `combined_${Date.now()}`;
+    for (const leg of odbSimLegs) {
+      const r = await fetch("/api/options-db/trades", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({...leg.form, group_id: newGroupId}) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error);
+    }
+    msg.style.color="var(--green,#16a34a)"; msg.textContent="✓ Saved as new combined group.";
+    setTimeout(() => { showOdbTab("dashboard"); odbReload(true); }, 1200);
+  } catch (e) { msg.style.color="var(--red,#dc2626)"; msg.textContent="Failed: "+e.message; }
+}
+
+/* ══════════════════════ ANALYSIS ══════════════════════ */
+async function odbAnEnsureLoaded() {
+  if (odbAnAllTrades.length) return;
+  try {
+    const r = await fetch("/api/options-db/trades?limit=9999");
+    const j = await r.json();
+    odbAnAllTrades = j.trades || [];
+    odbAnPopulateSymbols();
+    odbAnRefreshList();
+  } catch (e) { console.warn("Options Analysis load failed:", e.message); }
+}
+function odbAnBaseToken(token) { return token ? token.split("-")[0] : "—"; }
+function odbAnPopulateSymbols() {
+  const set = new Set(odbAnAllTrades.map(t=>odbAnBaseToken(t.token)).filter(Boolean));
+  const sel = document.getElementById("odbAnSymbol"); const cur = sel.value;
+  sel.innerHTML = `<option value="all">All Symbols</option>` + [...set].sort().map(s=>`<option value="${s}">${escapeHtml(s)}</option>`).join("");
+  sel.value = cur || "all";
+}
+function odbAnRefreshList() {
+  const symbol = document.getElementById("odbAnSymbol").value;
+  const status = document.getElementById("odbAnStatus").value;
+  const from = document.getElementById("odbAnFrom").value, to = document.getElementById("odbAnTo").value;
+  const filtered = odbAnAllTrades.filter(t => {
+    if (symbol!=="all" && odbAnBaseToken(t.token)!==symbol) return false;
+    if (status!=="all" && t.status!==status) return false;
+    const d = t.entry_date ? odbToInputDate(t.entry_date) : null;
+    if (from && d && d < from) return false;
+    if (to && d && d > to) return false;
+    return true;
+  });
+  const sel = document.getElementById("odbAnSelect"); const cur = sel.value;
+  sel.innerHTML = `<option value="">— Select a strategy —</option>` + filtered.map(t =>
+    `<option value="${t.id}">#${t.id} · ${escapeHtml(t.token)} · ${t.option_type} · ${odbFmtDate(t.entry_date)} → ${odbFmtDate(t.end_date)}</option>`).join("");
+  if (filtered.some(t=>String(t.id)===cur)) sel.value = cur;
+  else document.getElementById("odbAnBody").innerHTML = "";
+}
+async function odbAnLoadTrade() {
+  const id = document.getElementById("odbAnSelect").value;
+  const body = document.getElementById("odbAnBody");
+  if (!id) { body.innerHTML = ""; return; }
+  body.innerHTML = `<p style="color:var(--muted);font-size:13px;">Loading…</p>`;
+  try {
+    const r = await fetch(`/api/options-db/trades/${id}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    odbAnRenderTrade(j.trade);
+  } catch (e) { body.innerHTML = `<p style="color:var(--red,#dc2626);">Error: ${escapeHtml(e.message)}</p>`; }
+}
+const ODB_OPT_FIELDS = [
+  ["token","Token","text"], ["option_type","Option Type","text"], ["options_strike","Strike Price","text"],
+  ["expiry","Expiry Date","date"], ["entry_date","Entry Date","date"], ["end_date","Exit Date","date"],
+  ["status","Status","text"], ["investment","Investment","currency"],
+  ["opt_entry_qty","Opt Entry Qty","number"], ["opt_entry_price","Opt Entry Price","currency"], ["opt_exit_price","Opt Exit Price","currency"],
+  ["fut_qty","Fut Qty","number"], ["fut_entry_price","Fut Entry Price","currency"], ["fut_exit_price","Fut Exit Price","currency"],
+  ["upside_distance","Upside Distance","number"], ["down_distance","Down Distance","number"],
+  ["basket_distance","Basket Distance","number"], ["basket_loss","Basket Loss","currency"],
+  ["total_baskets","Total Baskets","number"], ["total_mm_loss","Total MM Loss","currency"],
+  ["net_booked_pnl","Net Booked PNL","currency"], ["market_making_pl","Market Making PL","currency"],
+];
+function odbAnRenderTrade(t) {
+  const dateFrom = t.entry_date ? odbToInputDate(t.entry_date) : null;
+  const dateTo   = t.end_date   ? odbToInputDate(t.end_date)   : null;
+  let runningDates = [];
+  if (dateFrom && dateTo) {
+    const start = new Date(dateFrom+"T00:00:00"), end = new Date(dateTo+"T00:00:00");
+    for (let d=new Date(start); d<=end; d.setDate(d.getDate()+1)) runningDates.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
+  }
+  let html = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+    <div class="pnl-card pnl-neutral"><div class="stat-label">DATE</div><div class="stat-value">${odbFmtDate(t.entry_date)}</div></div>
+    <div class="pnl-card pnl-neutral"><div class="stat-label">TOKEN</div><div class="stat-value blue" style="font-size:20px;">${escapeHtml(odbAnBaseToken(t.token))}</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+    <div class="card"><div class="card-header">📅 Strategy Running Days</div><div class="card-body">
+      ${runningDates.length===0 ? '<p style="color:var(--muted);font-size:12px;">Set entry date and end date to see running days.</p>' :
+        `<div style="display:flex;flex-wrap:wrap;gap:6px;">${runningDates.map(d=>`<span style="border:1px solid var(--border,#e5e7eb);background:var(--surface-2,#f8fafc);padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600;">${odbFmtDate(d)}</span>`).join("")}</div>`}
+    </div></div>
+    <div class="card"><div class="card-body" style="display:flex;flex-direction:column;gap:14px;justify-content:center;">
+      <div><div style="font-size:10px;font-weight:800;color:#0d9488;text-transform:uppercase;">Option Entry Date</div><div style="font-size:18px;font-weight:800;">${odbFmtDate(t.entry_date)}</div></div>
+      <div><div style="font-size:10px;font-weight:800;color:#0d9488;text-transform:uppercase;">Option Exit Date</div><div style="font-size:18px;font-weight:800;">${odbFmtDate(t.end_date)}</div></div>
+    </div></div>
+  </div>`;
+  if (t.options_strike) {
+    html += `<div class="card" style="margin-bottom:12px;"><div class="card-header">📈 Payoff Chart at Expiry</div>
+      <div class="card-body">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:10px;">
+          <div class="field" style="margin:0;"><label>Current Underlying Price</label><input type="number" id="odbPayoffS" step="any" placeholder="${odbStrikeNumber(t.options_strike)}" oninput="odbAnRenderPayoff()"/></div>
+          <div class="field" style="margin:0;"><label>Implied Volatility (%)</label><input type="number" id="odbPayoffIv" step="0.5" value="30" oninput="odbAnRenderPayoff()"/></div>
+          <div id="odbPayoffPnlNote" style="font-size:13px;font-weight:700;"></div>
+        </div>
+        <div id="odbPayoffSvgWrap"></div>
+      </div></div>`;
+  }
+  html += `<div class="card"><div class="card-header">📄 Option Details</div><div class="card-body">
+    ${ODB_OPT_FIELDS.map(([key,label,fmt]) => {
+      const raw = t[key]; let v;
+      if (fmt==="date") v = odbFmtDate(raw);
+      else if (fmt==="currency") v = odbFmtCcy(raw);
+      else if (fmt==="number") v = raw!=null&&raw!==""?Number(raw).toFixed(4):"—";
+      else v = raw!=null&&raw!==""?String(raw):"—";
+      return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border,#e5e7eb);"><span style="color:var(--muted);font-size:12px;">${label}</span><span style="font-weight:700;font-size:12px;">${escapeHtml(v)}</span></div>`;
+    }).join("")}
+  </div></div>`;
+  document.getElementById("odbAnBody").innerHTML = html;
+  odbAnCurrentTrade = t;
+  if (t.options_strike) odbAnRenderPayoff();
+}
+function odbAnRenderPayoff() {
+  const t = odbAnCurrentTrade; if (!t) return;
+  const K = odbStrikeNumber(t.options_strike);
+  const entryPrice = Math.abs(parseFloat(t.opt_entry_price)||0);
+  const qty = parseFloat(t.opt_entry_qty)||1;
+  const optType = (t.option_type||"PUT").toUpperCase();
+  const ivInput = parseFloat(document.getElementById("odbPayoffIv")?.value)||30;
+  const sigma = Math.max(0.01, ivInput/100);
+  const underlyingInput = document.getElementById("odbPayoffS")?.value;
+  const S_now = parseFloat(underlyingInput) || K;
+  const expiryStr = odbToInputDate(t.expiry), todayStr = new Date().toISOString().slice(0,10);
+  const daysLeft = expiryStr ? Math.max(0, Math.round((new Date(expiryStr+"T00:00:00") - new Date(todayStr+"T00:00:00"))/86400000)) : 0;
+  const T_now = daysLeft/365;
+  const rangeMin = K*0.60, rangeMax = K*1.40, N = 80;
+  const prices = Array.from({length:N+1}, (_,i) => rangeMin + (i/N)*(rangeMax-rangeMin));
+  const expiryLine = prices.map(S => { const iv = optType==="CALL"?Math.max(S-K,0):Math.max(K-S,0); return (iv-entryPrice)*qty; });
+  const todayLine = prices.map((S,i) => T_now>0 ? (bsPrice(optType.toLowerCase(), S, K, T_now, sigma, 0.05)-entryPrice)*qty : expiryLine[i]);
+  const oneDayLine = prices.map((S,i) => { const T1 = Math.max(0,(daysLeft-1)/365); return T1>0 ? (bsPrice(optType.toLowerCase(), S, K, T1, sigma, 0.05)-entryPrice)*qty : expiryLine[i]; });
+
+  const W=700,H=300, PAD={l:60,r:16,t:26,b:44}, cw=W-PAD.l-PAD.r, ch=H-PAD.t-PAD.b;
+  const allPnls = [...expiryLine,...todayLine,...oneDayLine].filter(isFinite);
+  const rawMin=Math.min(...allPnls), rawMax=Math.max(...allPnls), padding=(rawMax-rawMin)*0.08||1;
+  const pnlMin=rawMin-padding, pnlMax=rawMax+padding, pnlRange=pnlMax-pnlMin;
+  const xS = p => PAD.l + ((p-rangeMin)/(rangeMax-rangeMin))*cw;
+  const yS = v => PAD.t + ((pnlMax-v)/pnlRange)*ch;
+  const toPath = line => line.map((v,i)=>`${i===0?"M":"L"}${xS(prices[i]).toFixed(1)},${yS(v).toFixed(1)}`).join(" ");
+  const Y_GRIDS=5, yStep=pnlRange/Y_GRIDS, yGrid = Array.from({length:Y_GRIDS+1},(_,i)=>pnlMin+i*yStep);
+  const X_GRIDS=6, xStep=(rangeMax-rangeMin)/X_GRIDS, xGrid = Array.from({length:X_GRIDS+1},(_,i)=>rangeMin+i*xStep);
+  const zeroY = yS(0), zeroInView = zeroY>=PAD.t && zeroY<=PAD.t+ch;
+  const S_inRange = S_now>=rangeMin && S_now<=rangeMax;
+  const idxAtS = Math.round(((S_now-rangeMin)/(rangeMax-rangeMin))*N);
+  const todayPnlAtCurrent = T_now>0 ? (bsPrice(optType.toLowerCase(), S_now, K, T_now, sigma, 0.05)-entryPrice)*qty : expiryLine[Math.max(0,Math.min(N,idxAtS))];
+  const tick = v => Math.abs(v)>=1e6?(v/1e6).toFixed(1)+"M":Math.abs(v)>=1e3?(v/1e3).toFixed(1)+"K":v.toFixed(0);
+  const ptick = v => v>=1000?(v/1000).toFixed(0)+"K":v.toFixed(0);
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:320px;border:1px solid var(--border,#e5e7eb);border-radius:10px;">`;
+  svg += `<rect x="${PAD.l}" y="${PAD.t}" width="${cw}" height="${ch}" fill="#f8fafc" rx="4"/>`;
+  for (const y of yGrid) svg += `<line x1="${PAD.l}" y1="${yS(y).toFixed(1)}" x2="${PAD.l+cw}" y2="${yS(y).toFixed(1)}" stroke="#e2e8f0"/><text x="${PAD.l-6}" y="${yS(y).toFixed(1)}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="#94a3b8">${tick(y)}</text>`;
+  for (const x of xGrid) svg += `<line x1="${xS(x).toFixed(1)}" y1="${PAD.t}" x2="${xS(x).toFixed(1)}" y2="${PAD.t+ch}" stroke="#e2e8f0"/><text x="${xS(x).toFixed(1)}" y="${PAD.t+ch+15}" text-anchor="middle" font-size="10" fill="#94a3b8">${ptick(x)}</text>`;
+  if (zeroInView) svg += `<line x1="${PAD.l}" y1="${zeroY.toFixed(1)}" x2="${PAD.l+cw}" y2="${zeroY.toFixed(1)}" stroke="#475569" stroke-width="1.5" stroke-dasharray="5,4" opacity="0.5"/>`;
+  svg += `<line x1="${xS(K).toFixed(1)}" y1="${PAD.t}" x2="${xS(K).toFixed(1)}" y2="${PAD.t+ch}" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.8"/><text x="${xS(K).toFixed(1)}" y="${PAD.t-8}" text-anchor="middle" font-size="10" fill="#8b5cf6" font-weight="700">K=${ptick(K)}</text>`;
+  if (underlyingInput && S_inRange) svg += `<line x1="${xS(S_now).toFixed(1)}" y1="${PAD.t}" x2="${xS(S_now).toFixed(1)}" y2="${PAD.t+ch}" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.8"/>`;
+  svg += `<path d="${toPath(expiryLine)}" fill="none" stroke="#f97316" stroke-width="2.5"/>`;
+  if (daysLeft>1) svg += `<path d="${toPath(oneDayLine)}" fill="none" stroke="#3b82f6" stroke-width="2" stroke-dasharray="6,3"/>`;
+  if (T_now>0) svg += `<path d="${toPath(todayLine)}" fill="none" stroke="#0d9488" stroke-width="2.5"/>`;
+  if (underlyingInput && S_inRange && T_now>0) svg += `<circle cx="${xS(S_now).toFixed(1)}" cy="${yS(todayPnlAtCurrent).toFixed(1)}" r="5" fill="#0d9488" stroke="white" stroke-width="2"/>`;
+  svg += `<line x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${PAD.t+ch}" stroke="#cbd5e1"/><line x1="${PAD.l}" y1="${PAD.t+ch}" x2="${PAD.l+cw}" y2="${PAD.t+ch}" stroke="#cbd5e1"/>`;
+  svg += `<text x="${PAD.l+cw/2}" y="${H-4}" text-anchor="middle" font-size="11" fill="#64748b" font-style="italic">Underlying price</text>`;
+  svg += `<g transform="translate(${PAD.l+cw-300}, ${PAD.t+6})"><rect x="0" y="0" width="290" height="20" fill="white" rx="3" stroke="#e2e8f0"/>
+    <line x1="8" y1="10" x2="26" y2="10" stroke="#f97316" stroke-width="2.5"/><text x="30" y="14" font-size="10" fill="#475569">Expiry P/L</text>`;
+  if (T_now>0) svg += `<line x1="108" y1="10" x2="126" y2="10" stroke="#0d9488" stroke-width="2.5"/><text x="130" y="14" font-size="10" fill="#475569">Today P/L (${daysLeft}d)</text>`;
+  if (daysLeft>1) svg += `<line x1="218" y1="10" x2="236" y2="10" stroke="#3b82f6" stroke-width="2" stroke-dasharray="5,3"/><text x="240" y="14" font-size="10" fill="#475569">1-day P/L</text>`;
+  svg += `</g></svg>`;
+  document.getElementById("odbPayoffSvgWrap").innerHTML = svg;
+  const note = document.getElementById("odbPayoffPnlNote");
+  if (underlyingInput) {
+    note.textContent = `P/L at ${Number(underlyingInput).toLocaleString()}: ${todayPnlAtCurrent>=0?"+":""}${todayPnlAtCurrent.toFixed(2)}`;
+    note.style.color = todayPnlAtCurrent>=0 ? "var(--green,#16a34a)" : "var(--red,#dc2626)";
+  } else note.textContent = "";
 }
 
 // ══════════════════════════════════════════════════════════════

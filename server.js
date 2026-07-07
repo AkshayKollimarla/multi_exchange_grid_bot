@@ -3949,6 +3949,61 @@ app.delete("/api/accounts/:id", async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Options Multi-Agent Database (Dashboard / Add / Simulator / Analysis) ──
+app.get("/api/options-db/trades", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const result = await db.listOptionsTrades({
+      status  : req.query.status,
+      token   : (req.query.token || "").trim(),
+      groupId : req.query.group_id,
+      dateFrom: req.query.date_from,
+      dateTo  : req.query.date_to,
+      page    : req.query.page,
+      limit   : req.query.limit,
+    });
+    if (!result) return res.status(503).json({ error: "DB unavailable" });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/options-db/trades/:id", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const trade = await db.getOptionsTrade(parseInt(req.params.id, 10));
+    if (!trade) return res.status(404).json({ error: "Not found." });
+    res.json({ trade });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/options-db/trades", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const id = await db.addOptionsTrade(req.body || {});
+    res.status(201).json({ ok: true, id });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.put("/api/options-db/trades/:id", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    await db.updateOptionsTrade(parseInt(req.params.id, 10), req.body || {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(/not found/i.test(e.message) ? 404 : 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/options-db/trades/:id", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    await db.deleteOptionsTrade(parseInt(req.params.id, 10));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(/not found/i.test(e.message) ? 404 : 500).json({ error: e.message });
+  }
+});
+
 // CSV download (browser) — same period semantics as /api/report
 app.get("/api/csv", async (req, res) => {
   // No exchange param = cross-exchange (matches the PnL Report). A specific
