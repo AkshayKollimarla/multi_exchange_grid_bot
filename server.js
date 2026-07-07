@@ -4116,6 +4116,18 @@ app.post("/api/start", async (req, res) => {
       if (resumeState.lowerLimit     != null) lowerLimit         = resumeState.lowerLimit;
       if (resumeState.entryPrice     != null) entryPrice         = resumeState.entryPrice;
       if (resumeState.lastPrice      != null) bot.lastPrice      = resumeState.lastPrice;
+      // If the market drifted OUTSIDE the saved band during downtime, re-center
+      // the band on the current price so the bot resumes and keeps trading
+      // instead of instantly emergency-stopping on the next tick. Normal
+      // deploys (price still inside the band) keep the saved band untouched.
+      const curPx = tick.last;
+      if (curPx && (curPx >= upperLimit || curPx <= lowerLimit)) {
+        entryPrice = curPx;
+        upperLimit = parseFloat((curPx + cfg.distance).toFixed(8));
+        lowerLimit = parseFloat((curPx - cfg.distance).toFixed(8));
+        bot.gridAnchor = null;   // force a fresh grid re-anchor around the new center
+        log(botId, `Market $${curPx} drifted outside the saved band — re-centered to $${lowerLimit}–$${upperLimit} on resume (was breaching, would have stopped)`, "warn");
+      }
       if (resumeState.lastNotifiedRt != null) bot.lastNotifiedRt = resumeState.lastNotifiedRt;
       // Runtime should reflect actual UPTIME, not wall-clock since first start.
       // Shift the start forward by the downtime (≈ time since the last state
