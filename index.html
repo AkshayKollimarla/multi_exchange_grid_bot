@@ -1314,44 +1314,37 @@
       <div class="card">
         <div class="card-header">Estimated P&amp;L</div>
         <div class="card-body">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:2px 0 8px;">Today (moves by end of day)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
             <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--green);">
-              <div class="stat-label">EST UPSIDE PnL <span style="color:var(--muted);">(now)</span> <span id="optUpLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optUpPnl" style="font-size:24px;">—</div></div>
+              <div class="stat-label">TODAY — UPSIDE PnL <span id="optTodayUpLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optTodayUp" style="font-size:26px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves +dist today (incl. 1 day decay)</div></div>
             <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--red);">
-              <div class="stat-label">EST DOWNSIDE PnL <span style="color:var(--muted);">(now)</span> <span id="optDnLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optDnPnl" style="font-size:24px;">—</div></div>
+              <div class="stat-label">TODAY — DOWNSIDE PnL <span id="optTodayDnLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optTodayDn" style="font-size:26px;">—</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves −dist today (incl. 1 day decay)</div></div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
-            <div class="pnl-card pnl-neutral"><div class="stat-label">Daily θ (decay)</div>
-              <div class="stat-value" id="optTheta" style="font-size:18px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">per day, price flat</div></div>
-            <div class="pnl-card pnl-neutral"><div class="stat-label">Today ↑ <span style="color:var(--muted);">(1d)</span></div>
-              <div class="stat-value" id="optTodayUp" style="font-size:18px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves +dist by EOD</div></div>
-            <div class="pnl-card pnl-neutral"><div class="stat-label">Today ↓ <span style="color:var(--muted);">(1d)</span></div>
-              <div class="stat-value" id="optTodayDn" style="font-size:18px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves −dist by EOD</div></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
-            <div class="pnl-card pnl-neutral" style="border-top:2px solid var(--green);">
-              <div class="stat-label">At Expiry ↑ <span id="optExpUpLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optExpUp" style="font-size:18px;">—</div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:2px 0 8px;">At expiry</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--green);">
+              <div class="stat-label">EXPIRY — UPSIDE PnL <span id="optExpUpLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optExpUp" style="font-size:26px;">—</div>
               <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
-            <div class="pnl-card pnl-neutral" style="border-top:2px solid var(--red);">
-              <div class="stat-label">At Expiry ↓ <span id="optExpDnLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optExpDn" style="font-size:18px;">—</div>
+            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--red);">
+              <div class="stat-label">EXPIRY — DOWNSIDE PnL <span id="optExpDnLabel" style="color:var(--muted);"></span></div>
+              <div class="stat-value" id="optExpDn" style="font-size:26px;">—</div>
               <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
           </div>
           <table class="ord-table">
-            <thead><tr><th>Leg</th><th>At +Dist</th><th>At −Dist</th></tr></thead>
-            <tbody id="optBreakdown"><tr><td colspan="3" class="empty-td">Fill the inputs and Calculate</td></tr></tbody>
+            <thead><tr><th>Leg</th><th>Today ↑</th><th>Today ↓</th><th>Expiry ↑</th><th>Expiry ↓</th></tr></thead>
+            <tbody id="optBreakdown"><tr><td colspan="5" class="empty-td">Fill the inputs and Calculate</td></tr></tbody>
           </table>
           <div id="optMeta" style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7;"></div>
           <div class="section-title" style="margin-top:12px;">Payoff across the range</div>
           <table class="ord-table">
-            <thead><tr><th>Index</th><th>Option value</th><th>Option PnL</th><th>Perp PnL</th><th>Total PnL</th></tr></thead>
-            <tbody id="optPayoff"><tr><td colspan="5" class="empty-td">—</td></tr></tbody>
+            <thead><tr><th>Index</th><th>Today PnL</th><th>Expiry PnL</th></tr></thead>
+            <tbody id="optPayoff"><tr><td colspan="3" class="empty-td">—</td></tr></tbody>
           </table>
           <div style="font-size:11px;color:var(--muted);margin-top:10px;">
             ⓘ Instantaneous mark-to-market (Black-Scholes at the moved price, same time-to-expiry). Perp PnL uses a linear (coin-size) approximation. Execution on Deribit is the next phase.
@@ -1936,75 +1929,62 @@ function calcOptionStrategy() {
 
   const sigma = ivPct / 100;
   const T = Math.max(0, (expiryTs - Date.now()) / (365 * 24 * 3600 * 1000));
-  const scen = (Sp) => {
-    const val     = bsPrice(type, Sp, K, T, sigma, r);
-    const optPnl  = (val - premium) * lots * dirOpt;
-    const perpPnl = (Sp - perpEntry) * perpQty * dirPerp;
-    return { Sp, val, optPnl, perpPnl, total: optPnl + perpPnl };
-  };
-
-  const up = scen(S + dist), dn = scen(S - dist);
   const fmt = v => (v >= 0 ? "+$" : "−$") + Math.abs(v).toFixed(2);
   const col = v => v >= 0 ? "var(--green,#16a34a)" : "var(--red,#e5484d)";
   const tcl = v => v >= 0 ? "pos-text" : "sell-text";
 
-  const upEl = document.getElementById("optUpPnl"), dnEl = document.getElementById("optDnPnl");
-  upEl.textContent = fmt(up.total); upEl.style.color = col(up.total);
-  dnEl.textContent = fmt(dn.total); dnEl.style.color = col(dn.total);
-  document.getElementById("optUpLabel").textContent = `@ $${(S + dist).toFixed(0)}`;
-  document.getElementById("optDnLabel").textContent = `@ $${(S - dist).toFixed(0)}`;
-
-  // ── Daily theta (position) + "today" scenarios (move happens over 1 day, so
-  //    the option also loses a day of time value). Perp has no time decay.
-  const thetaPos = bsThetaPerDay(type, S, K, T, sigma, r) * lots * dirOpt;
-  const Tday  = Math.max(0, T - 1 / 365);
-  const scenT = (Sp) => {
-    const val = bsPrice(type, Sp, K, Tday, sigma, r);
-    return (val - premium) * lots * dirOpt + (Sp - perpEntry) * perpQty * dirPerp;
+  // Per-leg PnL at a scenario price. `intrinsic` = at expiry (time value 0);
+  // otherwise price the option with Black-Scholes at time-to-expiry `tt`.
+  const legs = (Sp, tt, intrinsic) => {
+    const val = intrinsic
+      ? ((type === "call") ? Math.max(0, Sp - K) : Math.max(0, K - Sp))
+      : bsPrice(type, Sp, K, tt, sigma, r);
+    const optPnl  = (val - premium) * lots * dirOpt;
+    const perpPnl = (Sp - perpEntry) * perpQty * dirPerp;
+    return { optPnl, perpPnl, total: optPnl + perpPnl };
   };
-  const tUp = scenT(S + dist), tDn = scenT(S - dist);
-  const thEl = document.getElementById("optTheta");
-  thEl.textContent = fmt(thetaPos) + "/day"; thEl.style.color = col(thetaPos);
-  const tuEl = document.getElementById("optTodayUp"), tdEl = document.getElementById("optTodayDn");
-  tuEl.textContent = fmt(tUp); tuEl.style.color = col(tUp);
-  tdEl.textContent = fmt(tDn); tdEl.style.color = col(tDn);
+  // TODAY = move happens over one day, so the option loses one day of time value.
+  const Tday = Math.max(0, T - 1 / 365);
+  const tUp = legs(S + dist, Tday, false), tDn = legs(S - dist, Tday, false);
+  const eUp = legs(S + dist, 0, true),      eDn = legs(S - dist, 0, true);
 
-  // ── At expiry: intrinsic value only (no time value).
-  const scenExp = (Sp) => {
-    const val = (type === "call") ? Math.max(0, Sp - K) : Math.max(0, K - Sp);
-    return (val - premium) * lots * dirOpt + (Sp - perpEntry) * perpQty * dirPerp;
-  };
-  const eUp = scenExp(S + dist), eDn = scenExp(S - dist);
-  const euEl = document.getElementById("optExpUp"), edEl = document.getElementById("optExpDn");
-  euEl.textContent = fmt(eUp); euEl.style.color = col(eUp);
-  edEl.textContent = fmt(eDn); edEl.style.color = col(eDn);
-  document.getElementById("optExpUpLabel").textContent = `@ $${(S + dist).toFixed(0)}`;
-  document.getElementById("optExpDnLabel").textContent = `@ $${(S - dist).toFixed(0)}`;
+  const set = (id, v) => { const el = document.getElementById(id); el.textContent = fmt(v); el.style.color = col(v); };
+  set("optTodayUp", tUp.total); set("optTodayDn", tDn.total);
+  set("optExpUp",   eUp.total); set("optExpDn",   eDn.total);
+  const upTag = `@ $${(S + dist).toFixed(0)}`, dnTag = `@ $${(S - dist).toFixed(0)}`;
+  document.getElementById("optTodayUpLabel").textContent = upTag;
+  document.getElementById("optTodayDnLabel").textContent = dnTag;
+  document.getElementById("optExpUpLabel").textContent   = upTag;
+  document.getElementById("optExpDnLabel").textContent   = dnTag;
 
+  const cell = v => `<td class="${tcl(v)}">${fmt(v)}</td>`;
   document.getElementById("optBreakdown").innerHTML = `
     <tr><td>Option (${type} ${dirOpt > 0 ? "long" : "short"} ×${lots})</td>
-      <td class="${tcl(up.optPnl)}">${fmt(up.optPnl)}</td><td class="${tcl(dn.optPnl)}">${fmt(dn.optPnl)}</td></tr>
+      ${cell(tUp.optPnl)}${cell(tDn.optPnl)}${cell(eUp.optPnl)}${cell(eDn.optPnl)}</tr>
     <tr><td>Perp (${perpDir || "none"} ${perpQty || ""})</td>
-      <td class="${tcl(up.perpPnl)}">${fmt(up.perpPnl)}</td><td class="${tcl(dn.perpPnl)}">${fmt(dn.perpPnl)}</td></tr>
+      ${cell(tUp.perpPnl)}${cell(tDn.perpPnl)}${cell(eUp.perpPnl)}${cell(eDn.perpPnl)}</tr>
     <tr style="font-weight:700;"><td>Total</td>
-      <td class="${tcl(up.total)}">${fmt(up.total)}</td><td class="${tcl(dn.total)}">${fmt(dn.total)}</td></tr>`;
+      ${cell(tUp.total)}${cell(tDn.total)}${cell(eUp.total)}${cell(eDn.total)}</tr>`;
 
   const days = (T * 365).toFixed(1);
   const theoNow = bsPrice(type, S, K, T, sigma, r);
+  const be = (type === "call") ? K + premium : K - premium;
   const maxLoss = dirOpt > 0 ? premium * lots : null;
   document.getElementById("optMeta").innerHTML =
-    `Time to expiry: <b>${days} days</b> (T=${T.toFixed(4)}y) · σ=${ivPct}% · r=${(r * 100).toFixed(1)}%<br>` +
+    `Time to expiry: <b>${days} days</b> · σ=${ivPct}% · breakeven <b>$${be.toFixed(2)}</b> (strike ${dirOpt > 0 ? "+" : "±"} premium)<br>` +
     `Index <b>$${S.toFixed(2)}</b> · option theo value now <b>$${theoNow.toFixed(2)}</b> vs entry $${premium.toFixed(2)}<br>` +
     (maxLoss != null
       ? `Option-leg max loss (expires worthless): <b>−$${maxLoss.toFixed(2)}</b>`
       : `Short option — large loss risk if it moves against you; the perp hedge offsets one side.`);
 
-  const pts = [-1, -0.5, 0, 0.5, 1].map(f => scen(S + f * dist));
+  const pts = [-1, -0.5, 0, 0.5, 1].map(f => {
+    const Sp = S + f * dist;
+    return { Sp, today: legs(Sp, Tday, false).total, exp: legs(Sp, 0, true).total };
+  });
   document.getElementById("optPayoff").innerHTML = pts.map(p => `
-    <tr><td>$${p.Sp.toFixed(0)}</td><td>$${p.val.toFixed(2)}</td>
-      <td class="${tcl(p.optPnl)}">${fmt(p.optPnl)}</td>
-      <td class="${tcl(p.perpPnl)}">${fmt(p.perpPnl)}</td>
-      <td class="${tcl(p.total)}" style="font-weight:700;">${fmt(p.total)}</td></tr>`).join("");
+    <tr><td>$${p.Sp.toFixed(0)}</td>
+      <td class="${tcl(p.today)}">${fmt(p.today)}</td>
+      <td class="${tcl(p.exp)}" style="font-weight:700;">${fmt(p.exp)}</td></tr>`).join("");
 }
 
 // ══════════════════════════════════════════════════════════════
