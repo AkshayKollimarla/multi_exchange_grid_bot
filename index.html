@@ -3235,14 +3235,35 @@ async function odbExecuteClick() {
   document.getElementById("odbExecOverlay").style.display = "flex";
 }
 
+// Mirrors the server's tick-size rounding (server.js: deribitTickSizeFor) so
+// the preview shows the price that will ACTUALLY be submitted, not the raw
+// live-fetched value — Deribit rejects prices that aren't an exact multiple
+// of the instrument's tick_size (e.g. 0.2 below $50 on some USDC options).
+function odbTickSizeFor(inst, price) {
+  let tick = inst.tick_size;
+  if (Array.isArray(inst.tick_size_steps)) {
+    for (const step of [...inst.tick_size_steps].sort((a, b) => a.above_price - b.above_price)) {
+      if (price >= step.above_price) tick = step.tick_size;
+    }
+  }
+  return tick;
+}
+function odbRoundToTick(price, inst) {
+  const tick = odbTickSizeFor(inst, price);
+  return tick ? Number((Math.round(price / tick) * tick).toFixed(10)) : price;
+}
 function odbRenderExecSummary(form, inst) {
   const optSide = Number(form.opt_entry_qty) > 0 ? "BUY" : "SELL";
+  const rawOptPrice = Number(form.opt_entry_price);
+  const optPrice = odbRoundToTick(rawOptPrice, inst);
+  const optRoundedNote = Math.abs(optPrice - rawOptPrice) > 1e-9
+    ? ` <span style="color:var(--muted);">(rounded from ${rawOptPrice} to Deribit's tick size)</span>` : "";
   let html = `<div style="margin-bottom:10px;"><b>Option leg</b><br>
-    ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${form.opt_entry_price} <span style="color:var(--muted);">(post-only limit)</span></div>`;
+    ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${optPrice}${optRoundedNote} <span style="color:var(--muted);">(post-only limit)</span></div>`;
   if (Number(form.fut_qty) && Number(form.fut_entry_price)) {
     const futSide = Number(form.fut_qty) > 0 ? "BUY" : "SELL";
     html += `<div><b>Futures leg</b><br>
-      ${form.token} perpetual — ${futSide} ${Math.abs(form.fut_qty)} @ ${form.fut_entry_price} <span style="color:var(--muted);">(post-only limit)</span></div>`;
+      ${form.token} perpetual — ${futSide} ${Math.abs(form.fut_qty)} @ ${form.fut_entry_price} <span style="color:var(--muted);">(post-only limit — price/qty auto-rounded to Deribit's tick size if needed)</span></div>`;
   } else {
     html += `<div style="color:var(--muted);">No futures leg (fut qty or fut entry price is blank).</div>`;
   }
@@ -3290,7 +3311,7 @@ function odbRenderExecResult(id, ej) {
   const lines = [];
   const leg = (label, r) => {
     if (!r) return;
-    if (r.ok) lines.push(`<div style="color:var(--green,#16a34a);">✓ ${label}: ${r.instrument} ${String(r.side).toUpperCase()} — order ${r.orderId || "?"} (${r.state || "placed"})</div>`);
+    if (r.ok) lines.push(`<div style="color:var(--green,#16a34a);">✓ ${label}: ${r.instrument} ${String(r.side).toUpperCase()} ${r.amount ?? ""} @ ${r.price ?? ""} — order ${r.orderId || "?"} (${r.state || "placed"})</div>`);
     else lines.push(`<div style="color:var(--red,#dc2626);">✗ ${label} FAILED: ${r.error}</div>`);
   };
   leg("Option", ej.option);

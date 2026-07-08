@@ -3908,23 +3908,47 @@ async function deribitPrivate(method, params) {
   if (j.error) throw new Error(j.error.message || `Deribit error ${j.error.code}`);
   return j.result;
 }
+// Deribit rejects prices/amounts that aren't an exact multiple of the
+// instrument's tick_size / min_trade_amount with a bare "Invalid params" —
+// e.g. a USDC-settled option can have tick_size 0.2 below $50 and 1 above
+// it (via tick_size_steps), so a raw fetched mark price like 40.4600 must
+// be rounded to 40.4/40.6 before it's a legal order price.
+function deribitRoundToStep(value, step) {
+  if (!step) return value;
+  // toFixed(10) strips the floating-point noise Math.round(v/step)*step can
+  // leave behind (e.g. 40.46 -> 40.400000000000006), which would otherwise
+  // get sent to Deribit verbatim and risk being rejected for excess decimals.
+  return Number((Math.round(value / step) * step).toFixed(10));
+}
+function deribitTickSizeFor(inst, price) {
+  let tick = inst.tick_size;
+  if (Array.isArray(inst.tick_size_steps)) {
+    for (const step of [...inst.tick_size_steps].sort((a, b) => a.above_price - b.above_price)) {
+      if (price >= step.above_price) tick = step.tick_size;
+    }
+  }
+  return tick;
+}
 // Places ONE post-only limit order. side: "buy"|"sell". Never throws —
 // returns { ok:false, error } on any failure (incl. post_only_reject when
 // the price would cross the spread) so the caller can report per-leg status.
-async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label) {
+async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label, inst) {
   try {
     const method = side === "sell" ? "sell" : "buy";
+    const roundedAmount = deribitRoundToStep(Math.abs(amount), inst?.min_trade_amount);
+    const roundedPrice = deribitRoundToStep(price, deribitTickSizeFor(inst || {}, price));
     const result = await deribitPrivate(method, {
       instrument_name: instrumentName,
-      amount: String(Math.abs(amount)),
+      amount: String(roundedAmount),
       type: "limit",
-      price: String(price),
+      price: String(roundedPrice),
       post_only: "true",
       label: String(label || "").slice(0, 64),
     });
     return {
       ok: true, instrument: instrumentName, side,
       orderId: result?.order?.order_id, state: result?.order?.order_state,
+      amount: roundedAmount, price: roundedPrice,
     };
   } catch (e) {
     return { ok: false, instrument: instrumentName, side, error: e.message };
@@ -3944,9 +3968,9 @@ async function deribitFindPerpetual(token, preferSettlement) {
     const coinFutures = await deribitGet(`/api/v2/public/get_instruments?currency=${token}&kind=future&expired=false`);
     coinPerp = (coinFutures || []).find(f => f.instrument_name === `${token}-PERPETUAL`);
   }
-  if (preferSettlement === "coin" && coinPerp) return { instrument_name: coinPerp.instrument_name, settlement: "coin" };
-  if (usdcPerp) return { instrument_name: usdcPerp.instrument_name, settlement: "usdc" };
-  if (coinPerp) return { instrument_name: coinPerp.instrument_name, settlement: "coin" };
+  if (preferSettlement === "coin" && coinPerp) return { ...coinPerp, settlement: "coin" };
+  if (usdcPerp) return { ...usdcPerp, settlement: "usdc" };
+  if (coinPerp) return { ...coinPerp, settlement: "coin" };
   return null;
 }
 
@@ -3984,7 +4008,7 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
     }
 
     const optSide = qty > 0 ? "buy" : "sell";
-    const optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, price, `optdb_${id}_opt`);
+    const optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, price, `optdb_${id}_opt`, inst);
 
     let futResult = null;
     const futQty = Number(trade.fut_qty) || 0;
@@ -3995,7 +4019,7 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
         futResult = { ok: false, error: `No perpetual futures instrument found for ${token}` };
       } else {
         const futSide = futQty > 0 ? "buy" : "sell";
-        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futQty, futPrice, `optdb_${id}_fut`);
+        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futQty, futPrice, `optdb_${id}_fut`, perp);
       }
     }
 
