@@ -843,10 +843,10 @@
     <div class="nav-item"        id="nav-logs"     onclick="showSection('logs', this)"><span class="ic">📜</span> Bot Logs</div>
     <div class="nav-item"        id="nav-active"   onclick="showSection('active', this)"><span class="ic">🟢</span> Active Bot <span class="badge" id="navActiveBadge" style="display:none;">0</span></div>
     <div class="nav-group">Options Strategy</div>
-    <div class="nav-item"        id="nav-optdash"     onclick="showSection('optdash', this)"><span class="ic">📋</span> Options Dashboard</div>
-    <div class="nav-item"        id="nav-optadd"      onclick="showSection('optadd', this)"><span class="ic">➕</span> Add Strategy</div>
-    <div class="nav-item"        id="nav-optsim"      onclick="showSection('optsim', this)"><span class="ic">🧮</span> Combined Simulator</div>
-    <div class="nav-item"        id="nav-optanalysis" onclick="showSection('optanalysis', this)"><span class="ic">🔍</span> Options Analysis</div>
+    <div class="nav-item" id="nav-optdash" onclick="showSection('optdash', this)"><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span> Options Dashboard</div>
+    <div class="nav-item" id="nav-optadd" onclick="showSection('optadd', this)"><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/></svg></span> Add Strategy</div>
+    <div class="nav-item" id="nav-optsim" onclick="showSection('optsim', this)"><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></span> Combined Simulator</div>
+    <div class="nav-item" id="nav-optanalysis" onclick="showSection('optanalysis', this)"><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg></span> Options Analysis</div>
   </aside>
 
   <!-- ══ CONTENT ══ -->
@@ -1392,10 +1392,13 @@
 
   <!-- ══════════ SECTION: COMBINED SIMULATOR ══════════ -->
   <section id="sec-optsim" class="section">
-    <div class="sec-head">🧮 Combined Simulator</div>
+    <div class="sec-head" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span>🧮 Combined Simulator</span>
+      <div id="odbSimHeaderPills" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
     <div id="odbPanel-sim" class="odb-panel">
       <div id="odbSimModeNote" style="display:none;margin-bottom:10px;font-size:12px;color:var(--muted);"></div>
-      <div id="odbSimLegs" style="display:flex;flex-direction:column;gap:16px;"></div>
+      <div id="odbSimLegs" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(420px, 1fr));gap:18px;"></div>
       <div class="btn-row" style="margin:14px 0;">
         <button class="btn-refresh" onclick="odbAddLeg()">＋ Add Leg</button>
         <button class="btn-refresh" onclick="odbSimResetNew()">🆕 New Combined Strategy</button>
@@ -3231,20 +3234,42 @@ function odbLiveCalc() {
       odbCalcRow("Est Net Upside (Expiry)", odbFmtCcy(netUpExpiry), {signed:true,big:true}) +
       odbCalcRow("Est Net Downside (Expiry)", odbFmtCcy(netDnExpiry), {signed:true,big:true}));
 }
+// Shared calc-row/group renderer — used by BOTH the Add Strategy auto-calc
+// panel and the Combined Simulator (per-leg calc strip + scenario blocks),
+// so every "auto-calculated" number on every Options DB page shares the same
+// typography: --font-display uppercase labels, --font-mono values (matches
+// .stat-label / .stat-value used everywhere else in the app).
 function odbCalcRow(label, val, opts = {}) {
   const n = Number(String(val).replace(/[^0-9.-]/g,"")); const isNum = !isNaN(n) && val !== "—";
-  const color = opts.loss ? "var(--red,#dc2626)" : (opts.signed && isNum ? (n>=0?"var(--green,#16a34a)":"var(--red,#dc2626)") : "var(--ink,#0b1220)");
-  return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--border,#e5e7eb);">
-    <span style="${opts.big?"font-weight:700;":"color:var(--muted);"}font-size:11px;">${label}</span>
-    <span style="${opts.big?"font-size:13px;font-weight:800;":"font-size:11px;font-weight:600;"}color:${color};">${val}</span></div>`;
+  const color = opts.loss ? "var(--red-2,#b91c1c)" : (opts.signed && isNum ? (n>=0?"var(--green-2,#15803d)":"var(--red-2,#b91c1c)") : "var(--ink,#0b1220)");
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:${opts.big?"6px 0":"4px 0"};border-bottom:1px dashed var(--border,#e3e7ec);">
+    <span style="font-family:var(--font-display);text-transform:uppercase;letter-spacing:.04em;font-size:${opts.big?"11px":"10.5px"};font-weight:${opts.big?"700":"600"};color:${opts.big?"var(--ink-2,#1f2937)":"var(--muted,#5b6b7f)"};">${label}</span>
+    <span style="font-family:var(--font-mono);font-size:${opts.big?"14px":"12.5px"};font-weight:700;color:${color};white-space:nowrap;">${val}</span></div>`;
 }
 function odbCalcGroup(title, html) {
-  return `<div style="margin-bottom:10px;"><div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--muted);letter-spacing:.05em;margin-bottom:4px;">${title}</div>${html}</div>`;
+  return `<div style="margin-bottom:12px;">
+    <div style="font-family:var(--font-display);font-size:10.5px;font-weight:800;text-transform:uppercase;color:var(--muted,#5b6b7f);letter-spacing:.07em;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid var(--border,#e3e7ec);">${title}</div>
+    ${html}</div>`;
 }
 
 /* ══════════════════════ COMBINED SIMULATOR ══════════════════════ */
 const ODB_LEG_TYPES = ["CALL LONG","CALL SHORT","PUT LONG","PUT SHORT"];
 const ODB_LEG_COLORS = { "CALL LONG":"#10b981", "CALL SHORT":"#f97316", "PUT LONG":"#3b82f6", "PUT SHORT":"#ef4444" };
+// Soft pill (bg/text) pairs for the leg-type badges — matches the rounded
+// tinted-pill look of the reference design instead of a bordered box.
+const ODB_LEG_PILL = {
+  "CALL LONG":  { bg:"#d1fae5", text:"#059669" },
+  "CALL SHORT": { bg:"#ffedd5", text:"#c2410c" },
+  "PUT LONG":   { bg:"#dbeafe", text:"#1d4ed8" },
+  "PUT SHORT":  { bg:"#fee2e2", text:"#b91c1c" },
+};
+function odbLegPillHtml(type, extra = "") {
+  const p = ODB_LEG_PILL[type], c = ODB_LEG_COLORS[type];
+  return `<span style="display:inline-flex;align-items:center;gap:6px;background:${p.bg};color:${p.text};
+    font-family:var(--font-display);font-size:11px;font-weight:800;letter-spacing:.02em;
+    padding:4px 12px;border-radius:999px;white-space:nowrap;">
+    <span style="width:7px;height:7px;border-radius:50%;background:${c};display:inline-block;"></span>${type}${extra}</span>`;
+}
 function odbEmptyLegForm() {
   return { entry_date:"", token:"", investment:"", options_strike:"", expiry:"",
     opt_entry_qty:"", opt_entry_price:"", opt_exit_price:"", iv:"",
@@ -3281,24 +3306,37 @@ function odbSetLegField(idx, key, value) { odbSimLegs[idx].form[key] = value; od
 function odbRenderSim() {
   const wrap = document.getElementById("odbSimLegs");
   wrap.innerHTML = odbSimLegs.map((leg, idx) => odbLegCardHtml(leg, idx)).join("");
+  const pillsEl = document.getElementById("odbSimHeaderPills");
+  if (pillsEl) pillsEl.innerHTML = odbSimLegs.map(l => odbLegPillHtml(l.type)).join("");
   odbSimUpdateCalcs();
+}
+// Leg-type <select> styled as a solid tinted pill (appearance:none + custom
+// chevron), so it reads as a badge while staying a real, changeable <select>.
+function odbLegTypeSelectHtml(idx, type) {
+  const p = ODB_LEG_PILL[type];
+  const chevron = `data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(p.text)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e`;
+  return `<select onchange="odbChangeLegType(${idx}, this.value)" style="appearance:none;-webkit-appearance:none;cursor:pointer;
+    background-color:${p.bg};background-image:url(&quot;${chevron}&quot;);background-repeat:no-repeat;background-position:right 10px center;
+    color:${p.text};font-family:var(--font-display);font-size:11px;font-weight:800;letter-spacing:.02em;
+    border:none;border-radius:999px;padding:5px 30px 5px 14px;">
+    ${ODB_LEG_TYPES.map(t=>`<option value="${t}" ${t===type?"selected":""}>${t}</option>`).join("")}
+  </select>`;
 }
 function odbLegCardHtml(leg, idx) {
   const color = ODB_LEG_COLORS[leg.type], f = leg.form;
   const val = (k) => escapeHtml(String(f[k] ?? ""));
   const fid = (k) => `simLeg${idx}_${k}`;
+  // Real .field/.row-2 markup — identical DOM/CSS to the Add Strategy form,
+  // so fonts/sizes/spacing/colours match everywhere in the app.
   const inp = (k, type="number") => `<input type="${type}" id="${fid(k)}" value="${val(k)}" ${type==="number"?'step="any"':""}
-    oninput="odbSetLegField(${idx},'${k}',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border,#e5e7eb);border-radius:6px;font-size:12px;"/>`;
-  const lbl = (t) => `<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px;">${t}</label>`;
-  const f2 = (label,inputHtml) => `<div style="margin-bottom:8px;">${lbl(label)}${inputHtml}</div>`;
+    oninput="odbSetLegField(${idx},'${k}',this.value)"/>`;
+  const f2 = (label,inputHtml) => `<div class="field"><label>${label}</label>${inputHtml}</div>`;
   return `
   <div class="card" style="border-top:3px solid ${color};">
     <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
       <b>Leg ${idx+1}</b>
-      <select onchange="odbChangeLegType(${idx}, this.value)" style="border:1px solid ${color};color:${color};font-weight:700;border-radius:14px;padding:3px 10px;font-size:11px;background:#fff;">
-        ${ODB_LEG_TYPES.map(t=>`<option value="${t}" ${t===leg.type?"selected":""}>${t}</option>`).join("")}
-      </select>
-      ${leg.type.endsWith("SHORT")?'<span style="font-size:10px;color:#f97316;">⚠ negative qty</span>':""}
+      ${odbLegTypeSelectHtml(idx, leg.type)}
+      ${leg.type.endsWith("SHORT")?'<span style="font-family:var(--font-display);font-size:10.5px;font-weight:700;color:#c2410c;">⚠ negative qty</span>':""}
       ${odbSimLegs.length>2 ? `<button class="btn-refresh" style="margin-left:auto;color:var(--red,#dc2626);" onclick="odbRemoveLeg(${idx})">Remove</button>` : ""}
     </div>
     <div class="card-body">
@@ -3312,39 +3350,33 @@ function odbLegCardHtml(leg, idx) {
       <div class="row-2">${f2("Basket Distance", inp("basket_distance"))}${f2("Basket Loss", inp("basket_loss"))}</div>
       <div class="row-2">${f2("Net Booked PnL", inp("net_booked_pnl"))}${f2("Market Making PL", inp("market_making_pl"))}</div>
       <div class="row-2">
-        ${f2("Status", `<select id="${fid('status')}" onchange="odbSetLegField(${idx},'status',this.value)" style="width:100%;padding:6px 8px;border:1px solid var(--border,#e5e7eb);border-radius:6px;font-size:12px;">
+        ${f2("Status", `<select id="${fid('status')}" onchange="odbSetLegField(${idx},'status',this.value)">
           <option value="open" ${f.status==="open"?"selected":""}>Open</option><option value="closed" ${f.status==="closed"?"selected":""}>Closed</option></select>`)}
         ${f2("End Date", inp("end_date","date"))}
       </div>
-      <div id="simLegCalc${idx}" style="background:var(--surface-2,#f8fafc);border-radius:8px;padding:10px;margin-top:6px;"></div>
+      <div id="simLegCalc${idx}" style="background:var(--surface-2,#f8fafc);border-radius:var(--r-md,10px);padding:12px 14px;margin-top:4px;"></div>
     </div>
   </div>`;
 }
 function odbLegCalcHtml(d) {
-  const row = (label,val,signed) => {
-    const n = Number(String(val).replace(/[^0-9.-]/g,"")); const isNum = !isNaN(n) && val!=="—";
-    const color = signed && isNum ? (n>=0?"var(--green,#16a34a)":"var(--red,#dc2626)") : "var(--ink,#0b1220)";
-    return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span style="color:var(--muted);">${label}</span><span style="font-weight:700;color:${color};">${val}</span></div>`;
-  };
-  return `<div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--muted);margin-bottom:4px;">Auto-Calculated</div>
-    ${row("Days to Expiry", odbFmtNum(d.days_to_expiry,0))}
-    ${row("Total MM Loss", odbFmtCcy(d.total_mm_loss), true)}
-    ${row("Est. Net (Upside)", odbFmtCcy(d.estimated_upside_net_pnl), true)}
-    ${row("Est. Net (Down)", odbFmtCcy(d.estimated_downside_net_pnl), true)}
-    ${row("APY", d.apy!=null?Number(d.apy).toFixed(2)+"%":"—", true)}`;
+  return odbCalcGroup("Auto-Calculated",
+    odbCalcRow("Days to Expiry", odbFmtNum(d.days_to_expiry,0)) +
+    odbCalcRow("Total MM Loss", odbFmtCcy(d.total_mm_loss), {loss:true}) +
+    odbCalcRow("Est. Net (Upside)", odbFmtCcy(d.estimated_upside_net_pnl), {signed:true}) +
+    odbCalcRow("Est. Net (Down)", odbFmtCcy(d.estimated_downside_net_pnl), {signed:true}) +
+    odbCalcRow("APY", d.apy!=null?Number(d.apy).toFixed(2)+"%":"—", {signed:true,big:true}));
 }
 function odbScenarioBlockHtml(title, scenario, totals, deriveds, bsToday) {
-  const legsHtml = odbSimLegs.map((l,i) => {
+  const legRows = odbSimLegs.map((l,i) => {
     const v = scenario==="up" ? Number(deriveds[i].upside_opt_pnl) : Number(deriveds[i].down_opt_pnl);
-    return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px dashed var(--border,#e5e7eb);">
-      <span style="color:${ODB_LEG_COLORS[l.type]};font-weight:700;">Opt PnL — Leg ${i+1} (${l.type})</span>
-      <span style="font-weight:700;color:${v>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(v)}</span></div>`;
+    return odbCalcRow(`Opt PnL — Leg ${i+1} (${l.type})`, odbFmtCcy(v), {signed:true});
   }).join("");
-  return `<div style="font-size:12px;font-weight:800;margin-bottom:8px;">${title}</div>${legsHtml}
-    <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span style="color:var(--muted);">Fut PnL (combined)</span><span style="font-weight:700;color:${totals.fut>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.fut)}</span></div>
-    <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;"><span style="color:var(--muted);">Total MM Loss</span><span style="font-weight:700;color:${totals.mm>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.mm)}</span></div>
-    <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--border,#e5e7eb);margin-top:4px;"><span style="font-weight:800;font-size:12px;">Est. Net ${scenario==="up"?"Upside":"Downside"}</span><span style="font-weight:800;font-size:13px;color:${totals.net>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(totals.net)}</span></div>
-    <div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="font-weight:700;font-size:12px;color:#7c3aed;">Today BS ${scenario==="up"?"Upside":"Downside"}</span><span style="font-weight:800;font-size:13px;color:${bsToday>=0?"var(--green,#16a34a)":"var(--red,#dc2626)"};">${odbFmtCcy(bsToday)}</span></div>`;
+  return `<div style="font-family:var(--font-display);font-size:13px;font-weight:800;color:var(--ink,#0b1220);margin-bottom:8px;">${title}</div>`
+    + legRows
+    + odbCalcRow("Fut PnL (combined)", odbFmtCcy(totals.fut), {signed:true})
+    + odbCalcRow("Total MM Loss", odbFmtCcy(totals.mm), {signed:true})
+    + odbCalcRow(`Est. Net ${scenario==="up"?"Upside":"Downside"}`, odbFmtCcy(totals.net), {signed:true,big:true})
+    + odbCalcRow(`Today BS ${scenario==="up"?"Upside":"Downside"}`, odbFmtCcy(bsToday), {signed:true,big:true});
 }
 function odbSimUpdateCalcs() {
   const n = (v) => Number(v)||0;
