@@ -1382,7 +1382,8 @@
             </div>
 
             <div class="btn-row">
-              <button class="btn btn-start" id="odbSaveBtn" onclick="odbSaveAndExecuteClick()">💾 Save &amp; Execute</button>
+              <button class="btn btn-start" id="odbSaveBtn" onclick="odbSaveStrategy()">💾 Save Strategy</button>
+              <button class="btn" style="background:#7c3aed;color:#fff;" id="odbExecuteBtn" onclick="odbExecuteClick()">⚡ Execute</button>
               <button class="btn" style="background:var(--emerald,#16a34a);color:#fff;display:none;" id="odbSaveAsNewBtn" onclick="odbSaveAsNew()">💾 Save as New</button>
               <button class="btn btn-stop" onclick="odbResetAddForm()">↺ Reset</button>
             </div>
@@ -3152,7 +3153,7 @@ function odbStartAdd() {
   odbEditId = null; odbEditGroupId = null;
   odbEmptyForm();
   document.getElementById("odbAddModeNote").style.display = "none";
-  document.getElementById("odbSaveBtn").textContent = "💾 Save & Execute";
+  document.getElementById("odbSaveBtn").textContent = "💾 Save Strategy";
   document.getElementById("odbSaveAsNewBtn").style.display = "none";
   document.getElementById("odbAddMsg").textContent = "";
   showOdbTab("add");
@@ -3207,15 +3208,17 @@ async function odbSaveAsNew() {
   } catch (e) { msg.style.color = "var(--red,#dc2626)"; msg.textContent = "Failed: " + e.message; }
 }
 
-/* ── Save & Execute: fresh adds save the strategy THEN place live post-only
+/* ── Execute: separate from the plain Save button. Places live post-only
    maker orders on Deribit (option leg always, futures leg if qty+price are
-   set). Editing an existing strategy NEVER executes — only a fresh Add does.
-   The instrument is re-resolved server-side before any order is placed; this
-   client-side lookup is only used to preview it in the confirmation modal. */
+   set) — for a FRESH add this saves the strategy first; for an EXISTING
+   strategy (edit mode, e.g. re-triggered from the dashboard's Edit/Close
+   link after a failed attempt) it updates that same row instead of creating
+   a duplicate. The instrument is re-resolved server-side before any order
+   is placed; this client-side lookup is only used to preview it in the
+   confirmation modal. */
 let odbExecPreview = null;
 
-async function odbSaveAndExecuteClick() {
-  if (odbEditId != null) { odbSaveStrategy(); return; }
+async function odbExecuteClick() {
   const form = odbReadForm();
   if (!form.token.trim()) { alert("Token is required."); return; }
   if (!form.expiry || !form.options_strike || !form.opt_entry_qty || !form.opt_entry_price) {
@@ -3227,7 +3230,7 @@ async function odbSaveAndExecuteClick() {
     alert("Could not match a live Deribit instrument for the selected token/expiry/strike/type. Re-pick them via the dropdowns, then try again.");
     return;
   }
-  odbExecPreview = { form, inst };
+  odbExecPreview = { form, inst, editId: odbEditId };
   odbRenderExecSummary(form, inst);
   document.getElementById("odbExecOverlay").style.display = "flex";
 }
@@ -3258,21 +3261,23 @@ function odbCancelExecute() {
 
 async function odbConfirmExecute() {
   if (!odbExecPreview) return;
-  const { form } = odbExecPreview;
+  const { form, editId } = odbExecPreview;
   const msg = document.getElementById("odbExecMsg"), btn = document.getElementById("odbExecConfirmBtn");
-  btn.disabled = true; msg.style.color = "var(--muted)"; msg.textContent = "Saving strategy…";
+  const isEdit = editId != null;
+  btn.disabled = true; msg.style.color = "var(--muted)"; msg.textContent = isEdit ? "Saving updates…" : "Saving strategy…";
   try {
-    const r = await fetch("/api/options-db/trades", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(form) });
+    const url = isEdit ? `/api/options-db/trades/${editId}` : "/api/options-db/trades";
+    const r = await fetch(url, { method: isEdit ? "PUT" : "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(form) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Save failed");
-    const id = j.id;
+    const id = isEdit ? editId : j.id;
     msg.style.color = "var(--muted)";
-    msg.textContent = `✓ Saved as strategy #${id}. Placing live orders on Deribit…`;
+    msg.textContent = `✓ Strategy #${id} saved. Placing live orders on Deribit…`;
     const er = await fetch(`/api/options-db/trades/${id}/execute`, { method: "POST" });
     const ej = await er.json();
     if (!er.ok) throw new Error(ej.error || "Execution request failed");
     odbRenderExecResult(id, ej);
-    odbEmptyForm();
+    if (!isEdit) odbEmptyForm();
     odbReload(true);
   } catch (e) {
     msg.style.color = "var(--red,#dc2626)";
