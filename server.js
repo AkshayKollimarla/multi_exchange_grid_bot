@@ -3820,6 +3820,38 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+// ── Deribit options data proxy (Options Multi-Agent DB → Add Strategy) ──
+// Fetched server-side so the browser never hits Deribit directly (avoids
+// CORS/CSP/size hangs on the large option-chain response).
+function deribitHost() {
+  return String(process.env.DERIBIT_TESTNET || "").toLowerCase() === "true"
+    ? "test.deribit.com" : "www.deribit.com";
+}
+async function deribitGet(path) {
+  const r = await Promise.race([
+    fetch(`https://${deribitHost()}${path}`),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("Deribit timeout 12s")), 12000)),
+  ]);
+  if (!r.ok) throw new Error(`Deribit HTTP ${r.status}`);
+  const j = await r.json();
+  return j.result;
+}
+app.get("/api/deribit/instruments", async (req, res) => {
+  const cur = String(req.query.currency || "USDC").toUpperCase().replace(/[^A-Z]/g, "");
+  try {
+    const result = await deribitGet(`/api/v2/public/get_instruments?currency=${cur}&kind=option&expired=false`);
+    res.json(Array.isArray(result) ? result : []);
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+app.get("/api/deribit/ticker", async (req, res) => {
+  const inst = req.query.instrument;
+  if (!inst) return res.status(400).json({ error: "instrument required" });
+  try {
+    const result = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(inst)}`);
+    res.json(result || {});
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 app.get("/api/report", async (req, res) => {
   const exchangeKey = req.query.botId || req.query.exchange || "binance";
   if (!bots[exchangeKey]) return res.status(400).json({ error: "Unknown exchange" });

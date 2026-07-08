@@ -1323,11 +1323,13 @@
             <div class="section-title">Basic Info</div>
             <div class="row-2">
               <div class="field"><label>Entry Date *</label><input type="date" id="odbEntryDate"/></div>
-              <div class="field"><label>Token *</label><input type="text" id="odbToken" placeholder="e.g. BTC, HOOD"/></div>
+              <div class="field"><label>Token *</label>
+                <select id="odbToken" onchange="odbLiveTokenChange()"><option value="">— loading —</option></select>
+                <input type="text" id="odbTokenManual" placeholder="e.g. HOOD" oninput="odbLiveCalc()" style="display:none;margin-top:6px;"/></div>
             </div>
             <div class="row-2">
               <div class="field"><label>Option Type</label>
-                <select id="odbOptType" onchange="odbLiveCalc()"><option value="PUT">PUT</option><option value="CALL">CALL</option></select></div>
+                <select id="odbOptType" onchange="odbLiveTypeChange()"><option value="PUT">PUT</option><option value="CALL">CALL</option></select></div>
               <div class="field"><label>Investment</label><input type="number" id="odbInvestment" step="any" oninput="odbLiveCalc()"/></div>
             </div>
             <div class="row-2">
@@ -1336,18 +1338,24 @@
               <div class="field"><label>End Date</label><input type="date" id="odbEndDate"/></div>
             </div>
 
-            <div class="section-title">Option Details</div>
+            <div class="section-title">Option Details <span class="pill pill-blue" style="margin-left:6px;">live from Deribit</span></div>
             <div class="row-2">
-              <div class="field"><label>Strike (free text) *</label><input type="text" id="odbStrike" placeholder='e.g. "96 PUT"' oninput="odbLiveCalc()"/></div>
-              <div class="field"><label>Expiry Date</label><input type="date" id="odbExpiry" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Expiry Date</label>
+                <select id="odbExpiry" onchange="odbLiveExpiryChange()"><option value="">— select token first —</option></select></div>
+              <div class="field"><label>Strike</label>
+                <select id="odbStrike" onchange="odbLiveStrikeChange()"><option value="">— select expiry first —</option></select></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin:-6px 0 12px;">
+              <button class="btn-refresh" onclick="odbLiveStrikeChange()">↻ Refresh live price / IV</button>
+              <span id="odbLiveNote" style="font-size:11px;color:var(--muted);"></span>
             </div>
             <div class="row-2">
               <div class="field"><label>Entry Qty</label><input type="number" id="odbOptQty" step="any" oninput="odbLiveCalc()"/></div>
-              <div class="field"><label>Entry Price</label><input type="number" id="odbOptEntryPrice" step="any" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Entry Price <span style="color:var(--muted);text-transform:none;font-weight:600;">(live mark)</span></label><input type="number" id="odbOptEntryPrice" step="any" oninput="odbLiveCalc()"/></div>
             </div>
             <div class="row-2">
               <div class="field"><label>Exit Price</label><input type="number" id="odbOptExitPrice" step="any" oninput="odbLiveCalc()"/></div>
-              <div class="field"><label>Implied Vol σ (%)</label><input type="number" id="odbIv" step="0.5" placeholder="e.g. 30" oninput="odbLiveCalc()"/></div>
+              <div class="field"><label>Implied Vol σ (%) <span style="color:var(--muted);text-transform:none;font-weight:600;">(live)</span></label><input type="number" id="odbIv" step="0.5" placeholder="e.g. 30" oninput="odbLiveCalc()"/></div>
             </div>
 
             <div class="section-title">Futures Details</div>
@@ -1780,6 +1788,7 @@ function showSection(name, el) {
   if (name === "report")       loadReport();
   if (name === "config")       loadConfigAccounts();
   if (name === "optdash")      odbReload(true);
+  if (name === "optadd")       odbLiveInit();
   if (name === "optsim")       odbInitSimIfEmpty();
   if (name === "optanalysis")  odbAnEnsureLoaded();
 }
@@ -2884,10 +2893,15 @@ function odbFmtDate(d) {
   return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 function odbToInputDate(d) {
-  if (!d) return "";
-  const s = String(d);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const dt = new Date(s.replace(" ", "T"));
+  if (!d && d !== 0) return "";
+  // A raw NUMBER (e.g. Deribit's expiration_timestamp, ms-since-epoch) must
+  // go through new Date(number) — new Date(String(number)) tries to parse it
+  // as a date STRING and silently produces Invalid Date for a bare digit run.
+  const dt = typeof d === "number" ? new Date(d) : (() => {
+    const s = String(d);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + "T00:00:00");
+    return new Date(s.replace(" ", "T"));
+  })();
   if (isNaN(dt)) return "";
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
 }
@@ -3075,17 +3089,15 @@ const ODB_FIELD_MAP = {
 function odbReadForm() {
   const f = {};
   for (const [k, id] of Object.entries(ODB_FIELD_MAP)) f[k] = document.getElementById(id).value;
+  if (f.token === "__other__") f.token = document.getElementById("odbTokenManual").value;
   return f;
 }
 function odbFillForm(t) {
   document.getElementById("odbEntryDate").value     = odbToInputDate(t.entry_date);
-  document.getElementById("odbToken").value         = t.token || "";
   document.getElementById("odbOptType").value       = t.option_type || "PUT";
   document.getElementById("odbInvestment").value    = t.investment ?? "";
   document.getElementById("odbStatus").value        = t.status || "open";
   document.getElementById("odbEndDate").value       = odbToInputDate(t.end_date);
-  document.getElementById("odbStrike").value        = t.options_strike || "";
-  document.getElementById("odbExpiry").value        = odbToInputDate(t.expiry);
   document.getElementById("odbOptQty").value        = t.opt_entry_qty ?? "";
   document.getElementById("odbOptEntryPrice").value = t.opt_entry_price ?? "";
   document.getElementById("odbOptExitPrice").value  = t.opt_exit_price ?? "";
@@ -3099,6 +3111,9 @@ function odbFillForm(t) {
   document.getElementById("odbBasketLoss").value    = t.basket_loss ?? "";
   document.getElementById("odbBookedPnl").value     = t.net_booked_pnl ?? "";
   document.getElementById("odbMmPl").value          = t.market_making_pl ?? "";
+  // Token/Expiry/Strike are live-fetch dropdowns — line them up with the
+  // live Deribit chain where possible, else preserve the saved values as-is.
+  odbLiveFillLegacy(t.token || "", odbToInputDate(t.expiry), t.options_strike || "");
 }
 function odbEmptyForm() {
   for (const id of Object.values(ODB_FIELD_MAP)) {
@@ -3109,6 +3124,11 @@ function odbEmptyForm() {
   document.getElementById("odbStatus").value  = "open";
   document.getElementById("odbIv").value      = "";
   document.getElementById("odbEntryDate").value = new Date().toISOString().slice(0,10);
+  document.getElementById("odbTokenManual").value = "";
+  const note = document.getElementById("odbLiveNote"); if (note) note.textContent = "";
+  odbLivePopulateTokens("");
+  odbLivePopulateExpiries();
+  odbLivePopulateStrikes();
 }
 function odbStartAdd() {
   odbEditId = null; odbEditGroupId = null;
@@ -3118,6 +3138,7 @@ function odbStartAdd() {
   document.getElementById("odbSaveAsNewBtn").style.display = "none";
   document.getElementById("odbAddMsg").textContent = "";
   showOdbTab("add");
+  odbLiveInit();
   odbLiveCalc();
 }
 async function odbStartEdit(id) {
@@ -3167,6 +3188,177 @@ async function odbSaveAsNew() {
     setTimeout(() => odbStartEdit(j.id), 700);
   } catch (e) { msg.style.color = "var(--red,#dc2626)"; msg.textContent = "Failed: " + e.message; }
 }
+
+/* ── Add Strategy: live Deribit token/expiry/strike + mark price/IV ─────
+   Sources the USDC-settled option chain (covers BTC/ETH/SOL/XRP/AVAX/TRX/
+   HYPE — confirmed live via the public API), so premiums come back quoted
+   directly in USD (no coin->USD conversion needed, unlike the legacy
+   coin-settled BTC/ETH-only chain). "Other / Manual" keeps the original
+   free-text token so non-Deribit strategies (e.g. HOOD) still work. ────*/
+let odbLiveInstruments = [];   // cached full USDC-settled option chain
+let odbLiveTokens      = [];   // distinct base_currency list, sorted
+let odbLiveLoaded      = false;
+let odbLiveLoading     = false;
+
+async function odbLiveInit() {
+  if (odbLiveLoaded || odbLiveLoading) return;
+  odbLiveLoading = true;
+  const note = document.getElementById("odbLiveNote");
+  try {
+    const r = await fetch("/api/deribit/instruments?currency=USDC");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const list = await r.json();
+    odbLiveInstruments = Array.isArray(list) ? list : [];
+    odbLiveTokens = [...new Set(odbLiveInstruments.map(i => i.base_currency))].sort();
+    odbLiveLoaded = true;
+  } catch (e) {
+    if (note) note.textContent = "Live option chain failed to load: " + e.message;
+  } finally {
+    odbLiveLoading = false;
+    odbLivePopulateTokens(document.getElementById("odbToken").value);
+  }
+}
+
+function odbLiveTokenInstruments(token) { return odbLiveInstruments.filter(i => i.base_currency === token); }
+// Distinct expiry dates (YYYY-MM-DD strings — same format odbComputeDerived
+// expects) for a token, sorted chronologically.
+function odbLiveExpiriesFor(token) {
+  return [...new Set(odbLiveTokenInstruments(token).map(i => odbToInputDate(i.expiration_timestamp)))].sort();
+}
+function odbLiveStrikesFor(token, expiryDateStr, type) {
+  return odbLiveTokenInstruments(token)
+    .filter(i => odbToInputDate(i.expiration_timestamp) === expiryDateStr && i.option_type === String(type).toLowerCase())
+    .map(i => i.strike).sort((a,b) => a-b);
+}
+function odbLiveFindInstrument(token, expiryDateStr, type, strike) {
+  return odbLiveTokenInstruments(token).find(i =>
+    odbToInputDate(i.expiration_timestamp) === expiryDateStr &&
+    i.option_type === String(type).toLowerCase() &&
+    String(i.strike) === String(strike));
+}
+
+function odbLiveToggleManual() {
+  const isOther = document.getElementById("odbToken").value === "__other__";
+  document.getElementById("odbTokenManual").style.display = isOther ? "" : "none";
+}
+function odbLivePopulateTokens(keepValue) {
+  const sel = document.getElementById("odbToken");
+  const known = odbLiveTokens.includes(keepValue);
+  const extra = keepValue && !known && keepValue !== "__other__"
+    ? `<option value="${escapeHtml(keepValue)}">${escapeHtml(keepValue)} (saved, not live)</option>` : "";
+  sel.innerHTML = `<option value="">— select —</option>`
+    + odbLiveTokens.map(t => `<option value="${t}">${t}</option>`).join("")
+    + extra + `<option value="__other__">✎ Other / Manual…</option>`;
+  if (keepValue) sel.value = keepValue;
+  odbLiveToggleManual();
+}
+function odbLivePopulateExpiries(keepDateStr) {
+  const token = document.getElementById("odbToken").value;
+  const sel = document.getElementById("odbExpiry");
+  if (!token || token === "__other__") { sel.innerHTML = `<option value="">— select a live token first —</option>`; return; }
+  const expiries = odbLiveExpiriesFor(token);
+  if (!expiries.length) { sel.innerHTML = `<option value="">— no live expiries —</option>`; return; }
+  sel.innerHTML = expiries.map(d => {
+    const label = new Date(d+"T00:00:00").toLocaleDateString(undefined, { day:"2-digit", month:"short", year:"2-digit" });
+    return `<option value="${d}">${label}</option>`;
+  }).join("");
+  if (keepDateStr && expiries.includes(keepDateStr)) {
+    sel.value = keepDateStr;
+  } else if (keepDateStr) {
+    sel.innerHTML += `<option value="${keepDateStr}" selected>${keepDateStr} (saved)</option>`;
+  }
+}
+function odbLivePopulateStrikes(keepStrike) {
+  const token = document.getElementById("odbToken").value;
+  const expiryDateStr = document.getElementById("odbExpiry").value;
+  const type = document.getElementById("odbOptType").value;
+  const sel = document.getElementById("odbStrike");
+  if (!token || token === "__other__" || !expiryDateStr) { sel.innerHTML = `<option value="">— select expiry first —</option>`; return; }
+  const strikes = odbLiveStrikesFor(token, expiryDateStr, type);
+  if (!strikes.length) { sel.innerHTML = `<option value="">— none —</option>`; return; }
+  sel.innerHTML = strikes.map(k => `<option value="${k}">${k}</option>`).join("");
+  const keepNum = keepStrike ? odbStrikeNumber(keepStrike) : null;
+  const match = keepNum != null ? strikes.find(s => String(s) === String(keepNum)) : undefined;
+  if (match != null) {
+    sel.value = String(match);
+  } else if (keepStrike) {
+    sel.innerHTML += `<option value="${escapeHtml(String(keepStrike))}" selected>${escapeHtml(String(keepStrike))} (saved)</option>`;
+  }
+}
+
+function odbLiveTokenChange() {
+  odbLiveToggleManual();
+  odbLivePopulateExpiries();
+  odbLivePopulateStrikes();
+  odbLiveCalc();
+}
+function odbLiveExpiryChange() {
+  odbLivePopulateStrikes();
+  odbLiveStrikeChange();   // auto-fetch live price/IV for the first strike
+}
+function odbLiveTypeChange() {
+  odbLivePopulateStrikes();   // strikes differ between calls and puts
+  odbLiveStrikeChange();
+}
+// Fetches mark price + IV for the resolved instrument and fills them in.
+// Mark price is used as Entry Price for BOTH long and short — it's Deribit's
+// single fair-value reference, not a bid/ask that depends on direction.
+async function odbLiveStrikeChange() {
+  const token = document.getElementById("odbToken").value;
+  const expiryDateStr = document.getElementById("odbExpiry").value;
+  const type = document.getElementById("odbOptType").value;
+  const strike = document.getElementById("odbStrike").value;
+  const note = document.getElementById("odbLiveNote");
+  if (!token || token === "__other__" || !expiryDateStr || !strike) { odbLiveCalc(); return; }
+  const inst = odbLiveFindInstrument(token, expiryDateStr, type, strike);
+  if (!inst) { if (note) note.textContent = "Not in the live chain (using saved value)."; odbLiveCalc(); return; }
+  if (note) note.textContent = "Fetching live price/IV…";
+  try {
+    const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.json();
+    // USDC-settled options quote mark_price directly in USD — no conversion.
+    const markUsd = Number(t.mark_price) || 0;
+    const index    = Number(t.index_price ?? t.underlying_price) || 0;
+    if (markUsd) document.getElementById("odbOptEntryPrice").value = markUsd.toFixed(4);
+    if (t.mark_iv != null) document.getElementById("odbIv").value = Number(t.mark_iv).toFixed(1);
+    // Auto-fill Fut Entry Price with the live index, but never clobber a
+    // value the user already typed.
+    const futEl = document.getElementById("odbFutEntryPrice");
+    if (!futEl.value && index) futEl.value = index.toFixed(4);
+    if (note) note.textContent = `${inst.instrument_name} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
+  } catch (e) {
+    if (note) note.textContent = "Live fetch failed: " + e.message;
+  }
+  odbLiveCalc();
+}
+
+// Populate the live Token/Expiry/Strike dropdowns for an EXISTING saved
+// strategy: lines the saved values up with the live Deribit chain (so
+// "↻ Refresh live price/IV" keeps working), but always preserves the exact
+// saved values even when they're not currently live (expired options, or
+// older manually-entered tokens/strikes) — nothing is silently discarded.
+async function odbLiveFillLegacy(token, expiryDateStr, strikeStr) {
+  await odbLiveInit();
+  const isLiveToken = odbLiveTokens.includes(token);
+  if (!isLiveToken) {
+    odbLivePopulateTokens("");
+    document.getElementById("odbToken").value = "__other__";
+    odbLiveToggleManual();
+    document.getElementById("odbTokenManual").value = token;
+    document.getElementById("odbExpiry").innerHTML = expiryDateStr
+      ? `<option value="${expiryDateStr}" selected>${expiryDateStr} (saved)</option>` : `<option value="">—</option>`;
+    document.getElementById("odbStrike").innerHTML = strikeStr
+      ? `<option value="${escapeHtml(strikeStr)}" selected>${escapeHtml(strikeStr)} (saved)</option>` : `<option value="">—</option>`;
+    odbLiveCalc();
+    return;
+  }
+  odbLivePopulateTokens(token);
+  odbLivePopulateExpiries(expiryDateStr);
+  odbLivePopulateStrikes(strikeStr);
+  odbLiveCalc();
+}
+
 function odbLiveCalc() {
   const form = odbReadForm();
   const derived = odbComputeDerived(form);
