@@ -3307,6 +3307,7 @@ let odbLiveInstruments = [];   // cached full USDC-settled option chain
 let odbLiveTokens      = [];   // distinct base_currency list, sorted
 let odbLiveLoaded      = false;
 let odbLiveLoading     = false;
+let odbLiveStrikeFetchSeq = 0; // guards against a stale ticker response applying after a newer strike pick (Add Strategy)
 
 async function odbLiveInit() {
   if (odbLiveLoaded || odbLiveLoading) return;
@@ -3342,9 +3343,12 @@ function odbLiveExpiriesFor(token) {
   return [...new Set(odbLiveTokenInstruments(token).map(i => odbToInputDate(i.expiration_timestamp)))].sort();
 }
 function odbLiveStrikesFor(token, expiryDateStr, type) {
-  return odbLiveTokenInstruments(token)
+  // BTC/ETH list the SAME strike under both the coin-settled and USDC-settled
+  // chains (merged in odbLiveInstruments) — dedupe so each strike shows once.
+  const strikes = odbLiveTokenInstruments(token)
     .filter(i => odbToInputDate(i.expiration_timestamp) === expiryDateStr && i.option_type === String(type).toLowerCase())
-    .map(i => i.strike).sort((a,b) => a-b);
+    .map(i => i.strike);
+  return [...new Set(strikes)].sort((a,b) => a-b);
 }
 function odbLiveFindInstrument(token, expiryDateStr, type, strike) {
   return odbLiveTokenInstruments(token).find(i =>
@@ -3428,11 +3432,19 @@ async function odbLiveStrikeChange() {
   if (!token || token === "__other__" || !expiryDateStr || !strike) { odbLiveCalc(); return; }
   const inst = odbLiveFindInstrument(token, expiryDateStr, type, strike);
   if (!inst) { if (note) note.textContent = "Not in the live chain (using saved value)."; odbLiveCalc(); return; }
+  // Guard against a stale response landing after a NEWER strike selection —
+  // tag this fetch and only apply it if it's still the latest one in flight.
+  const fetchToken = (odbLiveStrikeFetchSeq = (odbLiveStrikeFetchSeq || 0) + 1);
+  // Blank the price/IV immediately so a fast strike switch never shows the
+  // PREVIOUS strike's stale value while the new one is still loading.
+  document.getElementById("odbOptEntryPrice").value = "";
+  document.getElementById("odbIv").value = "";
   if (note) note.textContent = "Fetching live price/IV…";
   try {
     const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.json();
+    if (fetchToken !== odbLiveStrikeFetchSeq) return;   // superseded by a later selection
     const index = Number(t.index_price ?? t.underlying_price) || 0;
     // USDC-settled options quote mark_price directly in USD. Coin-settled
     // options (the legacy BTC/ETH chain) quote it as a FRACTION of the
@@ -3448,7 +3460,7 @@ async function odbLiveStrikeChange() {
     const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
     if (note) note.textContent = `${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
   } catch (e) {
-    if (note) note.textContent = "Live fetch failed: " + e.message;
+    if (fetchToken === odbLiveStrikeFetchSeq && note) note.textContent = "Live fetch failed: " + e.message;
   }
   odbLiveCalc();
 }
@@ -3680,6 +3692,8 @@ function odbLegLiveExpiryChange(idx) {
 }
 // Fetches mark price + IV for THIS leg's resolved instrument. Same mark-price-
 // for-both-directions rule as Add Strategy (see odbLiveStrikeChange above).
+// Keyed by leg idx so leg A's in-flight fetch is never invalidated by leg B.
+let odbLegLiveStrikeFetchSeq = {};
 async function odbLegLiveStrikeChange(idx) {
   const token = document.getElementById(`simLeg${idx}_token`)?.value;
   const expiryDateStr = document.getElementById(`simLeg${idx}_expiry`)?.value;
@@ -3690,11 +3704,19 @@ async function odbLegLiveStrikeChange(idx) {
   if (!token || token === "__other__" || !expiryDateStr || !strike) { odbSimUpdateCalcs(); return; }
   const inst = odbLiveFindInstrument(token, expiryDateStr, type, strike);
   if (!inst) { if (note) note.textContent = "Not in the live chain (using saved value)."; odbSimUpdateCalcs(); return; }
+  const fetchToken = (odbLegLiveStrikeFetchSeq[idx] = (odbLegLiveStrikeFetchSeq[idx] || 0) + 1);
+  // Blank the price/IV immediately so a fast strike switch never shows the
+  // PREVIOUS strike's stale value while the new one is still loading.
+  const leg0 = odbSimLegs[idx];
+  leg0.form.opt_entry_price = ""; leg0.form.iv = "";
+  const priceEl0 = document.getElementById(`simLeg${idx}_opt_entry_price`); if (priceEl0) priceEl0.value = "";
+  const ivEl0 = document.getElementById(`simLeg${idx}_iv`); if (ivEl0) ivEl0.value = "";
   if (note) note.textContent = "Fetching live price/IV…";
   try {
     const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.json();
+    if (fetchToken !== odbLegLiveStrikeFetchSeq[idx]) return;   // superseded by a later selection
     const index = Number(t.index_price ?? t.underlying_price) || 0;
     const rawMark = Number(t.mark_price) || 0;
     const markUsd = inst.settlement === "coin" ? rawMark * index : rawMark;
@@ -3714,7 +3736,7 @@ async function odbLegLiveStrikeChange(idx) {
     const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
     if (note) note.textContent = `${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
   } catch (e) {
-    if (note) note.textContent = "Live fetch failed: " + e.message;
+    if (fetchToken === odbLegLiveStrikeFetchSeq[idx] && note) note.textContent = "Live fetch failed: " + e.message;
   }
   odbSimUpdateCalcs();
 }
