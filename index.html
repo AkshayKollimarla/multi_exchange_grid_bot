@@ -3215,7 +3215,15 @@ async function odbLiveInit() {
     if (note) note.textContent = "Live option chain failed to load: " + e.message;
   } finally {
     odbLiveLoading = false;
-    odbLivePopulateTokens(document.getElementById("odbToken").value);
+    // Shared loader used by BOTH Add Strategy (singular fields) and the
+    // Combined Simulator (per-leg fields) — refresh whichever is currently
+    // on screen once the chain is ready. Guarded with `?.` since only one
+    // (or neither) may be present at any given time.
+    const tokenEl = document.getElementById("odbToken");
+    if (tokenEl) odbLivePopulateTokens(tokenEl.value);
+    odbSimLegs.forEach((leg, idx) => {
+      if (document.getElementById(`simLeg${idx}_token`)) odbLegLivePopulateTokens(idx, leg.form.token);
+    });
   }
 }
 
@@ -3491,6 +3499,118 @@ function odbRemoveLeg(idx) {
   odbSimLegs.splice(idx,1); odbSimEditIds.splice(idx,1);
   odbRenderSim();
 }
+/* ── Per-leg live Deribit fetch — same engine as Add Strategy (shared
+   odbLiveInstruments/odbLiveTokens/odbLiveExpiriesFor/odbLiveStrikesFor/
+   odbLiveFindInstrument/odbLiveInit above), scoped to one leg index so each
+   card fetches its own token/expiry/strike independently. "Type" for
+   strike-filtering comes from the leg's CALL/PUT LONG/SHORT selector
+   (leg.form.option_type) rather than a separate dropdown. ─────────────── */
+function odbLegLiveToggleManual(idx) {
+  const sel = document.getElementById(`simLeg${idx}_token`);
+  const manual = document.getElementById(`simLeg${idx}_token_manual`);
+  if (!sel || !manual) return;
+  manual.style.display = sel.value === "__other__" ? "" : "none";
+}
+function odbLegLivePopulateTokens(idx, keepValue) {
+  const sel = document.getElementById(`simLeg${idx}_token`);
+  if (!sel) return;
+  const known = odbLiveTokens.includes(keepValue);
+  const extra = keepValue && !known && keepValue !== "__other__"
+    ? `<option value="${escapeHtml(keepValue)}">${escapeHtml(keepValue)} (saved, not live)</option>` : "";
+  sel.innerHTML = `<option value="">— select —</option>`
+    + odbLiveTokens.map(t => `<option value="${t}">${t}</option>`).join("")
+    + extra + `<option value="__other__">✎ Other / Manual…</option>`;
+  if (keepValue) sel.value = keepValue;
+  odbLegLiveToggleManual(idx);
+}
+function odbLegLivePopulateExpiries(idx, keepDateStr) {
+  const token = document.getElementById(`simLeg${idx}_token`)?.value;
+  const sel = document.getElementById(`simLeg${idx}_expiry`);
+  if (!sel) return;
+  if (!token || token === "__other__") { sel.innerHTML = `<option value="">— select a live token first —</option>`; return; }
+  const expiries = odbLiveExpiriesFor(token);
+  if (!expiries.length) { sel.innerHTML = `<option value="">— no live expiries —</option>`; return; }
+  sel.innerHTML = expiries.map(d => {
+    const label = new Date(d+"T00:00:00").toLocaleDateString(undefined, { day:"2-digit", month:"short", year:"2-digit" });
+    return `<option value="${d}">${label}</option>`;
+  }).join("");
+  if (keepDateStr && expiries.includes(keepDateStr)) {
+    sel.value = keepDateStr;
+  } else if (keepDateStr) {
+    sel.innerHTML += `<option value="${keepDateStr}" selected>${keepDateStr} (saved)</option>`;
+  }
+}
+function odbLegLivePopulateStrikes(idx, keepStrike) {
+  const token = document.getElementById(`simLeg${idx}_token`)?.value;
+  const expiryDateStr = document.getElementById(`simLeg${idx}_expiry`)?.value;
+  const type = odbSimLegs[idx].form.option_type;
+  const sel = document.getElementById(`simLeg${idx}_options_strike`);
+  if (!sel) return;
+  if (!token || token === "__other__" || !expiryDateStr) { sel.innerHTML = `<option value="">— select expiry first —</option>`; return; }
+  const strikes = odbLiveStrikesFor(token, expiryDateStr, type);
+  if (!strikes.length) { sel.innerHTML = `<option value="">— none —</option>`; return; }
+  sel.innerHTML = strikes.map(k => `<option value="${k}">${k}</option>`).join("");
+  const keepNum = keepStrike ? odbStrikeNumber(keepStrike) : null;
+  const match = keepNum != null ? strikes.find(s => String(s) === String(keepNum)) : undefined;
+  if (match != null) {
+    sel.value = String(match);
+  } else if (keepStrike) {
+    sel.innerHTML += `<option value="${escapeHtml(String(keepStrike))}" selected>${escapeHtml(String(keepStrike))} (saved)</option>`;
+  }
+}
+function odbLegLiveTokenChange(idx) {
+  odbSimLegs[idx].form.token = document.getElementById(`simLeg${idx}_token`).value;
+  odbLegLiveToggleManual(idx);
+  odbLegLivePopulateExpiries(idx);
+  odbLegLivePopulateStrikes(idx);
+  odbSimUpdateCalcs();
+}
+function odbLegLiveExpiryChange(idx) {
+  odbSimLegs[idx].form.expiry = document.getElementById(`simLeg${idx}_expiry`).value;
+  odbLegLivePopulateStrikes(idx);
+  odbLegLiveStrikeChange(idx);   // auto-fetch live price/IV for the first strike
+}
+// Fetches mark price + IV for THIS leg's resolved instrument. Same mark-price-
+// for-both-directions rule as Add Strategy (see odbLiveStrikeChange above).
+async function odbLegLiveStrikeChange(idx) {
+  const token = document.getElementById(`simLeg${idx}_token`)?.value;
+  const expiryDateStr = document.getElementById(`simLeg${idx}_expiry`)?.value;
+  const type = odbSimLegs[idx].form.option_type;
+  const strike = document.getElementById(`simLeg${idx}_options_strike`)?.value;
+  const note = document.getElementById(`simLegLiveNote${idx}`);
+  if (strike != null) odbSimLegs[idx].form.options_strike = strike;
+  if (!token || token === "__other__" || !expiryDateStr || !strike) { odbSimUpdateCalcs(); return; }
+  const inst = odbLiveFindInstrument(token, expiryDateStr, type, strike);
+  if (!inst) { if (note) note.textContent = "Not in the live chain (using saved value)."; odbSimUpdateCalcs(); return; }
+  if (note) note.textContent = "Fetching live price/IV…";
+  try {
+    const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const t = await r.json();
+    const index = Number(t.index_price ?? t.underlying_price) || 0;
+    const rawMark = Number(t.mark_price) || 0;
+    const markUsd = inst.settlement === "coin" ? rawMark * index : rawMark;
+    const leg = odbSimLegs[idx];
+    if (markUsd) {
+      leg.form.opt_entry_price = markUsd.toFixed(4);
+      const el = document.getElementById(`simLeg${idx}_opt_entry_price`); if (el) el.value = leg.form.opt_entry_price;
+    }
+    if (t.mark_iv != null) {
+      leg.form.iv = Number(t.mark_iv).toFixed(1);
+      const el = document.getElementById(`simLeg${idx}_iv`); if (el) el.value = leg.form.iv;
+    }
+    if (!leg.form.fut_entry_price && index) {
+      leg.form.fut_entry_price = index.toFixed(4);
+      const el = document.getElementById(`simLeg${idx}_fut_entry_price`); if (el) el.value = leg.form.fut_entry_price;
+    }
+    const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
+    if (note) note.textContent = `${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
+  } catch (e) {
+    if (note) note.textContent = "Live fetch failed: " + e.message;
+  }
+  odbSimUpdateCalcs();
+}
+
 function odbChangeLegType(idx, type) {
   const leg = odbSimLegs[idx];
   leg.type = type; leg.form.option_type = type.startsWith("CALL") ? "CALL" : "PUT";
@@ -3504,6 +3624,16 @@ function odbRenderSim() {
   wrap.innerHTML = odbSimLegs.map((leg, idx) => odbLegCardHtml(leg, idx)).join("");
   const pillsEl = document.getElementById("odbSimHeaderPills");
   if (pillsEl) pillsEl.innerHTML = odbSimLegs.map(l => odbLegPillHtml(l.type)).join("");
+  // Populate each leg's live Token/Expiry/Strike dropdowns from the cached
+  // chain (fires the fetch once if not loaded yet — odbLiveInit's finally
+  // block re-populates once it resolves). Runs on every render, including a
+  // leg-type change, so the strike list refreshes for the new CALL/PUT.
+  odbLiveInit();
+  odbSimLegs.forEach((leg, idx) => {
+    odbLegLivePopulateTokens(idx, leg.form.token);
+    odbLegLivePopulateExpiries(idx, leg.form.expiry);
+    odbLegLivePopulateStrikes(idx, leg.form.options_strike);
+  });
   odbSimUpdateCalcs();
 }
 // Leg-type <select> styled as a solid tinted pill (appearance:none + custom
@@ -3536,12 +3666,23 @@ function odbLegCardHtml(leg, idx) {
       ${odbSimLegs.length>2 ? `<button class="btn-refresh" style="margin-left:auto;color:var(--red,#dc2626);" onclick="odbRemoveLeg(${idx})">Remove</button>` : ""}
     </div>
     <div class="card-body">
-      <div class="row-2">${f2("Entry Date", inp("entry_date","date"))}${f2("Token", inp("token","text"))}</div>
-      <div class="row-2">${f2("Investment", inp("investment"))}${f2("Strike", inp("options_strike","text"))}</div>
-      <div class="row-2">${f2("Expiry Date", inp("expiry","date"))}${f2(`Entry Qty${leg.type.endsWith("SHORT")?" (neg)":""}`, inp("opt_entry_qty"))}</div>
-      <div class="row-2">${f2("Entry Price", inp("opt_entry_price"))}${f2("Exit Price", inp("opt_exit_price"))}</div>
+      <div class="row-2">
+        ${f2("Entry Date", inp("entry_date","date"))}
+        ${f2("Token *", `<select id="${fid('token')}" onchange="odbLegLiveTokenChange(${idx})"><option value="">— loading —</option></select>
+          <input type="text" id="${fid('token_manual')}" placeholder="e.g. HOOD" oninput="odbSetLegField(${idx},'token',this.value)" style="display:none;margin-top:6px;"/>`)}
+      </div>
+      <div class="row-2">${f2("Investment", inp("investment"))}${f2("Expiry Date", `<select id="${fid('expiry')}" onchange="odbLegLiveExpiryChange(${idx})"><option value="">— select token first —</option></select>`)}</div>
+      <div class="row-2">
+        ${f2("Strike", `<select id="${fid('options_strike')}" onchange="odbLegLiveStrikeChange(${idx})"><option value="">— select expiry first —</option></select>`)}
+        ${f2(`Entry Qty${leg.type.endsWith("SHORT")?" (neg)":""}`, inp("opt_entry_qty"))}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin:-6px 0 10px;">
+        <button class="btn-refresh" style="font-size:11px;padding:5px 10px;" onclick="odbLegLiveStrikeChange(${idx})">↻ Refresh live</button>
+        <span id="simLegLiveNote${idx}" style="font-size:10.5px;color:var(--muted);"></span>
+      </div>
+      <div class="row-2">${f2("Entry Price (live mark)", inp("opt_entry_price"))}${f2("Exit Price", inp("opt_exit_price"))}</div>
       <div class="row-2">${f2("Fut Qty", inp("fut_qty"))}${f2("Fut Entry Price", inp("fut_entry_price"))}</div>
-      <div class="row-2">${f2("Fut Exit Price", inp("fut_exit_price"))}${f2("IV (%) for BS", inp("iv"))}</div>
+      <div class="row-2">${f2("Fut Exit Price", inp("fut_exit_price"))}${f2("IV (%) for BS (live)", inp("iv"))}</div>
       <div class="row-2">${f2("Upside Distance", inp("upside_distance"))}${f2("Down Distance", inp("down_distance"))}</div>
       <div class="row-2">${f2("Basket Distance", inp("basket_distance"))}${f2("Basket Loss", inp("basket_loss"))}</div>
       <div class="row-2">${f2("Net Booked PnL", inp("net_booked_pnl"))}${f2("Market Making PL", inp("market_making_pl"))}</div>
