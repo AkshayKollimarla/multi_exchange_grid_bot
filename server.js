@@ -3858,9 +3858,13 @@ async function deribitMergedOptionChain() {
     deribitGet(`/api/v2/public/get_instruments?currency=ETH&kind=option&expired=false`),
   ]);
   const tag = (arr, settlement) => (Array.isArray(arr) ? arr : []).map(i => ({ ...i, settlement }));
-  // usdc first so a same-strike/expiry match prefers the simpler USD-quoted
-  // instrument when both settlement types list it (.find() takes first match).
-  return [...tag(usdc, "usdc"), ...tag(btc, "coin"), ...tag(eth, "coin")];
+  // Coin-settled (inverse) BTC/ETH first — this account trades those, not
+  // the USDC-margined line, even though collateral is held in USDC — so a
+  // same-strike/expiry match prefers coin-settled (.find() takes first
+  // match). usdc-settled fills in everything the coin chain doesn't have:
+  // every other token (SOL/XRP/AVAX/TRX/HYPE/...), which has no coin-settled
+  // line at all, plus any BTC/ETH strike/expiry the coin chain lacks.
+  return [...tag(btc, "coin"), ...tag(eth, "coin"), ...tag(usdc, "usdc")];
 }
 app.get("/api/deribit/instruments", async (req, res) => {
   try { res.json(await deribitMergedOptionChain()); }
