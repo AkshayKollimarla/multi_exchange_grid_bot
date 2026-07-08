@@ -3205,7 +3205,7 @@ async function odbLiveInit() {
   odbLiveLoading = true;
   const note = document.getElementById("odbLiveNote");
   try {
-    const r = await fetch("/api/deribit/instruments?currency=USDC");
+    const r = await fetch("/api/deribit/instruments");   // server merges USDC + legacy BTC/ETH chains
     if (!r.ok) throw new Error("HTTP " + r.status);
     const list = await r.json();
     odbLiveInstruments = Array.isArray(list) ? list : [];
@@ -3317,16 +3317,20 @@ async function odbLiveStrikeChange() {
     const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
     if (!r.ok) throw new Error("HTTP " + r.status);
     const t = await r.json();
-    // USDC-settled options quote mark_price directly in USD — no conversion.
-    const markUsd = Number(t.mark_price) || 0;
-    const index    = Number(t.index_price ?? t.underlying_price) || 0;
+    const index = Number(t.index_price ?? t.underlying_price) || 0;
+    // USDC-settled options quote mark_price directly in USD. Coin-settled
+    // options (the legacy BTC/ETH chain) quote it as a FRACTION of the
+    // underlying coin — must multiply by the index to get USD.
+    const rawMark = Number(t.mark_price) || 0;
+    const markUsd = inst.settlement === "coin" ? rawMark * index : rawMark;
     if (markUsd) document.getElementById("odbOptEntryPrice").value = markUsd.toFixed(4);
     if (t.mark_iv != null) document.getElementById("odbIv").value = Number(t.mark_iv).toFixed(1);
     // Auto-fill Fut Entry Price with the live index, but never clobber a
     // value the user already typed.
     const futEl = document.getElementById("odbFutEntryPrice");
     if (!futEl.value && index) futEl.value = index.toFixed(4);
-    if (note) note.textContent = `${inst.instrument_name} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
+    const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
+    if (note) note.textContent = `${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
   } catch (e) {
     if (note) note.textContent = "Live fetch failed: " + e.message;
   }

@@ -3836,11 +3836,26 @@ async function deribitGet(path) {
   const j = await r.json();
   return j.result;
 }
+// Merges the broad USDC-settled option chain (covers BTC/ETH/SOL/XRP/AVAX/
+// TRX/HYPE) with the legacy coin-settled BTC/ETH chains. Deribit lists
+// expiries more densely on the older coin-settled line (e.g. it has a expiry
+// the newer USDC line skips) — merging both gives the full listing for BTC/
+// ETH while still covering the alts that only exist under USDC settlement.
+// Each instrument is tagged `settlement: "usdc"|"coin"` so the client knows
+// whether ticker.mark_price is already USD (usdc) or a coin fraction that
+// needs x index_price (coin).
 app.get("/api/deribit/instruments", async (req, res) => {
-  const cur = String(req.query.currency || "USDC").toUpperCase().replace(/[^A-Z]/g, "");
   try {
-    const result = await deribitGet(`/api/v2/public/get_instruments?currency=${cur}&kind=option&expired=false`);
-    res.json(Array.isArray(result) ? result : []);
+    const [usdc, btc, eth] = await Promise.all([
+      deribitGet(`/api/v2/public/get_instruments?currency=USDC&kind=option&expired=false`),
+      deribitGet(`/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false`),
+      deribitGet(`/api/v2/public/get_instruments?currency=ETH&kind=option&expired=false`),
+    ]);
+    const tag = (arr, settlement) => (Array.isArray(arr) ? arr : []).map(i => ({ ...i, settlement }));
+    // usdc first so a same-strike/expiry match prefers the simpler USD-quoted
+    // instrument when both settlement types list it (Array.find() below takes
+    // the first match).
+    res.json([...tag(usdc, "usdc"), ...tag(btc, "coin"), ...tag(eth, "coin")]);
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 app.get("/api/deribit/ticker", async (req, res) => {
