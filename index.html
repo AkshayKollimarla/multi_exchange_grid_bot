@@ -1382,7 +1382,7 @@
             </div>
 
             <div class="btn-row">
-              <button class="btn btn-start" id="odbSaveBtn" onclick="odbSaveStrategy()">💾 Save Strategy</button>
+              <button class="btn btn-start" id="odbSaveBtn" onclick="odbSaveAndExecuteClick()">💾 Save &amp; Execute</button>
               <button class="btn" style="background:var(--emerald,#16a34a);color:#fff;display:none;" id="odbSaveAsNewBtn" onclick="odbSaveAsNew()">💾 Save as New</button>
               <button class="btn btn-stop" onclick="odbResetAddForm()">↺ Reset</button>
             </div>
@@ -1393,6 +1393,24 @@
         <div class="card" style="position:sticky;top:16px;">
           <div class="card-header">🔒 Auto-Calculated (Live)</div>
           <div class="card-body" id="odbCalcPanel" style="font-size:12px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Execution confirmation — real orders only fire after this is confirmed -->
+    <div id="odbExecOverlay" style="display:none;position:fixed;inset:0;background:rgba(11,18,32,.55);z-index:1000;align-items:center;justify-content:center;">
+      <div class="card" style="max-width:520px;width:92%;max-height:85vh;overflow-y:auto;">
+        <div class="card-header" style="color:#b91c1c;">⚠️ Confirm Live Orders — Real Money</div>
+        <div class="card-body">
+          <div id="odbExecSummary" style="font-size:12.5px;"></div>
+          <div style="font-size:11px;color:var(--muted);margin-top:10px;">
+            Post-only maker limit orders. If price has moved and a leg would cross the spread, Deribit rejects that leg (post_only_reject) — it will NOT convert to a taker fill.
+          </div>
+          <div class="btn-row" style="margin-top:16px;">
+            <button class="btn" style="background:#b91c1c;color:#fff;" id="odbExecConfirmBtn" onclick="odbConfirmExecute()">✅ Confirm &amp; Place Live Orders</button>
+            <button class="btn btn-stop" onclick="odbCancelExecute()">Cancel</button>
+          </div>
+          <div id="odbExecMsg" style="font-size:12px;margin-top:10px;"></div>
         </div>
       </div>
     </div>
@@ -3134,7 +3152,7 @@ function odbStartAdd() {
   odbEditId = null; odbEditGroupId = null;
   odbEmptyForm();
   document.getElementById("odbAddModeNote").style.display = "none";
-  document.getElementById("odbSaveBtn").textContent = "💾 Save Strategy";
+  document.getElementById("odbSaveBtn").textContent = "💾 Save & Execute";
   document.getElementById("odbSaveAsNewBtn").style.display = "none";
   document.getElementById("odbAddMsg").textContent = "";
   showOdbTab("add");
@@ -3187,6 +3205,96 @@ async function odbSaveAsNew() {
     odbReload(true);
     setTimeout(() => odbStartEdit(j.id), 700);
   } catch (e) { msg.style.color = "var(--red,#dc2626)"; msg.textContent = "Failed: " + e.message; }
+}
+
+/* ── Save & Execute: fresh adds save the strategy THEN place live post-only
+   maker orders on Deribit (option leg always, futures leg if qty+price are
+   set). Editing an existing strategy NEVER executes — only a fresh Add does.
+   The instrument is re-resolved server-side before any order is placed; this
+   client-side lookup is only used to preview it in the confirmation modal. */
+let odbExecPreview = null;
+
+async function odbSaveAndExecuteClick() {
+  if (odbEditId != null) { odbSaveStrategy(); return; }
+  const form = odbReadForm();
+  if (!form.token.trim()) { alert("Token is required."); return; }
+  if (!form.expiry || !form.options_strike || !form.opt_entry_qty || !form.opt_entry_price) {
+    alert("Select token / expiry / strike from the live dropdowns and enter option qty + entry price before executing.");
+    return;
+  }
+  const inst = odbLiveFindInstrument(form.token, form.expiry, form.option_type, form.options_strike);
+  if (!inst) {
+    alert("Could not match a live Deribit instrument for the selected token/expiry/strike/type. Re-pick them via the dropdowns, then try again.");
+    return;
+  }
+  odbExecPreview = { form, inst };
+  odbRenderExecSummary(form, inst);
+  document.getElementById("odbExecOverlay").style.display = "flex";
+}
+
+function odbRenderExecSummary(form, inst) {
+  const optSide = Number(form.opt_entry_qty) > 0 ? "BUY" : "SELL";
+  let html = `<div style="margin-bottom:10px;"><b>Option leg</b><br>
+    ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${form.opt_entry_price} <span style="color:var(--muted);">(post-only limit)</span></div>`;
+  if (Number(form.fut_qty) && Number(form.fut_entry_price)) {
+    const futSide = Number(form.fut_qty) > 0 ? "BUY" : "SELL";
+    html += `<div><b>Futures leg</b><br>
+      ${form.token} perpetual — ${futSide} ${Math.abs(form.fut_qty)} @ ${form.fut_entry_price} <span style="color:var(--muted);">(post-only limit)</span></div>`;
+  } else {
+    html += `<div style="color:var(--muted);">No futures leg (fut qty or fut entry price is blank).</div>`;
+  }
+  document.getElementById("odbExecSummary").innerHTML = html;
+  document.getElementById("odbExecMsg").textContent = "";
+  document.getElementById("odbExecConfirmBtn").style.display = "";
+  document.getElementById("odbExecConfirmBtn").disabled = false;
+  const cancelBtn = document.querySelector("#odbExecOverlay .btn-stop");
+  if (cancelBtn) cancelBtn.textContent = "Cancel";
+}
+
+function odbCancelExecute() {
+  document.getElementById("odbExecOverlay").style.display = "none";
+  odbExecPreview = null;
+}
+
+async function odbConfirmExecute() {
+  if (!odbExecPreview) return;
+  const { form } = odbExecPreview;
+  const msg = document.getElementById("odbExecMsg"), btn = document.getElementById("odbExecConfirmBtn");
+  btn.disabled = true; msg.style.color = "var(--muted)"; msg.textContent = "Saving strategy…";
+  try {
+    const r = await fetch("/api/options-db/trades", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(form) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Save failed");
+    const id = j.id;
+    msg.style.color = "var(--muted)";
+    msg.textContent = `✓ Saved as strategy #${id}. Placing live orders on Deribit…`;
+    const er = await fetch(`/api/options-db/trades/${id}/execute`, { method: "POST" });
+    const ej = await er.json();
+    if (!er.ok) throw new Error(ej.error || "Execution request failed");
+    odbRenderExecResult(id, ej);
+    odbEmptyForm();
+    odbReload(true);
+  } catch (e) {
+    msg.style.color = "var(--red,#dc2626)";
+    msg.textContent = "Failed: " + e.message;
+    btn.disabled = false;
+  }
+}
+
+function odbRenderExecResult(id, ej) {
+  const lines = [];
+  const leg = (label, r) => {
+    if (!r) return;
+    if (r.ok) lines.push(`<div style="color:var(--green,#16a34a);">✓ ${label}: ${r.instrument} ${String(r.side).toUpperCase()} — order ${r.orderId || "?"} (${r.state || "placed"})</div>`);
+    else lines.push(`<div style="color:var(--red,#dc2626);">✗ ${label} FAILED: ${r.error}</div>`);
+  };
+  leg("Option", ej.option);
+  leg("Futures", ej.futures);
+  document.getElementById("odbExecMsg").innerHTML =
+    `<div style="margin-top:6px;margin-bottom:6px;">Strategy <b>#${id}</b> saved.</div>` + lines.join("");
+  document.getElementById("odbExecConfirmBtn").style.display = "none";
+  const cancelBtn = document.querySelector("#odbExecOverlay .btn-stop");
+  if (cancelBtn) cancelBtn.textContent = "Close";
 }
 
 /* ── Add Strategy: live Deribit token/expiry/strike + mark price/IV ─────

@@ -113,6 +113,7 @@ async function pingDb() {
         estimated_upside_net_pnl    DECIMAL(20,4) DEFAULT 0,
         estimated_downside_net_pnl  DECIMAL(20,4) DEFAULT 0,
         apy                         DECIMAL(10,4) DEFAULT 0,
+        execution_json              JSON          NULL,
         created_at                  TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_opt_token  (token),
         INDEX idx_opt_status (status),
@@ -120,6 +121,9 @@ async function pingDb() {
         INDEX idx_opt_entry_date (entry_date)
       ) ENGINE=InnoDB
     `);
+    // Upgrade older installs that pre-date the Save & Execute feature.
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN execution_json JSON NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
 
     // Trading accounts (multiple wallets/keys per exchange). Credentials are
     // stored as JSON so each exchange can keep its own shape:
@@ -669,11 +673,22 @@ async function deleteOptionsTrade(id) {
   if (result.affectedRows === 0) throw new Error("Not found.");
 }
 
+// Audit trail for "Save & Execute" — records the order-placement result
+// (instrument, side, order id, or error) for both legs, never blocking the
+// caller if the write itself fails (the orders are already live either way).
+async function recordOptionsExecution(id, execution) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.query("UPDATE options_trades SET execution_json = CAST(? AS JSON) WHERE id = ?", [JSON.stringify(execution), id]);
+  } catch (e) { console.error("[DB] recordOptionsExecution failed:", e.message); }
+}
+
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
   loadAllSessions, dbConfigured,
   listAccounts, getAccount, addAccount, deleteAccount,
   listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,
-  deleteOptionsTrade, computeOptionsDerived, optStrikeNumber,
+  deleteOptionsTrade, computeOptionsDerived, optStrikeNumber, recordOptionsExecution,
 };

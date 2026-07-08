@@ -3841,22 +3841,25 @@ async function deribitGet(path) {
 // expiries more densely on the older coin-settled line (e.g. it has a expiry
 // the newer USDC line skips) — merging both gives the full listing for BTC/
 // ETH while still covering the alts that only exist under USDC settlement.
-// Each instrument is tagged `settlement: "usdc"|"coin"` so the client knows
+// Each instrument is tagged `settlement: "usdc"|"coin"` so the caller knows
 // whether ticker.mark_price is already USD (usdc) or a coin fraction that
-// needs x index_price (coin).
+// needs x index_price (coin). Shared by the public instruments endpoint AND
+// server-side order execution (which re-resolves fresh at submit time rather
+// than trusting a client-cached instrument reference).
+async function deribitMergedOptionChain() {
+  const [usdc, btc, eth] = await Promise.all([
+    deribitGet(`/api/v2/public/get_instruments?currency=USDC&kind=option&expired=false`),
+    deribitGet(`/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false`),
+    deribitGet(`/api/v2/public/get_instruments?currency=ETH&kind=option&expired=false`),
+  ]);
+  const tag = (arr, settlement) => (Array.isArray(arr) ? arr : []).map(i => ({ ...i, settlement }));
+  // usdc first so a same-strike/expiry match prefers the simpler USD-quoted
+  // instrument when both settlement types list it (.find() takes first match).
+  return [...tag(usdc, "usdc"), ...tag(btc, "coin"), ...tag(eth, "coin")];
+}
 app.get("/api/deribit/instruments", async (req, res) => {
-  try {
-    const [usdc, btc, eth] = await Promise.all([
-      deribitGet(`/api/v2/public/get_instruments?currency=USDC&kind=option&expired=false`),
-      deribitGet(`/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false`),
-      deribitGet(`/api/v2/public/get_instruments?currency=ETH&kind=option&expired=false`),
-    ]);
-    const tag = (arr, settlement) => (Array.isArray(arr) ? arr : []).map(i => ({ ...i, settlement }));
-    // usdc first so a same-strike/expiry match prefers the simpler USD-quoted
-    // instrument when both settlement types list it (Array.find() below takes
-    // the first match).
-    res.json([...tag(usdc, "usdc"), ...tag(btc, "coin"), ...tag(eth, "coin")]);
-  } catch (e) { res.status(502).json({ error: e.message }); }
+  try { res.json(await deribitMergedOptionChain()); }
+  catch (e) { res.status(502).json({ error: e.message }); }
 });
 app.get("/api/deribit/ticker", async (req, res) => {
   const inst = req.query.instrument;
@@ -3865,6 +3868,137 @@ app.get("/api/deribit/ticker", async (req, res) => {
     const result = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(inst)}`);
     res.json(result || {});
   } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  DERIBIT LIVE EXECUTION — Options Multi-Agent DB "Save & Execute"
+//  Places REAL post-only limit orders on Deribit using the SAME
+//  DERIBIT_CLIENT_ID/DERIBIT_CLIENT_SECRET the grid bot already uses.
+//  No dry-run mode — every call here places a live order (mainnet unless
+//  DERIBIT_TESTNET=true). Confirmation happens in the UI before this is hit.
+// ══════════════════════════════════════════════════════════════
+let _deribitToken = null, _deribitTokenExp = 0;
+async function deribitAuthToken() {
+  if (_deribitToken && Date.now() < _deribitTokenExp - 30000) return _deribitToken;
+  const cid = process.env.DERIBIT_CLIENT_ID, secret = process.env.DERIBIT_CLIENT_SECRET;
+  if (!cid || !secret) throw new Error("DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET missing in .env");
+  const r = await Promise.race([
+    fetch(`https://${deribitHost()}/api/v2/public/auth?grant_type=client_credentials&client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(secret)}`),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("Deribit auth timeout 12s")), 12000)),
+  ]);
+  const j = await r.json();
+  if (j.error) throw new Error(`Deribit auth failed: ${j.error.message || j.error.code}`);
+  _deribitToken = j.result.access_token;
+  _deribitTokenExp = Date.now() + (Number(j.result.expires_in) || 900) * 1000;
+  return _deribitToken;
+}
+async function deribitPrivate(method, params) {
+  const token = await deribitAuthToken();
+  const qs = new URLSearchParams(params).toString();
+  const r = await Promise.race([
+    fetch(`https://${deribitHost()}/api/v2/private/${method}?${qs}`, { headers: { Authorization: `Bearer ${token}` } }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("Deribit private call timeout 12s")), 12000)),
+  ]);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || `Deribit error ${j.error.code}`);
+  return j.result;
+}
+// Places ONE post-only limit order. side: "buy"|"sell". Never throws —
+// returns { ok:false, error } on any failure (incl. post_only_reject when
+// the price would cross the spread) so the caller can report per-leg status.
+async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label) {
+  try {
+    const method = side === "sell" ? "sell" : "buy";
+    const result = await deribitPrivate(method, {
+      instrument_name: instrumentName,
+      amount: String(Math.abs(amount)),
+      type: "limit",
+      price: String(price),
+      post_only: "true",
+      label: String(label || "").slice(0, 64),
+    });
+    return {
+      ok: true, instrument: instrumentName, side,
+      orderId: result?.order?.order_id, state: result?.order?.order_state,
+    };
+  } catch (e) {
+    return { ok: false, instrument: instrumentName, side, error: e.message };
+  }
+}
+// Finds the perpetual futures instrument for a token. BTC/ETH have both a
+// coin-margined perp (BTC-PERPETUAL) and a USDC-margined one
+// (BTC_USDC-PERPETUAL); every other token (SOL/XRP/AVAX/TRX/HYPE/...) only
+// has the USDC-margined one. Prefers matching the option leg's settlement
+// currency so the whole strategy sits in one margin currency; falls back to
+// whichever exists.
+async function deribitFindPerpetual(token, preferSettlement) {
+  const usdcFutures = await deribitGet(`/api/v2/public/get_instruments?currency=USDC&kind=future&expired=false`);
+  const usdcPerp = (usdcFutures || []).find(f => f.base_currency === token && f.instrument_name.endsWith("-PERPETUAL"));
+  let coinPerp = null;
+  if (token === "BTC" || token === "ETH") {
+    const coinFutures = await deribitGet(`/api/v2/public/get_instruments?currency=${token}&kind=future&expired=false`);
+    coinPerp = (coinFutures || []).find(f => f.instrument_name === `${token}-PERPETUAL`);
+  }
+  if (preferSettlement === "coin" && coinPerp) return { instrument_name: coinPerp.instrument_name, settlement: "coin" };
+  if (usdcPerp) return { instrument_name: usdcPerp.instrument_name, settlement: "usdc" };
+  if (coinPerp) return { instrument_name: coinPerp.instrument_name, settlement: "coin" };
+  return null;
+}
+
+// Places the option leg (required) and, if the strategy has a futures leg,
+// the futures leg too — both as post-only limit orders at the strategy's
+// saved prices. Re-resolves the live instrument fresh from Deribit rather
+// than trusting anything cached client-side, so execution always targets a
+// currently-listed instrument.
+app.post("/api/options-db/trades/:id/execute", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  const id = parseInt(req.params.id, 10);
+  try {
+    const trade = await db.getOptionsTrade(id);
+    if (!trade) return res.status(404).json({ error: "Not found." });
+
+    const token = String(trade.token || "").split(/[-_]/)[0].toUpperCase();
+    const optionType = String(trade.option_type || "PUT").toLowerCase();
+    const strike = db.optStrikeNumber(trade.options_strike);
+    const expiryDateStr = trade.expiry ? new Date(trade.expiry).toISOString().slice(0, 10) : null;
+    const qty = Number(trade.opt_entry_qty) || 0;
+    const price = Number(trade.opt_entry_price) || 0;
+
+    if (!token || !expiryDateStr || !strike || !qty || !price) {
+      return res.status(400).json({ error: "Missing token/expiry/strike/qty/entry price — pick them via the live dropdowns first." });
+    }
+
+    const chain = await deribitMergedOptionChain();
+    const inst = chain.find(i =>
+      i.base_currency === token &&
+      new Date(i.expiration_timestamp).toISOString().slice(0, 10) === expiryDateStr &&
+      i.option_type === optionType &&
+      String(i.strike) === String(strike));
+    if (!inst) {
+      return res.status(400).json({ error: `No live Deribit instrument matches ${token} ${expiryDateStr} ${optionType.toUpperCase()} ${strike} — it may have expired or isn't currently listed.` });
+    }
+
+    const optSide = qty > 0 ? "buy" : "sell";
+    const optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, price, `optdb_${id}_opt`);
+
+    let futResult = null;
+    const futQty = Number(trade.fut_qty) || 0;
+    const futPrice = Number(trade.fut_entry_price) || 0;
+    if (futQty && futPrice) {
+      const perp = await deribitFindPerpetual(token, inst.settlement);
+      if (!perp) {
+        futResult = { ok: false, error: `No perpetual futures instrument found for ${token}` };
+      } else {
+        const futSide = futQty > 0 ? "buy" : "sell";
+        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futQty, futPrice, `optdb_${id}_fut`);
+      }
+    }
+
+    await db.recordOptionsExecution(id, { option: optResult, futures: futResult, executedAt: new Date().toISOString() });
+    res.json({ ok: true, option: optResult, futures: futResult });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/api/report", async (req, res) => {
