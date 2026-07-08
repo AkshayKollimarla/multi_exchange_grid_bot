@@ -842,9 +842,11 @@
     <div class="nav-item"        id="nav-report"   onclick="showSection('report', this)"><span class="ic">📈</span> PnL Report</div>
     <div class="nav-item"        id="nav-logs"     onclick="showSection('logs', this)"><span class="ic">📜</span> Bot Logs</div>
     <div class="nav-item"        id="nav-active"   onclick="showSection('active', this)"><span class="ic">🟢</span> Active Bot <span class="badge" id="navActiveBadge" style="display:none;">0</span></div>
-    <div class="nav-group">Derivatives</div>
-    <div class="nav-item"        id="nav-options"   onclick="showSection('options', this)"><span class="ic">🎯</span> Options Strategy</div>
-    <div class="nav-item"        id="nav-optionsdb" onclick="showSection('optionsdb', this)"><span class="ic">🗄️</span> Options Multi-Agent DB</div>
+    <div class="nav-group">Options Strategy</div>
+    <div class="nav-item"        id="nav-optdash"     onclick="showSection('optdash', this)"><span class="ic">📋</span> Options Dashboard</div>
+    <div class="nav-item"        id="nav-optadd"      onclick="showSection('optadd', this)"><span class="ic">➕</span> Add Strategy</div>
+    <div class="nav-item"        id="nav-optsim"      onclick="showSection('optsim', this)"><span class="ic">🧮</span> Combined Simulator</div>
+    <div class="nav-item"        id="nav-optanalysis" onclick="showSection('optanalysis', this)"><span class="ic">🔍</span> Options Analysis</div>
   </aside>
 
   <!-- ══ CONTENT ══ -->
@@ -1259,114 +1261,11 @@
 </section>
 
   <!-- ══════════ SECTION: OPTIONS STRATEGY ══════════ -->
-  <section id="sec-options" class="section">
-    <div class="sec-head">🎯 Options Strategy — Black-Scholes P&amp;L</div>
-    <div class="page" style="align-items:start;">
-      <!-- Inputs -->
-      <div class="card">
-        <div class="card-header">Strategy Legs</div>
-        <div class="card-body">
-          <div class="section-title">Option Leg</div>
-          <div class="row-2">
-            <div class="field"><label>Underlying</label>
-              <select id="optUnderlying" onchange="loadOptExpiries()"><option value="ETH">ETH</option><option value="BTC">BTC</option></select></div>
-            <div class="field"><label>Type</label>
-              <select id="optType" onchange="onOptChainChange()"><option value="call">Call</option><option value="put">Put</option></select></div>
-          </div>
-          <div class="row-2">
-            <div class="field"><label>Direction</label>
-              <select id="optDir"><option value="long">Long (buy)</option><option value="short">Short (sell)</option></select></div>
-            <div class="field"><label>Expiry</label>
-              <select id="optExpiry" onchange="onOptChainChange()"><option value="">— load —</option></select></div>
-          </div>
-          <div class="row-2">
-            <div class="field"><label>Strike</label>
-              <select id="optStrike" onchange="fetchOptQuote()"><option value="">—</option></select></div>
-            <div class="field"><label>Quantity (lots)</label><input type="number" id="optQty" value="1" step="1" min="0"/></div>
-          </div>
-          <div class="row-2">
-            <div class="field"><label>Entry Premium ($)</label><input type="number" id="optPremium" step="0.01" placeholder="fetched mid"/></div>
-            <div class="field"><label>Implied Vol σ (%)</label><input type="number" id="optIV" step="0.1" placeholder="fetched"/></div>
-          </div>
-          <button class="btn-refresh" onclick="fetchOptQuote()" style="margin-top:4px;">↻ Fetch mark IV / premium from Deribit</button>
-          <div id="optQuoteNote" style="font-size:11px;color:var(--muted);margin-top:6px;"></div>
-
-          <div class="section-title" style="margin-top:16px;">Perp Hedge Leg <span class="pill pill-blue" style="margin-left:6px;">optional</span></div>
-          <div class="row-2">
-            <div class="field"><label>Direction</label>
-              <select id="perpDir"><option value="">None</option><option value="long">Long</option><option value="short">Short</option></select></div>
-            <div class="field"><label>Size (in coin)</label><input type="number" id="perpQty" value="0" step="0.1" min="0"/></div>
-          </div>
-          <div class="field"><label>Perp Entry Price ($)</label><input type="number" id="perpEntry" step="0.01" placeholder="defaults to index"/></div>
-
-          <div class="section-title" style="margin-top:16px;">Scenario</div>
-          <div class="row-2">
-            <div class="field"><label>Current Index ($)</label><input type="number" id="optSpot" step="0.01" placeholder="fetched"/></div>
-            <div class="field"><label>Distance ± ($)</label><input type="number" id="optDistance" value="100" step="1"/></div>
-          </div>
-          <div class="field"><label>Risk-free rate (%)</label><input type="number" id="optRate" value="0" step="0.1"/></div>
-
-          <div class="btn-row"><button class="btn btn-start" onclick="calcOptionStrategy()">📊 Calculate P&amp;L</button></div>
-          <div id="optMsg" style="font-size:12px;margin-top:8px;"></div>
-        </div>
-      </div>
-
-      <!-- Outputs -->
-      <div class="card">
-        <div class="card-header">Estimated P&amp;L</div>
-        <div class="card-body">
-          <div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:2px 0 8px;">Today (moves by end of day)</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--green);">
-              <div class="stat-label">TODAY — UPSIDE PnL <span id="optTodayUpLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optTodayUp" style="font-size:26px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves +dist today (incl. 1 day decay)</div></div>
-            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--red);">
-              <div class="stat-label">TODAY — DOWNSIDE PnL <span id="optTodayDnLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optTodayDn" style="font-size:26px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">moves −dist today (incl. 1 day decay)</div></div>
-          </div>
-          <div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:2px 0 8px;">At expiry</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
-            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--green);">
-              <div class="stat-label">EXPIRY — UPSIDE PnL <span id="optExpUpLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optExpUp" style="font-size:26px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
-            <div class="pnl-card pnl-neutral" style="border-top:3px solid var(--red);">
-              <div class="stat-label">EXPIRY — DOWNSIDE PnL <span id="optExpDnLabel" style="color:var(--muted);"></span></div>
-              <div class="stat-value" id="optExpDn" style="font-size:26px;">—</div>
-              <div style="font-size:10px;color:var(--muted);margin-top:2px;">intrinsic only (time value = 0)</div></div>
-          </div>
-          <table class="ord-table">
-            <thead><tr><th>Leg</th><th>Today ↑</th><th>Today ↓</th><th>Expiry ↑</th><th>Expiry ↓</th></tr></thead>
-            <tbody id="optBreakdown"><tr><td colspan="5" class="empty-td">Fill the inputs and Calculate</td></tr></tbody>
-          </table>
-          <div id="optMeta" style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7;"></div>
-          <div class="section-title" style="margin-top:12px;">Payoff across the range</div>
-          <table class="ord-table">
-            <thead><tr><th>Index</th><th>Today PnL</th><th>Expiry PnL</th></tr></thead>
-            <tbody id="optPayoff"><tr><td colspan="3" class="empty-td">—</td></tr></tbody>
-          </table>
-          <div style="font-size:11px;color:var(--muted);margin-top:10px;">
-            ⓘ Instantaneous mark-to-market (Black-Scholes at the moved price, same time-to-expiry). Perp PnL uses a linear (coin-size) approximation. Execution on Deribit is the next phase.
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
 
   <!-- ══════════ SECTION: OPTIONS MULTI-AGENT DATABASE ══════════ -->
-  <section id="sec-optionsdb" class="section">
-    <div class="sec-head">🗄️ Options Multi-Agent Database</div>
-
-    <div class="tab-row" style="margin-bottom:16px;">
-      <button class="tab-btn active" id="odbTab-dashboard"  onclick="showOdbTab('dashboard')">📋 Dashboard</button>
-      <button class="tab-btn"        id="odbTab-add"        onclick="showOdbTab('add')">➕ Add Strategy</button>
-      <button class="tab-btn"        id="odbTab-sim"        onclick="showOdbTab('sim')">🧮 Combined Simulator</button>
-      <button class="tab-btn"        id="odbTab-analysis"   onclick="showOdbTab('analysis')">🔍 Analysis</button>
-    </div>
-
-    <!-- ── Dashboard ── -->
+  <!-- ══════════ SECTION: OPTIONS DASHBOARD ══════════ -->
+  <section id="sec-optdash" class="section">
+    <div class="sec-head">📋 Options Dashboard</div>
     <div id="odbPanel-dashboard" class="odb-panel">
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
         <div class="pnl-card pnl-neutral"><div class="stat-label">Total (page)</div><div class="stat-value blue" id="odbStatTotal">0 / 0</div></div>
@@ -1410,11 +1309,14 @@
       </div>
       <div id="odbPagination" style="display:flex;justify-content:space-between;align-items:center;padding:10px 2px;font-size:12px;color:var(--muted);"></div>
     </div>
+  </section>
 
-    <!-- ── Add Strategy ── -->
-    <div id="odbPanel-add" class="odb-panel" style="display:none;">
+  <!-- ══════════ SECTION: ADD STRATEGY ══════════ -->
+  <section id="sec-optadd" class="section">
+    <div class="sec-head">➕ Add Strategy</div>
+    <div id="odbPanel-add" class="odb-panel">
       <div id="odbAddModeNote" style="display:none;margin-bottom:10px;font-size:12px;color:var(--muted);"></div>
-      <div class="page" style="align-items:start;">
+      <div class="page" style="align-items:start;grid-template-columns:1.7fr 1fr;">
         <div class="card">
           <div class="card-header">Strategy Details</div>
           <div class="card-body">
@@ -1486,9 +1388,12 @@
         </div>
       </div>
     </div>
+  </section>
 
-    <!-- ── Combined Simulator ── -->
-    <div id="odbPanel-sim" class="odb-panel" style="display:none;">
+  <!-- ══════════ SECTION: COMBINED SIMULATOR ══════════ -->
+  <section id="sec-optsim" class="section">
+    <div class="sec-head">🧮 Combined Simulator</div>
+    <div id="odbPanel-sim" class="odb-panel">
       <div id="odbSimModeNote" style="display:none;margin-bottom:10px;font-size:12px;color:var(--muted);"></div>
       <div id="odbSimLegs" style="display:flex;flex-direction:column;gap:16px;"></div>
       <div class="btn-row" style="margin:14px 0;">
@@ -1522,9 +1427,12 @@
         </div>
       </div>
     </div>
+  </section>
 
-    <!-- ── Analysis ── -->
-    <div id="odbPanel-analysis" class="odb-panel" style="display:none;">
+  <!-- ══════════ SECTION: OPTIONS ANALYSIS ══════════ -->
+  <section id="sec-optanalysis" class="section">
+    <div class="sec-head">🔍 Options Analysis</div>
+    <div id="odbPanel-analysis" class="odb-panel">
       <div class="card" style="margin-bottom:14px;">
         <div class="card-body">
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">
@@ -1864,12 +1772,13 @@ function showSection(name, el) {
   document.getElementById("sec-" + name)?.classList.add("active");
   document.querySelectorAll(".sidebar .nav-item").forEach(n => n.classList.remove("active"));
   (el || document.getElementById("nav-" + name))?.classList.add("active");
-  if (name === "accounts") loadAccounts();
-  if (name === "active")   renderActiveBotPicker();
-  if (name === "report")   loadReport();
-  if (name === "config")   loadConfigAccounts();
-  if (name === "options" && !optInstruments.length) loadOptExpiries();
-  if (name === "optionsdb") { if (!odbInited) { odbInited = true; odbReload(true); } }
+  if (name === "accounts")     loadAccounts();
+  if (name === "active")       renderActiveBotPicker();
+  if (name === "report")       loadReport();
+  if (name === "config")       loadConfigAccounts();
+  if (name === "optdash")      odbReload(true);
+  if (name === "optsim")       odbInitSimIfEmpty();
+  if (name === "optanalysis")  odbAnEnsureLoaded();
 }
 
 // Update the sidebar badge (count of running bots) + the Active Bot picker.
@@ -1995,9 +1904,9 @@ async function deleteAccount(id) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  OPTIONS STRATEGY — Black-Scholes upside/downside P&L
+//  BLACK-SCHOLES ENGINE — shared by the Options Multi-Agent Database
+//  (Add Strategy / Combined Simulator / Analysis payoff chart)
 // ══════════════════════════════════════════════════════════════
-let optInstruments = [];   // Deribit option chain for the current underlying
 
 // Standard normal CDF (Abramowitz-Stegun 7.1.26).
 function _normCdf(x) {
@@ -2015,169 +1924,6 @@ function bsPrice(type, S, K, T, sigma, r) {
   const d2 = d1 - st;
   if (type === "call") return S * _normCdf(d1) - K * Math.exp(-r * T) * _normCdf(d2);
   return K * Math.exp(-r * T) * _normCdf(-d2) - S * _normCdf(-d1);
-}
-// Standard normal PDF.
-function _normPdf(x) { return 0.3989422804014327 * Math.exp(-x * x / 2); }
-// Black-Scholes theta PER DAY (USD). Negative for long options (value decays).
-function bsThetaPerDay(type, S, K, T, sigma, r) {
-  if (!(S > 0) || !(K > 0) || T <= 0 || sigma <= 0) return 0;
-  const st = sigma * Math.sqrt(T);
-  const d1 = (Math.log(S / K) + (r + sigma * sigma / 2) * T) / st;
-  const d2 = d1 - st;
-  const decay = -(S * _normPdf(d1) * sigma) / (2 * Math.sqrt(T));   // shared term
-  const perYear = (type === "call")
-    ? decay - r * K * Math.exp(-r * T) * _normCdf(d2)
-    : decay + r * K * Math.exp(-r * T) * _normCdf(-d2);
-  return perYear / 365;
-}
-
-const _deribitHost = () => (serverConfig.deribitTestnet ? "test.deribit.com" : "www.deribit.com");
-
-// Load the option chain for the underlying → populate the expiry dropdown.
-async function loadOptExpiries() {
-  const cur  = document.getElementById("optUnderlying").value;
-  const note = document.getElementById("optQuoteNote");
-  note.textContent = "Loading option chain…";
-  try {
-    // Fetched via our server (avoids browser CORS/CSP hangs on Deribit).
-    const r = await fetch(`/api/deribit/instruments?currency=${cur}`);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    optInstruments = await r.json();
-    if (!Array.isArray(optInstruments)) optInstruments = [];
-    const expiries = [...new Set(optInstruments.map(i => i.expiration_timestamp))].sort((a, b) => a - b);
-    document.getElementById("optExpiry").innerHTML = expiries.map(ts => {
-      const label = new Date(ts).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "2-digit" });
-      return `<option value="${ts}">${label}</option>`;
-    }).join("") || `<option value="">— none —</option>`;
-    note.textContent = `${optInstruments.length} ${cur} options loaded`;
-    onOptChainChange();
-  } catch (e) { note.textContent = "Failed to load chain: " + e.message; }
-}
-
-// Expiry or type changed → repopulate the strike dropdown.
-function onOptChainChange() {
-  const expiry = document.getElementById("optExpiry").value;
-  const type   = document.getElementById("optType").value;   // call|put
-  const strikes = optInstruments
-    .filter(i => String(i.expiration_timestamp) === String(expiry) && i.option_type === type)
-    .map(i => i.strike).sort((a, b) => a - b);
-  document.getElementById("optStrike").innerHTML =
-    strikes.map(k => `<option value="${k}">${k}</option>`).join("") || `<option value="">—</option>`;
-  if (strikes.length) fetchOptQuote();
-}
-
-// Fetch the selected instrument's ticker → mark IV, mid premium (USD), index.
-async function fetchOptQuote() {
-  const expiry = document.getElementById("optExpiry").value;
-  const type   = document.getElementById("optType").value;
-  const strike = document.getElementById("optStrike").value;
-  const note   = document.getElementById("optQuoteNote");
-  if (!expiry || !strike) return;
-  const inst = optInstruments.find(i =>
-    String(i.expiration_timestamp) === String(expiry) &&
-    i.option_type === type && String(i.strike) === String(strike));
-  if (!inst) { note.textContent = "Instrument not found in chain"; return; }
-  note.textContent = "Fetching quote…";
-  try {
-    const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const t = await r.json();
-    const index = t.index_price || t.underlying_price || 0;
-    // Deribit option premium is quoted in the coin; convert to USD via index.
-    const bidC = t.best_bid_price || 0, askC = t.best_ask_price || 0, markC = t.mark_price || 0;
-    const midC = (bidC && askC) ? (bidC + askC) / 2 : markC;
-    const premiumUsd = midC * index;
-    if (t.mark_iv != null) document.getElementById("optIV").value = Number(t.mark_iv).toFixed(1);
-    if (premiumUsd)        document.getElementById("optPremium").value = premiumUsd.toFixed(2);
-    if (index)             document.getElementById("optSpot").value = index.toFixed(2);
-    const pe = document.getElementById("perpEntry");
-    if (!pe.value && index) pe.value = index.toFixed(2);
-    note.textContent = `${inst.instrument_name} · mid ≈ $${premiumUsd.toFixed(2)} · IV ${Number(t.mark_iv||0).toFixed(1)}% · index $${index.toFixed(2)}`;
-  } catch (e) { note.textContent = "Quote fetch failed: " + e.message; }
-}
-
-function calcOptionStrategy() {
-  const type     = document.getElementById("optType").value;
-  const dirOpt   = document.getElementById("optDir").value === "short" ? -1 : 1;
-  const K        = parseFloat(document.getElementById("optStrike").value);
-  const lots     = parseFloat(document.getElementById("optQty").value) || 0;
-  const premium  = parseFloat(document.getElementById("optPremium").value) || 0;
-  const ivPct    = parseFloat(document.getElementById("optIV").value) || 0;
-  const S        = parseFloat(document.getElementById("optSpot").value) || 0;
-  const dist     = parseFloat(document.getElementById("optDistance").value) || 0;
-  const r        = (parseFloat(document.getElementById("optRate").value) || 0) / 100;
-  const expiryTs = parseFloat(document.getElementById("optExpiry").value) || 0;
-  const perpDir  = document.getElementById("perpDir").value;
-  const perpQty  = parseFloat(document.getElementById("perpQty").value) || 0;
-  const perpEntry= parseFloat(document.getElementById("perpEntry").value) || S;
-  const dirPerp  = perpDir === "short" ? -1 : (perpDir === "long" ? 1 : 0);
-  const msg = document.getElementById("optMsg");
-
-  if (!S || !K || !ivPct || !expiryTs) {
-    msg.style.color = "var(--red,#e5484d)";
-    msg.textContent = "Need index price, strike, IV and expiry — use ↻ Fetch to fill them.";
-    return;
-  }
-  msg.textContent = "";
-
-  const sigma = ivPct / 100;
-  const T = Math.max(0, (expiryTs - Date.now()) / (365 * 24 * 3600 * 1000));
-  const fmt = v => (v >= 0 ? "+$" : "−$") + Math.abs(v).toFixed(2);
-  const col = v => v >= 0 ? "var(--green,#16a34a)" : "var(--red,#e5484d)";
-  const tcl = v => v >= 0 ? "pos-text" : "sell-text";
-
-  // Per-leg PnL at a scenario price. `intrinsic` = at expiry (time value 0);
-  // otherwise price the option with Black-Scholes at time-to-expiry `tt`.
-  const legs = (Sp, tt, intrinsic) => {
-    const val = intrinsic
-      ? ((type === "call") ? Math.max(0, Sp - K) : Math.max(0, K - Sp))
-      : bsPrice(type, Sp, K, tt, sigma, r);
-    const optPnl  = (val - premium) * lots * dirOpt;
-    const perpPnl = (Sp - perpEntry) * perpQty * dirPerp;
-    return { optPnl, perpPnl, total: optPnl + perpPnl };
-  };
-  // TODAY = move happens over one day, so the option loses one day of time value.
-  const Tday = Math.max(0, T - 1 / 365);
-  const tUp = legs(S + dist, Tday, false), tDn = legs(S - dist, Tday, false);
-  const eUp = legs(S + dist, 0, true),      eDn = legs(S - dist, 0, true);
-
-  const set = (id, v) => { const el = document.getElementById(id); el.textContent = fmt(v); el.style.color = col(v); };
-  set("optTodayUp", tUp.total); set("optTodayDn", tDn.total);
-  set("optExpUp",   eUp.total); set("optExpDn",   eDn.total);
-  const upTag = `@ $${(S + dist).toFixed(0)}`, dnTag = `@ $${(S - dist).toFixed(0)}`;
-  document.getElementById("optTodayUpLabel").textContent = upTag;
-  document.getElementById("optTodayDnLabel").textContent = dnTag;
-  document.getElementById("optExpUpLabel").textContent   = upTag;
-  document.getElementById("optExpDnLabel").textContent   = dnTag;
-
-  const cell = v => `<td class="${tcl(v)}">${fmt(v)}</td>`;
-  document.getElementById("optBreakdown").innerHTML = `
-    <tr><td>Option (${type} ${dirOpt > 0 ? "long" : "short"} ×${lots})</td>
-      ${cell(tUp.optPnl)}${cell(tDn.optPnl)}${cell(eUp.optPnl)}${cell(eDn.optPnl)}</tr>
-    <tr><td>Perp (${perpDir || "none"} ${perpQty || ""})</td>
-      ${cell(tUp.perpPnl)}${cell(tDn.perpPnl)}${cell(eUp.perpPnl)}${cell(eDn.perpPnl)}</tr>
-    <tr style="font-weight:700;"><td>Total</td>
-      ${cell(tUp.total)}${cell(tDn.total)}${cell(eUp.total)}${cell(eDn.total)}</tr>`;
-
-  const days = (T * 365).toFixed(1);
-  const theoNow = bsPrice(type, S, K, T, sigma, r);
-  const be = (type === "call") ? K + premium : K - premium;
-  const maxLoss = dirOpt > 0 ? premium * lots : null;
-  document.getElementById("optMeta").innerHTML =
-    `Time to expiry: <b>${days} days</b> · σ=${ivPct}% · breakeven <b>$${be.toFixed(2)}</b> (strike ${dirOpt > 0 ? "+" : "±"} premium)<br>` +
-    `Index <b>$${S.toFixed(2)}</b> · option theo value now <b>$${theoNow.toFixed(2)}</b> vs entry $${premium.toFixed(2)}<br>` +
-    (maxLoss != null
-      ? `Option-leg max loss (expires worthless): <b>−$${maxLoss.toFixed(2)}</b>`
-      : `Short option — large loss risk if it moves against you; the perp hedge offsets one side.`);
-
-  const pts = [-1, -0.5, 0, 0.5, 1].map(f => {
-    const Sp = S + f * dist;
-    return { Sp, today: legs(Sp, Tday, false).total, exp: legs(Sp, 0, true).total };
-  });
-  document.getElementById("optPayoff").innerHTML = pts.map(p => `
-    <tr><td>$${p.Sp.toFixed(0)}</td>
-      <td class="${tcl(p.today)}">${fmt(p.today)}</td>
-      <td class="${tcl(p.exp)}" style="font-weight:700;">${fmt(p.exp)}</td></tr>`).join("");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -3106,15 +2852,14 @@ let odbSimLegs = [], odbSimEditIds = [];
 let odbDebounceTimer = null;
 let odbAnAllTrades = [], odbAnCurrentTrade = null;
 
+// Options DB pages are now top-level sidebar sections (each independently
+// navigable, matching the standalone app's sidebar). This delegates to the
+// main router so every internal odbStartAdd/odbStartEditCombined/etc. call
+// site (written against the old "dashboard/add/sim/analysis" tab names)
+// keeps working unchanged.
 function showOdbTab(name) {
-  ["dashboard","add","sim","analysis"].forEach(n => {
-    const panel = document.getElementById("odbPanel-" + n);
-    const tab   = document.getElementById("odbTab-" + n);
-    if (panel) panel.style.display = (n === name) ? "" : "none";
-    if (tab)   tab.classList.toggle("active", n === name);
-  });
-  if (name === "sim")      odbInitSimIfEmpty();
-  if (name === "analysis") odbAnEnsureLoaded();
+  const map = { dashboard: "optdash", add: "optadd", sim: "optsim", analysis: "optanalysis" };
+  showSection(map[name] || name);
 }
 
 /* ── Formatters ─────────────────────────────────────────── */
@@ -3452,6 +3197,12 @@ function odbLiveCalc() {
   const netUpExpiry = bsUp!=null ? bsUp+futUp : null;
   const netDnExpiry = bsDn!=null ? bsDn+futDn : null;
 
+  // Note: the non-BS "📈 Upside / 📉 Downside" (basket-model Opt+Fut+Est.Net)
+  // groups are intentionally NOT shown here — that figure is already covered
+  // by the BS Option PnL section below (Est Net Upside/Downside), and showing
+  // both side by side was confusing since they're two different pricing
+  // models. The derived values are still computed & saved to the DB either
+  // way (see odbComputeDerived / db.js) — only the live display is trimmed.
   document.getElementById("odbCalcPanel").innerHTML =
     odbCalcGroup("General / Theta",
       odbCalcRow("Days to Expiry", odbFmtNum(derived.days_to_expiry,0)) +
@@ -3462,30 +3213,23 @@ function odbLiveCalc() {
     odbCalcGroup("Limits",
       odbCalcRow("Upper Limit", odbFmtNum(derived.upper_limit)) +
       odbCalcRow("Lower Limit", odbFmtNum(derived.lower_limit))) +
-    odbCalcGroup("📈 Upside",
-      odbCalcRow("Opt PnL (Upside)", odbFmtCcy(derived.upside_opt_pnl), {signed:true}) +
-      odbCalcRow("Fut PnL (Upside)", odbFmtCcy(derived.upside_fut_pnl), {signed:true}) +
-      odbCalcRow("Est. Net (Upside)", odbFmtCcy(derived.estimated_upside_net_pnl), {signed:true,big:true})) +
-    odbCalcGroup("📉 Downside",
-      odbCalcRow("Opt PnL (Down)", odbFmtCcy(derived.down_opt_pnl), {signed:true}) +
-      odbCalcRow("Fut PnL (Down)", odbFmtCcy(derived.downside_fut_pnl), {signed:true}) +
-      odbCalcRow("Est. Net (Down)", odbFmtCcy(derived.estimated_downside_net_pnl), {signed:true,big:true})) +
     odbCalcGroup("Return", odbCalcRow("APY", derived.apy!=null?Number(derived.apy).toFixed(2)+"%":"—", {signed:true,big:true})) +
     odbCalcGroup(`📊 BS Option PnL (IV ${ivPct}%, ${dte}d)`,
       odbCalcRow("Upside Opt (Today BS)", odbFmtCcy(bsUpToday), {signed:true}) +
       odbCalcRow("Fut PnL (Upside)", odbFmtCcy(futUp), {signed:true}) +
-      odbCalcRow("Net BS Upside (Today)", odbFmtCcy(netUpToday), {signed:true,big:true}) +
       odbCalcRow("Downside Opt (Today BS)", odbFmtCcy(bsDnToday), {signed:true}) +
       odbCalcRow("Fut PnL (Downside)", odbFmtCcy(futDn), {signed:true}) +
-      odbCalcRow("Net BS Downside (Today)", odbFmtCcy(netDnToday), {signed:true,big:true}) +
       odbCalcRow("Upside Opt (Expiry)", odbFmtCcy(bsUp), {signed:true}) +
-      odbCalcRow("Fut PnL (Upside)", odbFmtCcy(futUp), {signed:true}) +
-      odbCalcRow("Est Net Upside (Expiry)", odbFmtCcy(netUpExpiry), {signed:true,big:true}) +
       odbCalcRow("Downside Opt (Expiry)", odbFmtCcy(bsDn), {signed:true}) +
-      odbCalcRow("Fut PnL (Downside)", odbFmtCcy(futDn), {signed:true}) +
-      odbCalcRow("Est Net Downside (Expiry)", odbFmtCcy(netDnExpiry), {signed:true,big:true}) +
-      odbCalcRow("At Current Price (Today BS)", odbFmtCcy(bsNow), {signed:true,big:true}) +
-      odbCalcRow("Breakeven Price", breakeven!=null ? breakeven.toLocaleString(undefined,{maximumFractionDigits:2}) : "—"));
+      odbCalcRow("At Current Price (Today BS)", odbFmtCcy(bsNow), {signed:true}) +
+      odbCalcRow("Breakeven Price", breakeven!=null ? breakeven.toLocaleString(undefined,{maximumFractionDigits:2}) : "—")) +
+    // The 4 headline net numbers, grouped together at the bottom so they're
+    // easy to find instead of scattered between the per-leg BS detail rows.
+    odbCalcGroup("🎯 Net BS Summary",
+      odbCalcRow("Net BS Upside (Today)", odbFmtCcy(netUpToday), {signed:true,big:true}) +
+      odbCalcRow("Net BS Downside (Today)", odbFmtCcy(netDnToday), {signed:true,big:true}) +
+      odbCalcRow("Est Net Upside (Expiry)", odbFmtCcy(netUpExpiry), {signed:true,big:true}) +
+      odbCalcRow("Est Net Downside (Expiry)", odbFmtCcy(netDnExpiry), {signed:true,big:true}));
 }
 function odbCalcRow(label, val, opts = {}) {
   const n = Number(String(val).replace(/[^0-9.-]/g,"")); const isNum = !isNaN(n) && val !== "—";
