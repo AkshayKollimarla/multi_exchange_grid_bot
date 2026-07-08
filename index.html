@@ -3231,8 +3231,8 @@ async function odbExecuteClick() {
     return;
   }
   odbExecPreview = { form, inst, editId: odbEditId };
-  odbRenderExecSummary(form, inst);
   document.getElementById("odbExecOverlay").style.display = "flex";
+  await odbRenderExecSummary(form, inst);
 }
 
 // Mirrors the server's tick-size rounding (server.js: deribitTickSizeFor) so
@@ -3252,14 +3252,39 @@ function odbRoundToTick(price, inst) {
   const tick = odbTickSizeFor(inst, price);
   return tick ? Number((Math.round(price / tick) * tick).toFixed(10)) : price;
 }
-function odbRenderExecSummary(form, inst) {
+// Coin-settled (inverse) options are priced in the underlying COIN, not USD
+// (e.g. a $44.90 option might be "0.0259 ETH") — opt_entry_price is always
+// stored/shown in USD elsewhere in the app, so it has to be converted back
+// to coin terms via the live index before it's a legal order price. Mirrors
+// the same conversion server.js applies right before submitting the order,
+// so this preview shows what actually gets sent, not a misleading USD-scale
+// number that would get rejected as price_too_high.
+async function odbExecOptionOrderPrice(form, inst) {
+  const usdPrice = Number(form.opt_entry_price);
+  if (inst.settlement !== "coin") return { orderPrice: usdPrice, unit: "USD", usdEquivalent: null };
+  try {
+    const r = await fetch(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
+    const t = await r.json();
+    const index = Number(t.index_price ?? t.underlying_price) || 0;
+    if (!index) throw new Error("no live index price");
+    return { orderPrice: usdPrice / index, unit: inst.base_currency, usdEquivalent: usdPrice };
+  } catch (e) {
+    return { orderPrice: usdPrice, unit: "USD", usdEquivalent: null, conversionFailed: true };
+  }
+}
+async function odbRenderExecSummary(form, inst) {
   const optSide = Number(form.opt_entry_qty) > 0 ? "BUY" : "SELL";
-  const rawOptPrice = Number(form.opt_entry_price);
-  const optPrice = odbRoundToTick(rawOptPrice, inst);
-  const optRoundedNote = Math.abs(optPrice - rawOptPrice) > 1e-9
-    ? ` <span style="color:var(--muted);">(rounded from ${rawOptPrice} to Deribit's tick size)</span>` : "";
+  document.getElementById("odbExecSummary").innerHTML = `<span style="color:var(--muted);">Resolving live order price…</span>`;
+  document.getElementById("odbExecConfirmBtn").style.display = "none";
+
+  const { orderPrice: rawOrderPrice, unit, usdEquivalent, conversionFailed } = await odbExecOptionOrderPrice(form, inst);
+  const optPrice = odbRoundToTick(rawOrderPrice, inst);
+  const roundedNote = Math.abs(optPrice - rawOrderPrice) > 1e-9
+    ? ` <span style="color:var(--muted);">(rounded to Deribit's tick size)</span>` : "";
+  const usdNote = usdEquivalent != null ? ` <span style="color:var(--muted);">(≈$${usdEquivalent} — coin-settled instrument, price is in ${unit})</span>` : "";
+  const failNote = conversionFailed ? ` <span style="color:var(--red,#dc2626);">(could not fetch live index to convert to ${inst.base_currency} — DO NOT confirm, retry instead)</span>` : "";
   let html = `<div style="margin-bottom:10px;"><b>Option leg</b><br>
-    ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${optPrice}${optRoundedNote} <span style="color:var(--muted);">(post-only limit)</span></div>`;
+    ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${optPrice} ${unit}${roundedNote}${usdNote}${failNote} <span style="color:var(--muted);">(post-only limit)</span></div>`;
   if (Number(form.fut_qty) && Number(form.fut_entry_price)) {
     const futSide = Number(form.fut_qty) > 0 ? "BUY" : "SELL";
     html += `<div><b>Futures leg</b><br>
@@ -3269,7 +3294,7 @@ function odbRenderExecSummary(form, inst) {
   }
   document.getElementById("odbExecSummary").innerHTML = html;
   document.getElementById("odbExecMsg").textContent = "";
-  document.getElementById("odbExecConfirmBtn").style.display = "";
+  document.getElementById("odbExecConfirmBtn").style.display = conversionFailed ? "none" : "";
   document.getElementById("odbExecConfirmBtn").disabled = false;
   const cancelBtn = document.querySelector("#odbExecOverlay .btn-stop");
   if (cancelBtn) cancelBtn.textContent = "Cancel";

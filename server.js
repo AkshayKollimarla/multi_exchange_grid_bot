@@ -4012,7 +4012,25 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
     }
 
     const optSide = qty > 0 ? "buy" : "sell";
-    const optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, price, `optdb_${id}_opt`, inst);
+    let optResult;
+    try {
+      // Coin-settled (inverse) options are priced in the underlying COIN, not
+      // USD — e.g. a $44.90 option might be "0.0259 ETH". opt_entry_price is
+      // always stored/displayed in USD, so it must be converted back to coin
+      // terms (divide by the live index) before it's a legal order price;
+      // sending the raw USD number gets rejected as price_too_high (Deribit
+      // reads 44.90 as 44.90 ETH). USDC-settled options are already USD.
+      let optPriceForOrder = price;
+      if (inst.settlement === "coin") {
+        const ticker = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(inst.instrument_name)}`);
+        const index = Number(ticker?.index_price ?? ticker?.underlying_price) || 0;
+        if (!index) throw new Error("Could not fetch a live index price to convert the coin-settled option's price");
+        optPriceForOrder = price / index;
+      }
+      optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, optPriceForOrder, `optdb_${id}_opt`, inst);
+    } catch (e) {
+      optResult = { ok: false, instrument: inst.instrument_name, side: optSide, error: e.message };
+    }
 
     let futResult = null;
     const futQty = Number(trade.fut_qty) || 0;
