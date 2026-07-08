@@ -3829,7 +3829,12 @@ function deribitHost() {
 }
 async function deribitGet(path) {
   const r = await Promise.race([
-    fetch(`https://${deribitHost()}${path}`),
+    // "Connection: close" avoids pinning this long-lived process to a single
+    // keep-alive socket for calls that are only made occasionally (the
+    // instrument/option-chain lookups) — a persistent connection can end up
+    // routed to a Deribit backend node whose instrument cache lags behind
+    // (observed live: a fresh connection sees strikes a pinned one didn't).
+    fetch(`https://${deribitHost()}${path}`, { headers: { Connection: "close" } }),
     new Promise((_, rej) => setTimeout(() => rej(new Error("Deribit timeout 12s")), 12000)),
   ]);
   if (!r.ok) throw new Error(`Deribit HTTP ${r.status}`);
