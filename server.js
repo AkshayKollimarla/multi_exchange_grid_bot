@@ -4041,7 +4041,15 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
         futResult = { ok: false, error: `No perpetual futures instrument found for ${token}` };
       } else {
         const futSide = futQty > 0 ? "buy" : "sell";
-        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futQty, futPrice, `optdb_${id}_fut`, perp);
+        // Coin-margined ("reversed") perpetuals like ETH-PERPETUAL size
+        // amount in USD, not the coin — 1 contract = $1 notional (min_trade
+        // amount 1). fut_qty is stored/entered in coin units everywhere else
+        // in the app (matching the linear USDC-margined perpetual, where
+        // amount really is in coin), so it has to be converted to USD
+        // notional (qty × entry price) before it's a legal order size, or a
+        // "1.3" short silently becomes a ~$1 position instead of ~$1.3×price.
+        const futAmount = perp.instrument_type === "reversed" ? Math.abs(futQty) * futPrice : futQty;
+        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futAmount, futPrice, `optdb_${id}_fut`, perp);
       }
     }
 

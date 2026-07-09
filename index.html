@@ -3287,8 +3287,20 @@ async function odbRenderExecSummary(form, inst) {
     ${inst.instrument_name} — ${optSide} ${Math.abs(form.opt_entry_qty)} @ ${optPrice} ${unit}${roundedNote}${usdNote}${failNote} <span style="color:var(--muted);">(post-only limit)</span></div>`;
   if (Number(form.fut_qty) && Number(form.fut_entry_price)) {
     const futSide = Number(form.fut_qty) > 0 ? "BUY" : "SELL";
+    const futQtyAbs = Math.abs(Number(form.fut_qty));
+    const futPriceNum = Number(form.fut_entry_price);
+    // BTC/ETH's coin-margined ("reversed") perpetual sizes amount in USD
+    // ($1/contract), not the coin — server.js converts qty × price before
+    // submitting when the resolved perp is reversed. Since an option that
+    // resolved coin-settled means the futures leg will too (deribitFindPerpetual
+    // matches the option's settlement), preview that conversion here so a
+    // "1.3" short isn't silently read as ~$1 instead of ~$1.3×price.
+    const isLikelyReversed = inst.settlement === "coin";
+    const futNote = isLikelyReversed
+      ? ` <span style="color:var(--muted);">(≈${(futQtyAbs * futPriceNum).toFixed(2)} USD contracts — ${form.token}-PERPETUAL is coin-margined, sized in USD not ${form.token})</span>`
+      : "";
     html += `<div><b>Futures leg</b><br>
-      ${form.token} perpetual — ${futSide} ${Math.abs(form.fut_qty)} @ ${form.fut_entry_price} <span style="color:var(--muted);">(post-only limit — price/qty auto-rounded to Deribit's tick size if needed)</span></div>`;
+      ${form.token} perpetual — ${futSide} ${futQtyAbs} @ ${form.fut_entry_price}${futNote} <span style="color:var(--muted);">(post-only limit — price/qty auto-rounded to Deribit's tick size if needed)</span></div>`;
   } else {
     html += `<div style="color:var(--muted);">No futures leg (fut qty or fut entry price is blank).</div>`;
   }
