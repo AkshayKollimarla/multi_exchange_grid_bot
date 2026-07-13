@@ -163,6 +163,12 @@ app.use(cors());
 app.use(express.json());
 app.use(sessionAuthMiddleware);
 app.use(express.static(__dirname));
+// New Next.js frontend (static export, built locally — see frontend/README
+// or the migration commits for why). Served under /next, coexisting with
+// the classic index.html at the site root during the incremental,
+// page-by-page migration. Registered after sessionAuthMiddleware, so it's
+// gated by the same session-cookie auth as everything else.
+app.use("/next", express.static(path.join(__dirname, "frontend/out"), { extensions: ["html"] }));
 
 // ── Login / Logout / Status ──
 app.post("/api/login", (req, res) => {
