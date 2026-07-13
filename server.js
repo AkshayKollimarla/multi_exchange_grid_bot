@@ -168,7 +168,22 @@ app.use(express.static(__dirname));
 // the classic index.html at the site root during the incremental,
 // page-by-page migration. Registered after sessionAuthMiddleware, so it's
 // gated by the same session-cookie auth as everything else.
-app.use("/next", express.static(path.join(__dirname, "frontend/out"), { extensions: ["html"] }));
+//
+// Next's static export produces BOTH a route.html file AND a same-named
+// route/ directory (RSC prefetch payloads) for every page — e.g.
+// options-dashboard.html alongside options-dashboard/. express.static sees
+// the directory first and 301-redirects to add a trailing slash, never
+// reaching the real page. Resolve the .html file explicitly before falling
+// through to static asset serving, mirroring the try_files pattern Next's
+// own docs recommend for nginx.
+const nextOutDir = path.join(__dirname, "frontend/out");
+app.use("/next", (req, res, next) => {
+  const urlPath = req.path === "/" ? "/index" : req.path.replace(/\/$/, "");
+  const htmlPath = path.join(nextOutDir, urlPath + ".html");
+  if (fs.existsSync(htmlPath)) return res.sendFile(htmlPath);
+  next();
+});
+app.use("/next", express.static(nextOutDir));
 
 // ── Login / Logout / Status ──
 app.post("/api/login", (req, res) => {
