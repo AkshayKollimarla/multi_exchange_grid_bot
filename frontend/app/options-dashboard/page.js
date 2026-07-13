@@ -18,6 +18,11 @@ export default function OptionsDashboardPage() {
   const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Bumped by clearFilters() so a reload always fires even when the filters
+  // were already at their default values — a plain state reset wouldn't
+  // change status/from/to and so wouldn't re-trigger the effect below,
+  // unlike the original odbClearFilters(), which always force-reloaded.
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   const debounceRef = useRef(null);
 
@@ -49,7 +54,7 @@ export default function OptionsDashboardPage() {
     setPage(1);
     reload(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, from, to]);
+  }, [status, from, to, reloadNonce]);
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -71,6 +76,7 @@ export default function OptionsDashboardPage() {
     setToken("");
     setFrom("");
     setTo("");
+    setReloadNonce((n) => n + 1);
   }
 
   async function deleteTrade(id) {
