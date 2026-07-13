@@ -2696,8 +2696,12 @@ async function maintainGrid(botId, currentPrice) {
   // price (keeps the grid tight). The round trip is NOT lost — when price
   // moves back so the target re-enters the band, it is re-placed and the
   // RT closes at full profit. This is the hybrid you asked for.
-  const bandSpacingSell = cfg.avgSellSpacing;
-  const bandSpacingBuy  = cfg.avgBuySpacing;
+  // Spacing is a distance and must be positive — a negative value here would
+  // flip buy prices above the anchor (and sell prices below it), so every
+  // computed order guarantees a spread cross and gets rejected forever
+  // (root cause of the HYPE bots showing zero open orders despite running).
+  const bandSpacingSell = Math.abs(cfg.avgSellSpacing);
+  const bandSpacingBuy  = Math.abs(cfg.avgBuySpacing);
   // HYSTERESIS to stop boundary flicker:
   //  - parkBand: distance beyond which an ACTIVE target gets parked
   //  - keepBand: a parked target only RE-activates when it comes back inside
@@ -2753,8 +2757,8 @@ async function maintainGrid(botId, currentPrice) {
   //   band, the grid is completely fixed — no order is recalculated, so
   //   nothing churns. Entry validity is judged against the ANCHOR, never
   //   the live price, so a small wiggle can't flip an order in/out.
-  const sSpace = cfg.avgSellSpacing;
-  const bSpace = cfg.avgBuySpacing;
+  const sSpace = Math.abs(cfg.avgSellSpacing);
+  const bSpace = Math.abs(cfg.avgBuySpacing);
   // Re-anchor only when price has moved beyond ~1 full step past the anchor
   // on either side (i.e. it would have crossed the innermost entry). This
   // is the band half-width. Use the SMALLER side spacing for symmetry.
@@ -4339,6 +4343,15 @@ app.post("/api/start", async (req, res) => {
   cfg.avgBuySpacing  = parseFloat(cfg.avgBuySpacing);
   cfg.targetSpread   = parseFloat(cfg.targetSpread);
   cfg.qtyPerStep     = parseFloat(cfg.qtyPerStep);
+
+  // Spacing is a distance between grid levels — must be strictly positive.
+  // A negative value flips buy prices above the anchor (and sell prices
+  // below it), so every computed order guarantees a spread cross and gets
+  // rejected forever: the bot runs but never places a single order.
+  if (!(cfg.avgSellSpacing > 0) || !(cfg.avgBuySpacing > 0)) {
+    removeBotInstance(botId);
+    return res.status(400).json({ error: "avgSellSpacing / avgBuySpacing must be positive numbers" });
+  }
 
   try {
     const exchange = buildExchange(priceSource, cfg.apiKey, cfg.secretKey);
