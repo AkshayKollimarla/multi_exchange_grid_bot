@@ -1155,8 +1155,12 @@
           <button class="tab-btn" onclick="setReportPeriod('7d', this)">7 Days</button>
           <button class="tab-btn" onclick="setReportPeriod('30d', this)">30 Days</button>
           <button class="tab-btn" onclick="setReportPeriod('custom', this)">Custom</button>
-          <select id="reportSymbol" onchange="onReportSymbolChange()" title="Filter report by coin"
+          <select id="reportExchange" onchange="onReportExchangeChange()" title="Filter report by account/exchange"
                   style="margin-left:auto;background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;cursor:pointer;">
+            <option value="all">All accounts</option>
+          </select>
+          <select id="reportSymbol" onchange="onReportSymbolChange()" title="Filter report by coin"
+                  style="background:var(--surface-2);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;cursor:pointer;">
             <option value="all">All coins</option>
           </select>
         </div>
@@ -1535,7 +1539,8 @@ let allSymbols      = [];
 let selectedSymbol  = "";
 let symbolsLoaded   = false;
 let currentPeriod   = "24h";
-let currentReportSymbol = "all";   // PnL Report coin filter ("all" = every coin)
+let currentReportSymbol   = "all";   // PnL Report coin filter ("all" = every coin)
+let currentReportExchange = "all";   // PnL Report account/exchange filter ("all" = every account)
 let currentExchange = "binance";   // which tab is active
 let lastFullState   = { binance: {}, deribit: {}, hyperliquid: {} };
 let serverConfig    = { deribitTestnet: false };  // populated from /api/config on init
@@ -2700,9 +2705,13 @@ function setReportPeriod(period, btn) {
 
 // Build the report URL params (used by both loadReport and downloadCsv)
 function reportQueryString() {
-  // No exchange scope — the PnL Report is cross-exchange; the coin dropdown
-  // lists every coin from every exchange and filters by symbol.
+  // Cross-exchange by default; the Account dropdown scopes to one exchange
+  // (needed since the same coin, e.g. SOL, can be traded on more than one
+  // exchange at once) and the coin dropdown further filters by symbol.
   let qs = `period=${currentPeriod}`;
+  if (currentReportExchange && currentReportExchange !== "all") {
+    qs += `&exchange=${encodeURIComponent(currentReportExchange)}`;
+  }
   if (currentReportSymbol && currentReportSymbol !== "all") {
     qs += `&symbol=${encodeURIComponent(currentReportSymbol)}`;
   }
@@ -2721,6 +2730,14 @@ function onReportSymbolChange() {
   loadReport();
 }
 
+// Account/exchange dropdown changed — refilter the report. Also refreshes the
+// coin list, since switching accounts changes which coins are available
+// (this triggers a fresh loadReport() -> renderReport() -> populateReportSymbols()).
+function onReportExchangeChange() {
+  currentReportExchange = document.getElementById("reportExchange").value || "all";
+  loadReport();
+}
+
 // Rebuild the coin dropdown options from the report's symbol list, keeping the
 // current selection if it still exists.
 function populateReportSymbols(symbols) {
@@ -2735,6 +2752,19 @@ function populateReportSymbols(symbols) {
     .concat(list.map(s => `<option value="${s}">${coinLabel(s)}</option>`));
   sel.innerHTML = opts.join("");
   sel.value = currentReportSymbol;
+}
+
+// Rebuild the Account dropdown from the report's exchange list. This list is
+// always all-time/unfiltered (see db.js queryReport), so it never shrinks
+// when you filter — every account you've ever traded on stays selectable.
+function populateReportExchanges(exchanges) {
+  const sel = document.getElementById("reportExchange");
+  if (!sel) return;
+  const list = Array.isArray(exchanges) ? exchanges : [];
+  const opts = ['<option value="all">All accounts</option>']
+    .concat(list.map(e => `<option value="${e}">${e.charAt(0).toUpperCase()}${e.slice(1)}</option>`));
+  sel.innerHTML = opts.join("");
+  sel.value = currentReportExchange;
 }
 
 async function loadReport() {
@@ -2763,11 +2793,22 @@ function downloadCsv() {
 
 function renderReport(data) {
   populateReportSymbols(data.symbols);
+  populateReportExchanges(data.exchanges);
 
-  // Cross-exchange report label reflects the coin filter, not one exchange.
+  // Label reflects whichever of account/coin are actually filtered — e.g.
+  // "Deribit · SOL" when both are picked, just "Deribit" or "SOL" when only
+  // one is, "All Exchanges" when neither is (fully cross-account, all coins).
   const lbl = document.getElementById("reportExLabel");
-  if (lbl) lbl.textContent = (currentReportSymbol && currentReportSymbol !== "all")
-    ? coinLabel(currentReportSymbol) : "All Exchanges";
+  if (lbl) {
+    const parts = [];
+    if (currentReportExchange && currentReportExchange !== "all") {
+      parts.push(currentReportExchange.charAt(0).toUpperCase() + currentReportExchange.slice(1));
+    }
+    if (currentReportSymbol && currentReportSymbol !== "all") {
+      parts.push(coinLabel(currentReportSymbol));
+    }
+    lbl.textContent = parts.length ? parts.join(" · ") : "All Exchanges";
+  }
 
   const pnl      = data.pnl      || 0;
   const rt       = data.count    || 0;

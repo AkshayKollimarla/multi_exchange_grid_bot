@@ -317,6 +317,20 @@ async function queryReport({ exchange, fromTs, toTs, symbol }) {
   );
   const symbols = symRows.map(r => r.symbol);
 
+  // Accounts/exchanges for the PnL Report's Account dropdown — same
+  // all-time, unfiltered-by-period approach as symbols above, but never
+  // itself filtered by exchange (that's the whole point of this list).
+  const [exRows] = await p.execute(
+    `SELECT exchange FROM (
+       SELECT DISTINCT exchange FROM round_trips
+       UNION
+       SELECT DISTINCT exchange FROM fills
+     ) t
+     WHERE exchange IS NOT NULL AND exchange <> ''
+     ORDER BY exchange`
+  );
+  const exchanges = exRows.map(r => r.exchange);
+
   // Optional per-coin filter for the actual report figures.
   const symClause = symbol ? "symbol = ? AND " : "";
   const params = [];
@@ -384,6 +398,7 @@ async function queryReport({ exchange, fromTs, toTs, symbol }) {
     totalRebates: 0,
     netPnl,
     symbols,
+    exchanges,
   };
 }
 
