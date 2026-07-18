@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { apiGet, apiPost } from "@/lib/api";
-import NewBotModal from "@/components/NewBotModal";
 import BotDetail from "@/components/BotDetail";
 
 const EXCHANGE_DOT = { binance: "#f0b90b", deribit: "#ff6b35", hyperliquid: "#7c3aed" };
@@ -10,7 +10,6 @@ const EXCHANGE_DOT = { binance: "#f0b90b", deribit: "#ff6b35", hyperliquid: "#7c
 export default function ActiveBotPage() {
   const [bots, setBots] = useState({});
   const [selectedId, setSelectedId] = useState(null);
-  const [showNewBot, setShowNewBot] = useState(false);
   const [stoppingId, setStoppingId] = useState(null);
   const pollRef = useRef(null);
 
@@ -51,12 +50,6 @@ export default function ActiveBotPage() {
     }
   }
 
-  function handleStarted(botId) {
-    setShowNewBot(false);
-    setSelectedId(botId);
-    refresh();
-  }
-
   const selected = selectedId ? bots[selectedId] : null;
 
   return (
@@ -68,17 +61,17 @@ export default function ActiveBotPage() {
       <section className="section">
         <div className="sec-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>🟢 Active Bot</span>
-          <button
-            onClick={() => setShowNewBot(true)}
+          <Link
+            href="/bot-configuration"
             style={{
               fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 13, letterSpacing: "0.03em",
               color: "#fff", border: "none", borderRadius: 10, padding: "12px 22px", cursor: "pointer",
               background: "linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)",
-              boxShadow: "0 4px 14px rgba(124,58,237,.35)",
+              boxShadow: "0 4px 14px rgba(124,58,237,.35)", textDecoration: "none", display: "inline-block",
             }}
           >
             ⚡ New Bot
-          </button>
+          </Link>
         </div>
 
         {list.length === 0 && (
@@ -136,8 +129,6 @@ export default function ActiveBotPage() {
 
         {selected && <BotDetail bot={selected} />}
       </section>
-
-      {showNewBot && <NewBotModal onClose={() => setShowNewBot(false)} onStarted={handleStarted} />}
     </>
   );
 }

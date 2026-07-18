@@ -8,11 +8,10 @@ import { usePathname } from "next/navigation";
 // page-by-page migration — the classic dashboard remains reachable via the
 // "Classic Dashboard" link below and still has all of these working.
 const TRADING_ITEMS = [
-  { key: "accounts", label: "Accounts", icon: "👤", href: null },
-  { key: "report", label: "PnL Report", icon: "📈", href: null },
+  { key: "config", label: "Bot Configuration", icon: "⚙️", href: "/bot-configuration" },
+  { key: "accounts", label: "Accounts", icon: "👤", href: "/accounts" },
+  { key: "report", label: "PnL Report", icon: "📈", href: "/pnl-report" },
   { key: "logs", label: "Bot Logs", icon: "📜", href: null },
-  // Bot Configuration is folded into Active Bot — one simple screen to
-  // configure, launch, monitor, and stop bots, instead of two separate pages.
   { key: "active", label: "Active Bot", icon: "🟢", href: "/active-bot" },
 ];
 
