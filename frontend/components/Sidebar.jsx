@@ -22,7 +22,7 @@ const OPTIONS_ITEMS = [
   { key: "optdash", label: "Options Dashboard", icon: "▦", href: "/options-dashboard" },
   { key: "optadd", label: "Add Strategy", icon: "＋", href: CLASSIC, external: true },
   { key: "optsim", label: "Combined Simulator", icon: "▤", href: CLASSIC, external: true },
-  { key: "optanalysis", label: "Options Analysis", icon: "／", href: CLASSIC, external: true },
+  { key: "optanalysis", label: "Options Analysis", icon: "／", href: "/options-analysis" },
 ];
 
 function NavItem({ item, pathname }) {
@@ -50,12 +50,6 @@ export default function Sidebar() {
       {TRADING_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
       <div className="nav-group">Options Strategy</div>
       {OPTIONS_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
-      <a
-        href="/index.html"
-        style={{ marginTop: "auto", fontSize: "11px", color: "#5d6b85", padding: "14px 12px 4px", textDecoration: "underline" }}
-      >
-        ← Classic Dashboard
-      </a>
     </aside>
   );
 }
