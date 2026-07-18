@@ -2,10 +2,12 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { bsPrice, strikeNumber } from "@/lib/blackScholes";
 import { computeDerived, toInputDate } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
+import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
+import { getCollateral } from "@/lib/deribitOrder";
 
 const FIELD_KEYS = [
   "entry_date", "token", "option_type", "investment", "status", "end_date",
@@ -59,24 +61,6 @@ function fmtCcyOrDash(v) {
 function fmtNumOrDash(v, dec = 2) {
   if (v == null || isNaN(v)) return "—";
   return Number(v).toFixed(dec);
-}
-
-// Mirrors server.js's deribitTickSizeFor/deribitRoundToStep exactly, so the
-// confirmation modal shows the price that will ACTUALLY be submitted —
-// Deribit rejects any price that isn't an exact multiple of the
-// instrument's tick_size (e.g. 0.2 below $50 on some USDC options).
-function tickSizeFor(inst, price) {
-  let tick = inst.tick_size;
-  if (Array.isArray(inst.tick_size_steps)) {
-    for (const step of [...inst.tick_size_steps].sort((a, b) => a.above_price - b.above_price)) {
-      if (price >= step.above_price) tick = step.tick_size;
-    }
-  }
-  return tick;
-}
-function roundToTick(price, inst) {
-  const tick = tickSizeFor(inst, price);
-  return tick ? Number((Math.round(price / tick) * tick).toFixed(10)) : price;
 }
 
 function AddStrategyInner() {
@@ -271,93 +255,208 @@ function AddStrategyInner() {
     }
   }
 
-  // ── Execute ─────────────────────────────────────────────────────────
-  const [execOpen, setExecOpen] = useState(false);
-  const [execPreview, setExecPreview] = useState(null); // { form, inst, editId }
-  const [execSummary, setExecSummary] = useState(null); // rendered preview data
-  const [execMsg, setExecMsg] = useState(null);
-  const [execBusy, setExecBusy] = useState(false);
-  const [execResult, setExecResult] = useState(null);
+  // ── Execute (maker-chase engine) ─────────────────────────────────────
+  // No confirmation modal — mirrors trading-dashboard, where Execute fires
+  // immediately and progress/results render inline below the buttons.
+  const [phase, setPhase] = useState("idle"); // idle | option_pending | futures_pending | done | error
+  const [execLogs, setExecLogs] = useState([]);
+  const [executing, setExecuting] = useState(false);
+  const [executeError, setExecuteError] = useState(null);
+  const cancelRef = useRef(false);
+  const savedTradeIdRef = useRef(null); // the trade this execute run is attached to (new or existing)
 
-  async function handleExecuteClick() {
-    const payload = buildPayload();
-    if (!String(payload.token || "").trim()) { alert("Token is required."); return; }
-    if (!payload.expiry || !payload.options_strike || !payload.opt_entry_qty || !payload.opt_entry_price) {
-      alert("Select token / expiry / strike from the live dropdowns and enter option qty + entry price before executing.");
-      return;
-    }
-    const inst = findInstrument(instruments, payload.token, payload.expiry, payload.option_type, payload.options_strike);
-    if (!inst) {
-      alert("Could not match a live Deribit instrument for the selected token/expiry/strike/type. Re-pick them via the dropdowns, then try again.");
-      return;
-    }
-    setExecPreview({ form: payload, inst, editId });
-    setExecResult(null);
-    setExecMsg(null);
-    setExecOpen(true);
-    setExecSummary(null);
-    await renderExecSummary(payload, inst);
+  const [acTargetPnl, setAcTargetPnl] = useState("");
+  const [acJob, setAcJob] = useState(null);
+  const [acError, setAcError] = useState(null);
+  const [acStarting, setAcStarting] = useState(false);
+  const acTimerRef = useRef(null);
+  const autoCloseAfterEntryRef = useRef(false);
+
+  function addExecLog(msg) {
+    const ts = new Date().toLocaleTimeString("en-IN", { hour12: false });
+    setExecLogs((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 50));
   }
 
-  async function renderExecSummary(payload, inst) {
-    const usdPrice = Number(payload.opt_entry_price);
-    let orderPrice = usdPrice, unit = "USD", usdEquivalent = null, conversionFailed = false;
-    if (inst.settlement === "coin") {
-      try {
-        const t = await apiGet(`/api/deribit/ticker?instrument=${encodeURIComponent(inst.instrument_name)}`);
-        const index = Number(t.index_price ?? t.underlying_price) || 0;
-        if (!index) throw new Error("no live index price");
-        orderPrice = usdPrice / index;
-        unit = inst.base_currency;
-        usdEquivalent = usdPrice;
-      } catch (e) {
-        conversionFailed = true;
+  // Saves (or updates) the strategy with whatever fill prices the entry
+  // engine reported, so the record reflects what actually executed rather
+  // than the pre-fill estimate. Reuses editId if we're already in edit
+  // mode; otherwise creates the trade once, on the FIRST successful leg,
+  // and every subsequent leg updates that same row.
+  async function persistFillPrices(patch) {
+    const payload = { ...buildPayload(), ...patch };
+    try {
+      if (savedTradeIdRef.current == null) {
+        const j = editId != null
+          ? (await apiPut(`/api/options-db/trades/${editId}`, payload), { id: editId })
+          : await apiPost("/api/options-db/trades", payload);
+        savedTradeIdRef.current = j.id;
+      } else {
+        await apiPut(`/api/options-db/trades/${savedTradeIdRef.current}`, payload);
+      }
+    } catch (e) {
+      addExecLog(`Warning: could not save fill price (${e.message})`);
+    }
+    setForm((f) => ({ ...f, ...patch }));
+  }
+
+  async function handleExecute() {
+    setExecuteError(null); setExecLogs([]);
+    const payload = buildPayload();
+    if (!String(payload.token || "").trim()) { setExecuteError("Token is required."); return; }
+    const optQty = parseFloat(payload.opt_entry_qty) || 0;
+    const futQty = parseFloat(payload.fut_qty) || 0;
+    if (optQty === 0 && futQty === 0) { setExecuteError("Enter option qty and/or futures qty."); return; }
+
+    let optInst = null;
+    if (optQty !== 0) {
+      optInst = findInstrument(instruments, payload.token, payload.expiry, payload.option_type, payload.options_strike);
+      if (!optInst) { setExecuteError("Select expiry and strike from the live dropdowns to determine the option instrument."); return; }
+      if (payload.expiry) {
+        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+        const expiryDate = new Date(payload.expiry + "T00:00:00Z");
+        if (expiryDate < today) {
+          setExecuteError(`${optInst.instrument_name} expired on ${payload.expiry} and can no longer be traded. Pick a current expiry/strike before executing.`);
+          return;
+        }
       }
     }
-    const optPrice = roundToTick(orderPrice, inst);
-    const rounded = Math.abs(optPrice - orderPrice) > 1e-9;
-    const futQty = Number(payload.fut_qty), futPrice = Number(payload.fut_entry_price);
-    const hasFut = !!(futQty && futPrice);
-    setExecSummary({
-      optSide: Number(payload.opt_entry_qty) > 0 ? "BUY" : "SELL",
-      optQtyAbs: Math.abs(payload.opt_entry_qty),
-      optPrice, unit, usdEquivalent, rounded, conversionFailed,
-      instrumentName: inst.instrument_name,
-      hasFut,
-      futSide: futQty > 0 ? "BUY" : "SELL",
-      futQtyAbs: Math.abs(futQty),
-      futPrice,
-      futUsdContractsNote: inst.settlement === "coin" ? (Math.abs(futQty) * futPrice).toFixed(2) : null,
-      token: payload.token,
-    });
-  }
 
-  function handleCancelExecute() {
-    setExecOpen(false);
-    setExecPreview(null);
-    setExecResult(null);
-  }
-
-  async function handleConfirmExecute() {
-    if (!execPreview) return;
-    const { form: payload, editId: pEditId } = execPreview;
-    const isEdit = pEditId != null;
-    setExecBusy(true);
-    setExecMsg({ ok: null, text: isEdit ? "Saving updates…" : "Saving strategy…" });
+    cancelRef.current = false;
+    savedTradeIdRef.current = editId;
+    setExecuting(true);
+    setPhase(optQty !== 0 ? "option_pending" : "futures_pending");
     try {
-      const url = isEdit ? `/api/options-db/trades/${pEditId}` : "/api/options-db/trades";
-      const j = isEdit ? await apiPut(url, payload) : await apiPost(url, payload);
-      const id = isEdit ? pEditId : j.id;
-      setExecMsg({ ok: null, text: `✓ Strategy #${id} saved. Placing live orders on Deribit…` });
-      const ej = await apiPost(`/api/options-db/trades/${id}/execute`, {});
-      setExecResult({ id, ...ej });
-      if (!isEdit) resetForm();
+      // Futures-only path: immediate market order, no chase.
+      if (optQty === 0) {
+        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}`);
+        if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
+        const price = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
+        await persistFillPrices({ fut_entry_price: price != null ? String(price) : payload.fut_entry_price });
+        setPhase("done");
+        return;
+      }
+
+      const markUsd = await runOptionEntry({
+        instrument: optInst.instrument_name, qty: optQty, isCoinSettled: optInst.settlement === "coin",
+        onLog: addExecLog, isCancelled: () => cancelRef.current,
+      });
+      if (markUsd != null) await persistFillPrices({ opt_entry_price: markUsd.toFixed(4) });
+
+      if (futQty !== 0) {
+        setPhase("futures_pending");
+        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}&prefer=${optInst.settlement}`);
+        if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
+        const futPrice = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
+        await persistFillPrices({ fut_entry_price: futPrice != null ? String(futPrice) : payload.fut_entry_price });
+      }
+      setPhase("done");
     } catch (e) {
-      setExecMsg({ ok: false, text: "Failed: " + e.message });
+      setExecuteError(e.message);
+      setPhase("error");
     } finally {
-      setExecBusy(false);
+      setExecuting(false);
     }
   }
+
+  function cancelExecute() {
+    cancelRef.current = true;
+    addExecLog("Cancel requested — waiting for the current order to unwind…");
+  }
+
+  // The instant entry reports "done", start the auto-close job right
+  // against the fresh position — no window for price/PnL to drift before
+  // the initial collateral snapshot is taken.
+  useEffect(() => {
+    if (phase === "done" && autoCloseAfterEntryRef.current) {
+      autoCloseAfterEntryRef.current = false;
+      startAutoClose();
+    }
+    if (phase === "error" && autoCloseAfterEntryRef.current) {
+      autoCloseAfterEntryRef.current = false; // entry failed — no position to monitor
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  async function handleExecuteAndAutoClose() {
+    if (!(parseFloat(acTargetPnl) > 0)) { setAcError("Enter a Booking PnL Target first."); return; }
+    setAcError(null);
+    autoCloseAfterEntryRef.current = true;
+    await handleExecute();
+  }
+
+  async function pollAcJob(jobId) {
+    try {
+      const d = await apiGet(`/api/auto-close?id=${jobId}`);
+      if (d.job) {
+        setAcJob(d.job);
+        if (["completed", "failed", "stopped"].includes(d.job.status)) clearInterval(acTimerRef.current);
+      }
+    } catch (e) { /* keep polling */ }
+  }
+
+  async function startAutoClose() {
+    setAcError(null);
+    const id = savedTradeIdRef.current;
+    const optQty = parseFloat(form.opt_entry_qty) || 0;
+    const futQty = parseFloat(form.fut_qty) || 0;
+    const token = (form.token || "ETH").toUpperCase();
+    const optInst = findInstrument(instruments, form.token, form.expiry, form.option_type, form.options_strike);
+    const tPnl = parseFloat(acTargetPnl) || 0;
+
+    if (!optInst || !optQty) { setAcError("No option position configured."); return; }
+    if (tPnl <= 0) { setAcError("Enter a target PnL > 0."); return; }
+
+    setAcStarting(true);
+    try {
+      const bal = await getCollateral(token);
+      if (bal.error) throw new Error(bal.error);
+      const perp = futQty !== 0 ? await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(token)}&prefer=${optInst.settlement}`) : null;
+      const j = await apiPost("/api/auto-close", {
+        trade_id: id || null,
+        token,
+        opt_instrument: optInst.instrument_name,
+        opt_qty: Math.abs(optQty),
+        opt_dir: optQty > 0 ? "sell" : "buy",
+        opt_entry_price: form.opt_entry_price || null,
+        fut_instrument: perp?.instrument_name || "",
+        fut_qty: Math.abs(futQty),
+        fut_dir: futQty > 0 ? "sell" : "buy",
+        fut_entry_price: form.fut_entry_price || null,
+        initial_total_usd: bal.total_usd ?? 0,
+        target_pnl: tPnl,
+      });
+      clearInterval(acTimerRef.current);
+      pollAcJob(j.id);
+      acTimerRef.current = setInterval(() => pollAcJob(j.id), 5000);
+    } catch (e) {
+      setAcError(e.message);
+    } finally {
+      setAcStarting(false);
+    }
+  }
+
+  async function stopAutoClose() {
+    if (!acJob?.id) return;
+    try {
+      await apiDelete(`/api/auto-close?id=${acJob.id}`);
+      pollAcJob(acJob.id);
+    } catch (e) { setAcError(e.message); }
+  }
+
+  // Resume polling if a server auto-close job is already active for this trade.
+  useEffect(() => {
+    if (editId == null) return;
+    apiGet(`/api/auto-close?trade_id=${editId}`).then((d) => {
+      const active = (d.jobs || []).find((j) => ["active", "closing_option", "closing_futures"].includes(j.status));
+      if (active) {
+        clearInterval(acTimerRef.current);
+        pollAcJob(active.id);
+        acTimerRef.current = setInterval(() => pollAcJob(active.id), 5000);
+      }
+    }).catch(() => {});
+    return () => clearInterval(acTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId]);
 
   const field = (label, node, extra) => <div className="field"><label>{label}</label>{node}{extra}</div>;
   const numInput = (key, type_ = "number", extraProps = {}) => (
@@ -467,11 +566,47 @@ function AddStrategyInner() {
 
               <div className="btn-row" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
                 <button className="btn btn-start" onClick={handleSave} disabled={saving}>💾 {editId != null ? "Update Strategy" : "Save Strategy"}</button>
-                <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleExecuteClick}>⚡ Execute</button>
+                <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleExecute} disabled={executing}>⚡ Execute</button>
                 {editId != null && <button className="btn" style={{ background: "var(--emerald,#16a34a)", color: "#fff" }} onClick={handleSaveAsNew} disabled={saving}>💾 Save as New</button>}
                 <button className="btn btn-stop" onClick={resetForm}>↺ Reset</button>
               </div>
               {msg && <div style={{ fontSize: 12, marginTop: 8, color: msg.ok === false ? "var(--red)" : msg.ok ? "var(--green)" : "var(--muted)" }}>{msg.text}</div>}
+
+              {(phase !== "idle" || executeError) && (
+                <div style={{ marginTop: 14, padding: 12, background: "#0b1220", borderRadius: 8, fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ color: phase === "error" ? "#f87171" : phase === "done" ? "#4ade80" : "#facc15", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                      {phase === "option_pending" ? "Placing option order…" : phase === "futures_pending" ? "Placing futures hedge…" : phase === "done" ? "Execution complete" : phase === "error" ? "Execution error" : ""}
+                    </span>
+                    {(phase === "option_pending" || phase === "futures_pending") && (
+                      <button className="btn-refresh" onClick={cancelExecute} style={{ background: "transparent", color: "#f87171", borderColor: "#f87171" }}>Cancel</button>
+                    )}
+                  </div>
+                  {executeError && <div style={{ color: "#f87171", marginBottom: 6 }}>{executeError}</div>}
+                  <div style={{ maxHeight: 180, overflowY: "auto", color: "#94a3b8" }}>
+                    {execLogs.map((l, i) => <div key={i}>{l}</div>)}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>🎯 Execute + Auto-Close</div>
+                {!acJob || ["completed", "failed", "stopped"].includes(acJob.status) ? (
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <input type="number" placeholder="Target PnL $" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} style={{ maxWidth: 160, padding: "8px 10px", border: "1.5px solid var(--border-2)", borderRadius: 8 }} />
+                    <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleExecuteAndAutoClose} disabled={executing || acStarting}>Execute + Monitor</button>
+                    {editId != null && <button className="btn-refresh" onClick={startAutoClose} disabled={acStarting}>Monitor Existing Position</button>}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12 }}>
+                    Job #{acJob.id} — <b>{acJob.status}</b> · target +${Number(acJob.target_pnl).toFixed(2)}
+                    {acJob.last_equity_usd != null && <> · equity ${Number(acJob.last_equity_usd).toFixed(2)}</>}
+                    {" "}<button className="btn-refresh" onClick={stopAutoClose} style={{ marginLeft: 8 }}>Stop</button>
+                    {" "}<a href={`/monitor?trade_id=${savedTradeIdRef.current || editId || ""}`} style={{ marginLeft: 8, color: "var(--brand)", fontWeight: 600 }}>Open Monitor</a>
+                  </div>
+                )}
+                {acError && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 6 }}>{acError}</div>}
+              </div>
             </div>
           </div>
 
@@ -512,68 +647,6 @@ function AddStrategyInner() {
           </div>
         </div>
       </section>
-
-      {execOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(11,18,32,.55)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div className="card" style={{ maxWidth: 520, width: "92%", maxHeight: "85vh", overflowY: "auto" }}>
-            <div className="card-header" style={{ color: "#b91c1c" }}>⚠️ Confirm Live Orders — Real Money</div>
-            <div className="card-body">
-              <div style={{ fontSize: 12.5 }}>
-                {!execSummary && !execResult && <span style={{ color: "var(--muted)" }}>Resolving live order price…</span>}
-                {execSummary && !execResult && (
-                  <>
-                    <div style={{ marginBottom: 10 }}>
-                      <b>Option leg</b><br />
-                      {execSummary.instrumentName} — {execSummary.optSide} {execSummary.optQtyAbs} @ {execSummary.optPrice} {execSummary.unit}
-                      {execSummary.rounded && <span style={{ color: "var(--muted)" }}> (rounded to Deribit&apos;s tick size)</span>}
-                      {execSummary.usdEquivalent != null && <span style={{ color: "var(--muted)" }}> (≈${execSummary.usdEquivalent} — coin-settled instrument, price is in {execSummary.unit})</span>}
-                      {execSummary.conversionFailed && <span style={{ color: "var(--red)" }}> (could not fetch live index to convert — DO NOT confirm, retry instead)</span>}
-                      {" "}<span style={{ color: "var(--muted)" }}>(post-only limit)</span>
-                    </div>
-                    {execSummary.hasFut ? (
-                      <div>
-                        <b>Futures leg</b><br />
-                        {execSummary.token} perpetual — {execSummary.futSide} {execSummary.futQtyAbs} @ {execSummary.futPrice}
-                        {execSummary.futUsdContractsNote && <span style={{ color: "var(--muted)" }}> (≈{execSummary.futUsdContractsNote} USD contracts — {execSummary.token}-PERPETUAL is coin-margined, sized in USD not {execSummary.token})</span>}
-                        {" "}<span style={{ color: "var(--muted)" }}>(post-only limit — price/qty auto-rounded to Deribit&apos;s tick size if needed)</span>
-                      </div>
-                    ) : (
-                      <div style={{ color: "var(--muted)" }}>No futures leg (fut qty or fut entry price is blank).</div>
-                    )}
-                  </>
-                )}
-                {execResult && (
-                  <>
-                    <div style={{ marginTop: 6, marginBottom: 6 }}>Strategy <b>#{execResult.id}</b> saved.</div>
-                    {execResult.option && (
-                      execResult.option.ok
-                        ? <div style={{ color: "var(--green)" }}>✓ Option: {execResult.option.instrument} {String(execResult.option.side).toUpperCase()} {execResult.option.amount ?? ""} @ {execResult.option.price ?? ""} — order {execResult.option.orderId || "?"} ({execResult.option.state || "placed"})</div>
-                        : <div style={{ color: "var(--red)" }}>✗ Option FAILED: {execResult.option.error}</div>
-                    )}
-                    {execResult.futures && (
-                      execResult.futures.ok
-                        ? <div style={{ color: "var(--green)" }}>✓ Futures: {execResult.futures.instrument} {String(execResult.futures.side).toUpperCase()} {execResult.futures.amount ?? ""} @ {execResult.futures.price ?? ""} — order {execResult.futures.orderId || "?"} ({execResult.futures.state || "placed"})</div>
-                        : <div style={{ color: "var(--red)" }}>✗ Futures FAILED: {execResult.futures.error}</div>
-                    )}
-                  </>
-                )}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
-                Post-only maker limit orders. If price has moved and a leg would cross the spread, Deribit rejects that leg (post_only_reject) — it will NOT convert to a taker fill.
-              </div>
-              <div className="btn-row" style={{ marginTop: 16 }}>
-                {!execResult && (
-                  <button className="btn" style={{ background: "#b91c1c", color: "#fff" }} onClick={handleConfirmExecute} disabled={execBusy || !execSummary || execSummary.conversionFailed}>
-                    ✅ Confirm &amp; Place Live Orders
-                  </button>
-                )}
-                <button className="btn btn-stop" onClick={handleCancelExecute}>{execResult ? "Close" : "Cancel"}</button>
-              </div>
-              {execMsg && <div style={{ fontSize: 12, marginTop: 10, color: execMsg.ok === false ? "var(--red)" : "var(--muted)" }}>{execMsg.text}</div>}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

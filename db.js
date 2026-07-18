@@ -147,6 +147,100 @@ async function pingDb() {
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     try { await conn.query("ALTER TABLE trading_accounts MODIFY wallet_address VARCHAR(128) NULL"); } catch (e) {}
     try { await conn.query("ALTER TABLE trading_accounts MODIFY private_key VARCHAR(200) NULL"); } catch (e) {}
+
+    // Auto-close jobs (single-leg) — server-side worker polls combined
+    // coin+USDC equity and closes the option (maker) + futures hedge
+    // (market) once it rises by target_pnl. Ported from the standalone
+    // options_pnl_report app's auto-close feature; ported schema drops
+    // account_id since this deploy only ever uses the one global Deribit key.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS auto_close_jobs (
+        id                  INT AUTO_INCREMENT PRIMARY KEY,
+        trade_id            INT NULL,
+        token               VARCHAR(50)  NOT NULL,
+        opt_instrument      VARCHAR(100) NOT NULL,
+        opt_qty             DECIMAL(12,6) NOT NULL,
+        opt_dir             ENUM('buy','sell') NOT NULL,
+        opt_entry_price     DECIMAL(18,8) NULL,
+        opt_close_price     DECIMAL(18,8) NULL,
+        opt_order_id        VARCHAR(100) NULL,
+        opt_filled_qty      DECIMAL(12,6) NULL,
+        opt_order_placed_at DATETIME NULL,
+        fut_instrument      VARCHAR(100) NOT NULL DEFAULT '',
+        fut_qty             DECIMAL(12,6) NOT NULL DEFAULT 0,
+        fut_dir             ENUM('buy','sell') NOT NULL DEFAULT 'sell',
+        fut_entry_price     DECIMAL(18,4) NULL,
+        fut_close_price     DECIMAL(18,4) NULL,
+        initial_total_usd   DECIMAL(14,4) NOT NULL,
+        final_equity_usd    DECIMAL(14,4) NULL,
+        target_pnl          DECIMAL(12,4) NOT NULL,
+        target_total_usd    DECIMAL(14,4) NOT NULL,
+        status              ENUM('active','closing_option','closing_futures','completed','failed','stopped')
+                            NOT NULL DEFAULT 'active',
+        approach_alert_sent TINYINT(1) NOT NULL DEFAULT 0,
+        triggered_at        DATETIME NULL,
+        completed_at        DATETIME NULL,
+        last_checked_at     DATETIME NULL,
+        last_equity_usd     DECIMAL(14,4) NULL,
+        log_json            LONGTEXT NULL,
+        error_msg           TEXT NULL,
+        consecutive_errors  INT NOT NULL DEFAULT 0,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_ac_trade  (trade_id),
+        INDEX idx_ac_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    // Auto-close jobs (multi-leg / Combined Simulator) — same design as
+    // auto_close_jobs, spanning N option+futures leg pairs sharing one
+    // combined-equity target. group_id joins back to options_trades.group_id.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS auto_close_combo_jobs (
+        id                  INT AUTO_INCREMENT PRIMARY KEY,
+        group_id            VARCHAR(100) NULL,
+        token               VARCHAR(50) NOT NULL,
+        initial_total_usd   DECIMAL(14,4) NOT NULL,
+        final_equity_usd    DECIMAL(14,4) NULL,
+        target_pnl          DECIMAL(12,4) NOT NULL,
+        target_total_usd    DECIMAL(14,4) NOT NULL,
+        status              ENUM('active','closing','completed','failed','stopped') NOT NULL DEFAULT 'active',
+        approach_alert_sent TINYINT(1) NOT NULL DEFAULT 0,
+        triggered_at        DATETIME NULL,
+        completed_at        DATETIME NULL,
+        last_checked_at     DATETIME NULL,
+        last_equity_usd     DECIMAL(14,4) NULL,
+        log_json            LONGTEXT NULL,
+        error_msg           TEXT NULL,
+        consecutive_errors  INT NOT NULL DEFAULT 0,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_acc_group  (group_id),
+        INDEX idx_acc_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS auto_close_combo_legs (
+        id               INT AUTO_INCREMENT PRIMARY KEY,
+        combo_job_id     INT NOT NULL,
+        leg_index        INT NOT NULL,
+        leg_type         VARCHAR(20) NULL,
+        opt_instrument   VARCHAR(100) NOT NULL DEFAULT '',
+        opt_qty          DECIMAL(12,6) NOT NULL DEFAULT 0,
+        opt_dir          ENUM('buy','sell') NOT NULL DEFAULT 'sell',
+        opt_entry_price  DECIMAL(18,8) NULL,
+        opt_close_price  DECIMAL(18,8) NULL,
+        opt_order_id     VARCHAR(100) NULL,
+        opt_done         TINYINT(1) NOT NULL DEFAULT 0,
+        fut_instrument   VARCHAR(100) NOT NULL DEFAULT '',
+        fut_qty          DECIMAL(12,6) NOT NULL DEFAULT 0,
+        fut_dir          ENUM('buy','sell') NOT NULL DEFAULT 'sell',
+        fut_entry_price  DECIMAL(18,4) NULL,
+        fut_close_price  DECIMAL(18,4) NULL,
+        fut_done         TINYINT(1) NOT NULL DEFAULT 0,
+        INDEX idx_accl_job (combo_job_id),
+        FOREIGN KEY (combo_job_id) REFERENCES auto_close_combo_jobs(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
     conn.release();
     console.log("[DB] Connected to MySQL.");
     return true;
@@ -699,6 +793,241 @@ async function recordOptionsExecution(id, execution) {
   } catch (e) { console.error("[DB] recordOptionsExecution failed:", e.message); }
 }
 
+// ============================================================
+//  AUTO-CLOSE JOBS (single-leg + multi-leg combo)
+//  Ported from the standalone options_pnl_report app's auto-close
+//  worker/routes — see lib/deribit-close-helpers.js equivalents in
+//  server.js for the Deribit-side math these jobs drive.
+// ============================================================
+
+async function listAutoCloseJobs({ tradeId } = {}) {
+  const p = getPool();
+  if (!p) return [];
+  const where = tradeId ? "WHERE trade_id = ?" : "";
+  const [rows] = await p.query(
+    `SELECT id, trade_id, token, opt_instrument, fut_instrument,
+            opt_entry_price, opt_close_price, fut_entry_price, fut_close_price,
+            initial_total_usd, final_equity_usd, target_pnl, target_total_usd, status,
+            last_equity_usd, last_checked_at, created_at, triggered_at, completed_at, error_msg
+       FROM auto_close_jobs ${where} ORDER BY created_at DESC`,
+    tradeId ? [tradeId] : []
+  );
+  return rows;
+}
+
+async function getAutoCloseJob(id) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query("SELECT * FROM auto_close_jobs WHERE id = ?", [id]);
+  const job = rows[0] || null;
+  if (job) { try { job.logs = JSON.parse(job.log_json || "[]"); } catch (e) { job.logs = []; } delete job.log_json; }
+  return job;
+}
+
+// Raw row (log_json intact) — for internal worker use, not API responses.
+async function getAutoCloseJobRaw(id) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query("SELECT * FROM auto_close_jobs WHERE id = ?", [id]);
+  return rows[0] || null;
+}
+
+async function findActiveAutoCloseJob(tradeId) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query(
+    `SELECT id, status FROM auto_close_jobs
+      WHERE trade_id = ? AND status IN ('active','closing_option','closing_futures') LIMIT 1`,
+    [tradeId]
+  );
+  return rows[0] || null;
+}
+
+async function listActiveAutoCloseJobs() {
+  const p = getPool();
+  if (!p) return [];
+  const [rows] = await p.query(`SELECT * FROM auto_close_jobs WHERE status IN ('active','closing_option','closing_futures')`);
+  return rows;
+}
+
+async function insertAutoCloseJob(f) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  const [result] = await p.query(
+    `INSERT INTO auto_close_jobs
+       (trade_id, token, opt_instrument, opt_qty, opt_dir, opt_entry_price,
+        fut_instrument, fut_qty, fut_dir, fut_entry_price,
+        initial_total_usd, target_pnl, target_total_usd)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      f.trade_id || null, f.token, f.opt_instrument, f.opt_qty, f.opt_dir, f.opt_entry_price ?? null,
+      f.fut_instrument || "", f.fut_qty || 0, f.fut_dir || "sell", f.fut_entry_price ?? null,
+      f.initial_total_usd, f.target_pnl, f.target_total_usd,
+    ]
+  );
+  return result.insertId;
+}
+
+// fields may include the special flags `triggered`/`completed`/`opt_placed`
+// (set the matching *_at column to NOW()) alongside plain column=value pairs.
+async function updateAutoCloseJob(id, fields = {}) {
+  const p = getPool();
+  if (!p) return;
+  const sets = [], vals = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === "triggered")  { sets.push("triggered_at = NOW()"); continue; }
+    if (k === "completed")  { sets.push("completed_at = NOW()"); continue; }
+    if (k === "opt_placed") { sets.push("opt_order_placed_at = NOW()"); continue; }
+    sets.push(`${k} = ?`); vals.push(v);
+  }
+  if (!sets.length) return;
+  vals.push(id);
+  await p.query(`UPDATE auto_close_jobs SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+async function appendAutoCloseLog(id, msg) {
+  const p = getPool();
+  if (!p) return;
+  const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const line = `[${ts}] ${msg}`;
+  console.log(`[auto-close #${id}]`, msg);
+  try {
+    await p.query(
+      `UPDATE auto_close_jobs SET log_json = JSON_ARRAY_APPEND(COALESCE(log_json,'[]'), '$', ?) WHERE id = ?`,
+      [line, id]
+    );
+  } catch (e) {
+    const [[row]] = await p.query(`SELECT log_json FROM auto_close_jobs WHERE id=?`, [id]);
+    let arr = []; try { arr = JSON.parse(row?.log_json || "[]"); } catch (e2) {}
+    arr.push(line);
+    await p.query(`UPDATE auto_close_jobs SET log_json=? WHERE id=?`, [JSON.stringify(arr), id]);
+  }
+}
+
+// ── Combo (multi-leg) auto-close jobs ───────────────────────
+
+async function listComboJobs({ groupId } = {}) {
+  const p = getPool();
+  if (!p) return [];
+  const where = groupId ? "WHERE group_id = ?" : "";
+  const [rows] = await p.query(
+    `SELECT id, group_id, token, initial_total_usd, final_equity_usd,
+            target_pnl, target_total_usd, status, last_equity_usd, last_checked_at,
+            created_at, triggered_at, completed_at, error_msg
+       FROM auto_close_combo_jobs ${where} ORDER BY created_at DESC`,
+    groupId ? [groupId] : []
+  );
+  return rows;
+}
+
+async function getComboJob(id) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query("SELECT * FROM auto_close_combo_jobs WHERE id = ?", [id]);
+  const job = rows[0] || null;
+  if (job) { try { job.logs = JSON.parse(job.log_json || "[]"); } catch (e) { job.logs = []; } delete job.log_json; }
+  return job;
+}
+
+async function getComboJobRaw(id) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query("SELECT * FROM auto_close_combo_jobs WHERE id = ?", [id]);
+  return rows[0] || null;
+}
+
+async function getComboJobLegs(comboJobId) {
+  const p = getPool();
+  if (!p) return [];
+  const [rows] = await p.query(
+    `SELECT * FROM auto_close_combo_legs WHERE combo_job_id = ? ORDER BY leg_index`, [comboJobId]
+  );
+  return rows;
+}
+
+async function findActiveComboJob(groupId) {
+  const p = getPool();
+  if (!p) return null;
+  const [rows] = await p.query(
+    `SELECT id, status FROM auto_close_combo_jobs WHERE group_id = ? AND status IN ('active','closing') LIMIT 1`,
+    [groupId]
+  );
+  return rows[0] || null;
+}
+
+async function listActiveComboJobs() {
+  const p = getPool();
+  if (!p) return [];
+  const [rows] = await p.query(`SELECT * FROM auto_close_combo_jobs WHERE status IN ('active','closing')`);
+  return rows;
+}
+
+async function insertComboJob(f, legs) {
+  const p = getPool();
+  if (!p) throw new Error("MySQL not configured");
+  const [result] = await p.query(
+    `INSERT INTO auto_close_combo_jobs (group_id, token, initial_total_usd, target_pnl, target_total_usd)
+     VALUES (?,?,?,?,?)`,
+    [f.group_id || null, f.token, f.initial_total_usd, f.target_pnl, f.target_total_usd]
+  );
+  const jobId = result.insertId;
+  const legRows = legs.map((leg, i) => [
+    jobId, i, leg.leg_type || null,
+    leg.opt_instrument || "", leg.opt_qty || 0, leg.opt_dir || "sell", leg.opt_entry_price ?? null,
+    leg.fut_instrument || "", leg.fut_qty || 0, leg.fut_dir || "sell", leg.fut_entry_price ?? null,
+  ]);
+  await p.query(
+    `INSERT INTO auto_close_combo_legs
+       (combo_job_id, leg_index, leg_type, opt_instrument, opt_qty, opt_dir, opt_entry_price,
+        fut_instrument, fut_qty, fut_dir, fut_entry_price)
+     VALUES ?`,
+    [legRows]
+  );
+  return jobId;
+}
+
+async function updateComboJob(id, fields = {}) {
+  const p = getPool();
+  if (!p) return;
+  const sets = [], vals = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === "triggered") { sets.push("triggered_at = NOW()"); continue; }
+    if (k === "completed") { sets.push("completed_at = NOW()"); continue; }
+    sets.push(`${k} = ?`); vals.push(v);
+  }
+  if (!sets.length) return;
+  vals.push(id);
+  await p.query(`UPDATE auto_close_combo_jobs SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
+async function appendComboLog(id, msg) {
+  const p = getPool();
+  if (!p) return;
+  const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const line = `[${ts}] ${msg}`;
+  console.log(`[auto-close-combo #${id}]`, msg);
+  try {
+    await p.query(
+      `UPDATE auto_close_combo_jobs SET log_json = JSON_ARRAY_APPEND(COALESCE(log_json,'[]'), '$', ?) WHERE id = ?`,
+      [line, id]
+    );
+  } catch (e) {
+    const [[row]] = await p.query(`SELECT log_json FROM auto_close_combo_jobs WHERE id=?`, [id]);
+    let arr = []; try { arr = JSON.parse(row?.log_json || "[]"); } catch (e2) {}
+    arr.push(line);
+    await p.query(`UPDATE auto_close_combo_jobs SET log_json=? WHERE id=?`, [JSON.stringify(arr), id]);
+  }
+}
+
+async function updateComboLeg(legId, fields = {}) {
+  const p = getPool();
+  if (!p) return;
+  const sets = Object.keys(fields).map((k) => `${k} = ?`);
+  if (!sets.length) return;
+  const vals = [...Object.values(fields), legId];
+  await p.query(`UPDATE auto_close_combo_legs SET ${sets.join(", ")} WHERE id = ?`, vals);
+}
+
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
@@ -706,4 +1035,8 @@ module.exports = {
   listAccounts, getAccount, addAccount, deleteAccount,
   listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,
   deleteOptionsTrade, computeOptionsDerived, optStrikeNumber, recordOptionsExecution,
+  listAutoCloseJobs, getAutoCloseJob, getAutoCloseJobRaw, findActiveAutoCloseJob,
+  listActiveAutoCloseJobs, insertAutoCloseJob, updateAutoCloseJob, appendAutoCloseLog,
+  listComboJobs, getComboJob, getComboJobRaw, getComboJobLegs, findActiveComboJob,
+  listActiveComboJobs, insertComboJob, updateComboJob, appendComboLog, updateComboLeg,
 };

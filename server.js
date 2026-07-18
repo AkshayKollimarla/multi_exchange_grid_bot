@@ -3955,6 +3955,16 @@ function deribitRoundToStep(value, step) {
   // get sent to Deribit verbatim and risk being rejected for excess decimals.
   return Number((Math.round(value / step) * step).toFixed(10));
 }
+// Directional variant used by the maker-chase engine and auto-close
+// workers below — floors a buy price / ceils a sell price so rounding to
+// the tick grid never nudges the order TOWARD crossing the spread (nearest
+// rounding, used by deribitRoundToStep above for the older one-shot
+// execute endpoint, can round up to half a tick the wrong way).
+function deribitRoundToStepDirectional(value, step, dir) {
+  if (!step) return value;
+  const fn = dir === "sell" ? Math.ceil : Math.floor;
+  return Number((fn(value / step) * step).toFixed(10));
+}
 function deribitTickSizeFor(inst, price) {
   let tick = inst.tick_size;
   if (Array.isArray(inst.tick_size_steps)) {
@@ -4007,6 +4017,133 @@ async function deribitFindPerpetual(token, preferSettlement) {
   if (usdcPerp) return { ...usdcPerp, settlement: "usdc" };
   if (coinPerp) return { ...coinPerp, settlement: "coin" };
   return null;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAKER-CHASE EXECUTION ENGINE + AUTO-CLOSE — ported from the
+//  options_pnl_report app's deribit-order/deribit-close-helpers/
+//  auto-close-worker logic, adapted to the single global Deribit
+//  account (deribitAuthToken()/deribitPrivate() above already handle
+//  that — no per-account credential lookup here).
+// ══════════════════════════════════════════════════════════════
+
+// Inverse futures (ETH-PERPETUAL, BTC-PERPETUAL) are quoted in USD notional
+// with a fixed contract size (1 USD for ETH, 10 USD for BTC) — "amount" must
+// be an integer multiple of contract_size, not a raw coin qty. Options and
+// linear futures take "amount" as a number of CONTRACTS — for BTC/ETH,
+// contract_size is 1 so raw coin qty and contract count coincide, but
+// altcoin instruments (SOL_USDC, XRP_USDC, ...) use contract_size > 1 (e.g.
+// 1 contract = 10 SOL) and the coin qty must be divided down to contracts.
+async function deribitOrderAmount(inst, qty) {
+  const absQty = Math.abs(Number(qty));
+  const isInverseFuture = inst?.kind === "future" && inst?.future_type && inst.future_type !== "linear";
+  const contractSize = inst?.contract_size || 1;
+  if (!isInverseFuture) {
+    if (contractSize > 1) return Math.max(1, Math.round(absQty / contractSize));
+    return absQty;
+  }
+  let refPrice = 0;
+  try {
+    const t = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(inst.instrument_name)}`);
+    refPrice = t?.mark_price || t?.last_price || t?.index_price || 0;
+  } catch (e) { /* fall through, use raw qty below */ }
+  if (refPrice <= 0) return absQty;
+  return Math.max(contractSize, Math.round((absQty * refPrice) / contractSize) * contractSize);
+}
+
+// Inverse contracts (ETH, BTC) hold collateral in the coin itself. Linear
+// USDC-margined contracts (SOL_USDC, XRP_USDC, ...) settle entirely in
+// USDC — there is no separate coin wallet on Deribit for those.
+function deribitCoinLegFor(token) {
+  const t = (token || "ETH").toUpperCase();
+  if (t.includes("_USDC") || t.includes("_USDT")) return null;
+  return t;
+}
+// Combined coin-wallet + USDC-wallet equity (USD) — the auto-close worker's
+// target-PnL tracking is against this combined total, not a single wallet.
+async function deribitCollateral(token) {
+  const coinSymbol = deribitCoinLegFor(token);
+  const [coinR, usdcR] = await Promise.allSettled([
+    coinSymbol ? deribitPrivate("get_account_summary", { currency: coinSymbol, extended: "false" }) : Promise.resolve(null),
+    deribitPrivate("get_account_summary", { currency: "USDC", extended: "false" }),
+  ]);
+  let coinIndex = 0;
+  if (coinSymbol) {
+    try { coinIndex = (await deribitGet(`/api/v2/public/get_index_price?index_name=${coinSymbol.toLowerCase()}_usd`))?.index_price || 0; }
+    catch (e) { /* leave at 0 */ }
+  }
+  const coinEquity = coinSymbol && coinR.status === "fulfilled" ? (coinR.value?.equity ?? 0) : 0;
+  const usdcEquity = usdcR.status === "fulfilled" ? (usdcR.value?.equity ?? 0) : 0;
+  const coinUsd = coinEquity * coinIndex;
+  return {
+    coin_symbol: coinSymbol || "USDC",
+    coin_equity: coinEquity,
+    coin_equity_usd: coinUsd,
+    usdc_equity: usdcEquity,
+    total_usd: coinUsd + usdcEquity,
+  };
+}
+
+// Checks the REAL position on the exchange rather than trusting our own
+// order tracking — catches an option that auto-settled at expiry (no order
+// of ours involved) and an overlapping tick that already closed it.
+async function deribitPositionFlat(instrument) {
+  if (!instrument) return true;
+  try {
+    const pos = await deribitPrivate("get_position", { instrument_name: instrument });
+    return Math.abs(parseFloat(pos?.size ?? 0)) === 0;
+  } catch (e) { return false; } // never assume closed on an API error
+}
+
+async function deribitIsOptionExpired(instrument) {
+  if (!instrument) return false;
+  try {
+    const info = await deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`);
+    if (!info) return false;
+    return !!(info.expiration_timestamp && Date.now() >= info.expiration_timestamp);
+  } catch (e) { return false; } // never assume expired on any uncertainty
+}
+
+// Maker limit close at the current mid, rounded to tick — used by the
+// auto-close workers for the option leg (never falls back to market).
+async function deribitPlaceLimitClose(instrument, qty, dir) {
+  const [ticker, info] = await Promise.all([
+    deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(instrument)}`),
+    deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`),
+  ]);
+  const bid = ticker?.best_bid_price || 0, ask = ticker?.best_ask_price || 0;
+  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (ticker?.mark_price || 0);
+  const tick = deribitTickSizeFor(info || {}, mid);
+  const price = deribitRoundToStepDirectional(Math.max(mid, tick || 0), tick, dir);
+  const amount = await deribitOrderAmount(info, qty);
+  return deribitPrivate(dir, {
+    instrument_name: instrument, amount: String(amount), type: "limit",
+    price: String(price), reduce_only: "true",
+  });
+}
+async function deribitPlaceMarketClose(instrument, qty, dir) {
+  const info = await deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`);
+  const amount = await deribitOrderAmount(info, qty);
+  return deribitPrivate(dir, { instrument_name: instrument, amount: String(amount), type: "market", reduce_only: "true" });
+}
+
+// Fire-and-forget-friendly Telegram sender for the auto-close workers —
+// reuses the SAME TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID the rest of the bot
+// already sends alerts with, via the existing tgPost() RPC helper. Never
+// throws; returns {ok, error?} so callers can persist the outcome into a
+// job's own log instead of it only ever showing up in server console output.
+async function sendTelegramAlert(text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    const error = "TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set in .env — skipping alert";
+    console.warn(`[telegram] ${error}`);
+    return { ok: false, error };
+  }
+  try {
+    const r = await tgPost("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true });
+    if (!r?.ok) return { ok: false, error: r?.description || "unknown" };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 
 // Places the option leg (required) and, if the strategy has a futures leg,
@@ -4090,6 +4227,677 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── Order placement primitive — the maker-chase engine's building block.
+// The frontend (Add Strategy / Combined Simulator) calls this once per
+// order: place at mid (chase loop re-calls this on every re-quote), poll
+// state via GET, cancel via DELETE if the mid has drifted. Unlike
+// /api/options-db/trades/:id/execute above (one-shot, strict post_only),
+// this defaults post_only OFF — a limit priced exactly at a fresh mid can't
+// normally cross the book, but if the market ticks before the order lands,
+// post_only:false lets it fill immediately as a taker instead of being
+// rejected and forcing a manual retry.
+app.post("/api/deribit-order", async (req, res) => {
+  const { instrument, qty, direction, price, is_market = false, post_only = true } = req.body || {};
+  if (!instrument || qty == null || !direction) {
+    return res.status(400).json({ error: "instrument, qty, direction required" });
+  }
+  try {
+    const info = await deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`);
+    let effectivePrice = null;
+    if (!is_market && price != null && price > 0) {
+      const tick = deribitTickSizeFor(info || {}, price);
+      // Directional (floor buy / ceil sell) so rounding to the tick grid
+      // never nudges a maker order toward crossing the spread.
+      effectivePrice = deribitRoundToStepDirectional(price, tick, direction);
+      if (effectivePrice <= 0) effectivePrice = tick;
+    }
+    const amount = await deribitOrderAmount(info, qty);
+    const params = {
+      instrument_name: instrument,
+      amount: String(amount),
+      type: effectivePrice ? "limit" : "market",
+    };
+    if (effectivePrice) {
+      params.price = String(effectivePrice);
+      if (post_only) params.post_only = "true";
+    }
+    const method = direction === "buy" ? "buy" : "sell";
+    const result = await deribitPrivate(method, params);
+    const order = result?.order || {};
+    res.json({
+      ok: true, order_id: order.order_id, amount: order.amount,
+      filled_amount: order.filled_amount, order_state: order.order_state, price: order.price,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+app.get("/api/deribit-order", async (req, res) => {
+  const orderId = req.query.order_id;
+  if (!orderId) return res.status(400).json({ error: "order_id required" });
+  try {
+    const result = await deribitPrivate("get_order_state", { order_id: orderId });
+    res.json({
+      ok: true, order_id: result.order_id, instrument: result.instrument_name,
+      amount: result.amount, filled_amount: result.filled_amount,
+      order_state: result.order_state, price: result.price,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete("/api/deribit-order", async (req, res) => {
+  const orderId = req.query.order_id;
+  if (!orderId) return res.status(400).json({ error: "order_id required" });
+  try {
+    const result = await deribitPrivate("cancel", { order_id: orderId });
+    res.json({ ok: true, order_id: result.order_id, filled_amount: result.filled_amount, order_state: result.order_state });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get("/api/deribit/collateral", async (req, res) => {
+  try { res.json(await deribitCollateral(req.query.token || "ETH")); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Resolves the right perpetual futures instrument for a token — the
+// maker-chase engine (client-orchestrated) needs the instrument name
+// before it can call /api/deribit-order for the futures hedge leg,
+// unlike the old one-shot /api/options-db/trades/:id/execute above which
+// resolves it server-side internally.
+app.get("/api/deribit/perpetual", async (req, res) => {
+  try {
+    const perp = await deribitFindPerpetual(String(req.query.token || "").toUpperCase(), req.query.prefer);
+    res.json(perp || {});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  AUTO-CLOSE JOBS — single-leg (Add Strategy) + combo (Combined
+//  Simulator). CRUD here; the actual polling logic that drives status
+//  transitions lives in autoCloseWorkerTick()/autoCloseComboWorkerTick()
+//  below, started once at server boot.
+// ══════════════════════════════════════════════════════════════
+app.get("/api/auto-close", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const jobId = req.query.id;
+    if (jobId) {
+      const job = await db.getAutoCloseJob(jobId);
+      if (!job) return res.status(404).json({ error: "not found" });
+      return res.json({ job });
+    }
+    const jobs = await db.listAutoCloseJobs({ tradeId: req.query.trade_id });
+    res.json({ jobs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post("/api/auto-close", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const body = req.body || {};
+    const missing = ["token", "opt_instrument", "opt_qty", "opt_dir", "initial_total_usd", "target_pnl"]
+      .filter((k) => body[k] == null || body[k] === "");
+    if (missing.length) return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
+
+    if (body.trade_id) {
+      const existing = await db.findActiveAutoCloseJob(body.trade_id);
+      if (existing) {
+        return res.status(409).json({
+          error: `Job #${existing.id} is already ${existing.status} for this strategy. Stop it before starting a new one.`,
+          existing_job_id: existing.id,
+        });
+      }
+    }
+
+    const initialTotal = parseFloat(body.initial_total_usd);
+    const targetPnl = parseFloat(body.target_pnl);
+    const targetTotal = initialTotal + targetPnl;
+    const jobId = await db.insertAutoCloseJob({
+      trade_id: body.trade_id || null,
+      token: body.token,
+      opt_instrument: body.opt_instrument,
+      opt_qty: parseFloat(body.opt_qty),
+      opt_dir: body.opt_dir,
+      opt_entry_price: body.opt_entry_price != null && body.opt_entry_price !== "" ? parseFloat(body.opt_entry_price) : null,
+      fut_instrument: body.fut_instrument || "",
+      fut_qty: parseFloat(body.fut_qty) || 0,
+      fut_dir: body.fut_dir || "sell",
+      fut_entry_price: body.fut_entry_price != null && body.fut_entry_price !== "" ? parseFloat(body.fut_entry_price) : null,
+      initial_total_usd: initialTotal,
+      target_pnl: targetPnl,
+      target_total_usd: targetTotal,
+    });
+
+    startAutoCloseWorker();
+    const alert = await sendTelegramAlert(
+      [
+        `🟢 <b>Auto-Close Monitor Started</b> — Job #${jobId}`,
+        `${body.opt_instrument}${body.fut_instrument ? ` + ${body.fut_instrument}` : ""}`,
+        ``,
+        `Initial collateral: $${initialTotal.toFixed(2)}`,
+        `Target: +$${targetPnl.toFixed(2)} → closes at $${targetTotal.toFixed(2)}`,
+      ].join("\n")
+    );
+    await db.appendAutoCloseLog(jobId, alert.ok ? "Telegram entry alert sent." : `Telegram entry alert FAILED: ${alert.error}`);
+    res.json({ id: jobId, target_total_usd: targetTotal, telegram_ok: alert.ok });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.patch("/api/auto-close", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "id required" });
+    const newTargetPnl = parseFloat(req.body?.target_pnl);
+    if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
+    const job = await db.getAutoCloseJobRaw(id);
+    if (!job) return res.status(404).json({ error: "not found" });
+    if (job.status !== "active") return res.status(400).json({ error: `Job is ${job.status} — target can only be edited while still active` });
+    const newTargetTotal = parseFloat(job.initial_total_usd) + newTargetPnl;
+    await db.updateAutoCloseJob(id, { target_pnl: newTargetPnl, target_total_usd: newTargetTotal, approach_alert_sent: 0 });
+    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete("/api/auto-close", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "id required" });
+    const job = await db.getAutoCloseJobRaw(id);
+    if (!job) return res.status(404).json({ error: "not found" });
+    if (["completed", "failed", "stopped"].includes(job.status)) return res.status(400).json({ error: `Job already ${job.status}` });
+    await db.updateAutoCloseJob(id, { status: "stopped", completed: true });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/auto-close-combo", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const jobId = req.query.id;
+    if (jobId) {
+      const job = await db.getComboJob(jobId);
+      if (!job) return res.status(404).json({ error: "not found" });
+      const legs = await db.getComboJobLegs(jobId);
+      return res.json({ job, legs });
+    }
+    const jobs = await db.listComboJobs({ groupId: req.query.group_id });
+    res.json({ jobs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post("/api/auto-close-combo", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const body = req.body || {};
+    const missing = ["token", "initial_total_usd", "target_pnl"].filter((k) => body[k] == null || body[k] === "");
+    if (missing.length) return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
+    if (!Array.isArray(body.legs) || !body.legs.length) return res.status(400).json({ error: "legs must be a non-empty array" });
+
+    if (body.group_id) {
+      const existing = await db.findActiveComboJob(body.group_id);
+      if (existing) {
+        return res.status(409).json({
+          error: `Job #${existing.id} is already ${existing.status} for this combo. Stop it before starting a new one.`,
+          existing_job_id: existing.id,
+        });
+      }
+    }
+
+    const initialTotal = parseFloat(body.initial_total_usd);
+    const targetPnl = parseFloat(body.target_pnl);
+    const targetTotal = initialTotal + targetPnl;
+    const jobId = await db.insertComboJob(
+      { group_id: body.group_id || null, token: body.token, initial_total_usd: initialTotal, target_pnl: targetPnl, target_total_usd: targetTotal },
+      body.legs.map((leg) => ({
+        leg_type: leg.leg_type || null,
+        opt_instrument: leg.opt_instrument || "", opt_qty: parseFloat(leg.opt_qty) || 0, opt_dir: leg.opt_dir || "sell",
+        opt_entry_price: leg.opt_entry_price != null && leg.opt_entry_price !== "" ? parseFloat(leg.opt_entry_price) : null,
+        fut_instrument: leg.fut_instrument || "", fut_qty: parseFloat(leg.fut_qty) || 0, fut_dir: leg.fut_dir || "sell",
+        fut_entry_price: leg.fut_entry_price != null && leg.fut_entry_price !== "" ? parseFloat(leg.fut_entry_price) : null,
+      }))
+    );
+
+    startAutoCloseComboWorker();
+    const legSummary = body.legs.map((leg, i) => {
+      const bits = [`Leg ${i + 1} (${leg.leg_type || "?"}): ${leg.opt_instrument || "—"}`];
+      if (leg.opt_entry_price) bits.push(`opt $${parseFloat(leg.opt_entry_price).toFixed(4)}`);
+      if (leg.fut_entry_price) bits.push(`fut $${parseFloat(leg.fut_entry_price).toFixed(2)}`);
+      return bits.join(" · ");
+    });
+    const alert = await sendTelegramAlert(
+      [
+        `🟢 <b>Combo Auto-Close Monitor Started</b> — Job #${jobId}`,
+        `${body.legs.length} legs`, ``, ...legSummary, ``,
+        `Initial collateral: $${initialTotal.toFixed(2)}`,
+        `Target: +$${targetPnl.toFixed(2)} → closes at $${targetTotal.toFixed(2)}`,
+      ].join("\n")
+    );
+    await db.appendComboLog(jobId, alert.ok ? "Telegram entry alert sent." : `Telegram entry alert FAILED: ${alert.error}`);
+    res.json({ id: jobId, target_total_usd: targetTotal, telegram_ok: alert.ok });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.patch("/api/auto-close-combo", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "id required" });
+    const newTargetPnl = parseFloat(req.body?.target_pnl);
+    if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
+    const job = await db.getComboJobRaw(id);
+    if (!job) return res.status(404).json({ error: "not found" });
+    if (job.status !== "active") return res.status(400).json({ error: `Job is ${job.status} — target can only be edited while still active` });
+    const newTargetTotal = parseFloat(job.initial_total_usd) + newTargetPnl;
+    await db.updateComboJob(id, { target_pnl: newTargetPnl, target_total_usd: newTargetTotal, approach_alert_sent: 0 });
+    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete("/api/auto-close-combo", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: "id required" });
+    const job = await db.getComboJobRaw(id);
+    if (!job) return res.status(404).json({ error: "not found" });
+    if (["completed", "failed", "stopped"].includes(job.status)) return res.status(400).json({ error: `Job already ${job.status}` });
+    await db.updateComboJob(id, { status: "stopped", completed: true });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  AUTO-CLOSE WORKERS — in-process 5s pollers, ported from the
+//  options_pnl_report app's lib/auto-close-worker.js and
+//  lib/auto-close-combo-worker.js. server.js is a single long-running
+//  process (no hot-reload here, unlike Next.js dev), so the source's
+//  globalThis HMR-survival guards are dropped — a plain module-level
+//  flag is enough to make start*() idempotent.
+// ══════════════════════════════════════════════════════════════
+const AC_APPROACH_THRESHOLD   = 0.9;   // heads-up alert once PnL hits 90% of target
+const AC_OPT_REQUOTE_THRESHOLD = 0.00005;
+const AC_ERROR_THRESHOLD      = 12;    // ~1 min of continuous failures before giving up
+
+let _autoCloseRunning = false;
+function startAutoCloseWorker() {
+  if (_autoCloseRunning) return;
+  _autoCloseRunning = true;
+  console.log("[auto-close] worker started");
+  autoCloseWorkerTick();
+  setInterval(autoCloseWorkerTick, 5000);
+}
+
+async function autoCloseWorkerTick() {
+  let jobs;
+  try { jobs = await db.listActiveAutoCloseJobs(); }
+  catch (e) { console.error("[auto-close] DB query failed:", e.message); return; }
+  for (const job of jobs) {
+    try {
+      await autoCloseProcessJob(job);
+      if (job.consecutive_errors) await db.updateAutoCloseJob(job.id, { consecutive_errors: 0 });
+    } catch (err) {
+      const nextCount = (job.consecutive_errors || 0) + 1;
+      console.error(`[auto-close #${job.id}] error ${nextCount}/${AC_ERROR_THRESHOLD}:`, err.message);
+      if (nextCount >= AC_ERROR_THRESHOLD) {
+        await db.appendAutoCloseLog(job.id, `Fatal error after ${nextCount} consecutive failures: ${err.message}`).catch(() => {});
+        await db.updateAutoCloseJob(job.id, { status: "failed", error_msg: err.message, completed: true }).catch(() => {});
+      } else {
+        await db.updateAutoCloseJob(job.id, { consecutive_errors: nextCount }).catch(() => {});
+      }
+    }
+  }
+}
+
+async function autoCloseProcessJob(job) {
+  if (job.status === "active") {
+    // An option can expire before the profit target is ever hit — Deribit
+    // settles it automatically with no order of ours involved.
+    if (await deribitIsOptionExpired(job.opt_instrument)) {
+      await db.appendAutoCloseLog(job.id, `Option ${job.opt_instrument} has expired — closing the futures hedge and ending the monitor.`);
+      await sendTelegramAlert([
+        `⏰ <b>Strike Expired</b> — Job #${job.id}`,
+        `${job.opt_instrument} expired before the +$${parseFloat(job.target_pnl).toFixed(2)} target was reached.`,
+        job.fut_instrument ? `Closing the futures hedge (${job.fut_instrument}) now.` : `No futures hedge to close.`,
+      ].join("\n"));
+      const hasFutures = parseFloat(job.fut_qty || 0) !== 0;
+      await db.updateAutoCloseJob(job.id, hasFutures ? { status: "closing_futures" } : { status: "completed", completed: true });
+      const fresh = await db.getAutoCloseJobRaw(job.id);
+      if (hasFutures) await autoCloseCloseFutures(fresh); else await autoCloseFinishJob(job.id);
+      return;
+    }
+
+    const col = await deribitCollateral(job.token);
+    const pnl = col.total_usd - parseFloat(job.initial_total_usd);
+    const targetPnl = parseFloat(job.target_pnl);
+    await db.updateAutoCloseJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
+
+    if (!job.approach_alert_sent && targetPnl > 0 && pnl >= targetPnl * AC_APPROACH_THRESHOLD) {
+      await db.updateAutoCloseJob(job.id, { approach_alert_sent: 1 });
+      await sendTelegramAlert([
+        `⚠️ <b>Auto-Close Approaching Target</b> — Job #${job.id}`,
+        `${job.opt_instrument}${job.fut_instrument ? ` + ${job.fut_instrument}` : ""}`, ``,
+        `PnL: +$${pnl.toFixed(2)} / target +$${targetPnl.toFixed(2)} (${((pnl / targetPnl) * 100).toFixed(1)}%)`,
+        `Auto-close will trigger soon — keep an eye on it.`,
+      ].join("\n"));
+    }
+
+    if (col.total_usd >= parseFloat(job.target_total_usd)) {
+      await db.appendAutoCloseLog(job.id,
+        `TARGET HIT — ${col.coin_symbol} $${col.coin_equity_usd.toFixed(2)} + USDC $${col.usdc_equity.toFixed(2)} = $${col.total_usd.toFixed(2)} | PnL +$${pnl.toFixed(2)}`);
+      await db.updateAutoCloseJob(job.id, { status: "closing_option", triggered: true });
+      const fresh = await db.getAutoCloseJobRaw(job.id);
+      await autoCloseCloseOption(fresh);
+    }
+    return;
+  }
+  if (job.status === "closing_option") return autoCloseCloseOption(job);
+  if (job.status === "closing_futures") return autoCloseCloseFutures(job);
+}
+
+// Options always close as a maker at the mid price — never falls back to
+// market, re-quoting every tick if the mid drifts (same chase behavior as
+// the entry engine). Futures still close at market — the hedge needs to
+// come off immediately once the option leg is done.
+async function autoCloseCloseOption(job) {
+  const optQty = parseFloat(job.opt_qty);
+
+  if (await deribitPositionFlat(job.opt_instrument)) {
+    let closePrice = null;
+    if (job.opt_order_id) {
+      try {
+        const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id });
+        closePrice = parseFloat(state.average_price ?? state.price ?? 0) || null;
+      } catch (e) { /* order no longer queryable — leave unknown */ }
+    }
+    await db.appendAutoCloseLog(job.id, `Option position already flat (${job.opt_instrument})${closePrice != null ? ` — filled @ ${closePrice}` : " — expired/settled or closed outside the worker"}.`);
+    const hasFutures = parseFloat(job.fut_qty || 0) !== 0;
+    const patch = hasFutures ? { status: "closing_futures" } : { status: "completed", completed: true };
+    if (closePrice != null) patch.opt_close_price = closePrice;
+    await db.updateAutoCloseJob(job.id, patch);
+    const fresh = await db.getAutoCloseJobRaw(job.id);
+    if (hasFutures) await autoCloseCloseFutures(fresh); else await autoCloseFinishJob(job.id);
+    return;
+  }
+
+  if (job.opt_order_id) {
+    const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id });
+
+    if (state.order_state === "filled") {
+      const filled = parseFloat(state.filled_amount ?? state.amount ?? Math.abs(optQty));
+      const closePrice = parseFloat(state.average_price ?? state.price ?? 0);
+      const hasFutures = parseFloat(job.fut_qty || 0) !== 0;
+      await db.appendAutoCloseLog(job.id, `Option order ${job.opt_order_id} filled: ${filled}x ${job.opt_instrument} @ ${closePrice}`);
+      await db.updateAutoCloseJob(job.id, {
+        opt_filled_qty: filled, opt_close_price: closePrice,
+        status: hasFutures ? "closing_futures" : "completed",
+        ...(hasFutures ? {} : { completed: true }),
+      });
+      const fresh = await db.getAutoCloseJobRaw(job.id);
+      if (hasFutures) await autoCloseCloseFutures(fresh); else await autoCloseFinishJob(job.id);
+      return;
+    }
+
+    if (state.order_state === "cancelled" || state.order_state === "rejected") {
+      await db.appendAutoCloseLog(job.id, `Option order ${job.opt_order_id} ${state.order_state} — re-placing.`);
+      await db.updateAutoCloseJob(job.id, { opt_order_id: null });
+      return;
+    }
+
+    const ticker = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(job.opt_instrument)}`);
+    const bid = ticker?.best_bid_price || 0, ask = ticker?.best_ask_price || 0;
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (ticker?.mark_price || 0);
+    const orderPrice = parseFloat(state.price ?? 0);
+
+    if (mid > 0 && Math.abs(mid - orderPrice) > AC_OPT_REQUOTE_THRESHOLD) {
+      await db.appendAutoCloseLog(job.id, `Option mid moved ${orderPrice.toFixed(5)} → ${mid.toFixed(5)}, re-quoting maker order...`);
+      try { await deribitPrivate("cancel", { order_id: job.opt_order_id }); } catch (e) { /* already filled/cancelled */ }
+      await db.updateAutoCloseJob(job.id, { opt_order_id: null });
+      const fresh = await db.getAutoCloseJobRaw(job.id);
+      await autoCloseCloseOption(fresh);
+    }
+    return;
+  }
+
+  const result = await deribitPlaceLimitClose(job.opt_instrument, optQty, job.opt_dir);
+  const orderId = result?.order?.order_id, price = result?.order?.price;
+  await db.appendAutoCloseLog(job.id, `Option maker close placed: ${Math.abs(optQty)}x ${job.opt_instrument} @ ${price} [order ${orderId}]`);
+  await db.updateAutoCloseJob(job.id, { opt_order_id: orderId, opt_placed: true });
+}
+
+async function autoCloseCloseFutures(job) {
+  const futQty = parseFloat(job.fut_qty || 0);
+  if (futQty === 0 || !job.fut_instrument) {
+    await db.appendAutoCloseLog(job.id, "No futures position — strategy complete.");
+    await db.updateAutoCloseJob(job.id, { status: "completed", completed: true });
+    await autoCloseFinishJob(job.id);
+    return;
+  }
+  if (await deribitPositionFlat(job.fut_instrument)) {
+    await db.appendAutoCloseLog(job.id, `Futures position already flat (${job.fut_instrument}) — nothing left to close.`);
+    await db.updateAutoCloseJob(job.id, { status: "completed", completed: true });
+    await autoCloseFinishJob(job.id);
+    return;
+  }
+  const result = await deribitPlaceMarketClose(job.fut_instrument, futQty, job.fut_dir);
+  const orderId = result?.order?.order_id;
+  const closePrice = parseFloat(result?.order?.average_price ?? result?.order?.price ?? 0);
+  await db.appendAutoCloseLog(job.id, `Futures market close placed: ${Math.abs(futQty)}x ${job.fut_instrument} @ ${closePrice} [order ${orderId}]`);
+  await db.updateAutoCloseJob(job.id, { status: "completed", completed: true, fut_close_price: closePrice });
+  await autoCloseFinishJob(job.id);
+}
+
+async function autoCloseFinishJob(jobId) {
+  try {
+    const job = await db.getAutoCloseJobRaw(jobId);
+    if (!job) return;
+    const col = await deribitCollateral(job.token).catch(() => null);
+    const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
+    await db.updateAutoCloseJob(jobId, { final_equity_usd: finalEquity });
+    const initial = parseFloat(job.initial_total_usd);
+    const netDiff = finalEquity - initial;
+    const optEntry = job.opt_entry_price != null ? parseFloat(job.opt_entry_price) : null;
+    const optClose = job.opt_close_price != null ? parseFloat(job.opt_close_price) : null;
+    const futEntry = job.fut_entry_price != null ? parseFloat(job.fut_entry_price) : null;
+    const futClose = job.fut_close_price != null ? parseFloat(job.fut_close_price) : null;
+    const lines = [
+      `✅ <b>Auto-Close Complete</b> — Job #${jobId}`,
+      `${job.opt_instrument}${job.fut_instrument ? ` + ${job.fut_instrument}` : ""}`, ``,
+      optEntry != null ? `Option: entry $${optEntry.toFixed(4)} → close ${optClose != null ? "$" + optClose.toFixed(4) : "—"}` : null,
+      job.fut_instrument && futEntry != null ? `Futures: entry $${futEntry.toFixed(2)} → close ${futClose != null ? "$" + futClose.toFixed(2) : "—"}` : null,
+      ``,
+      `Initial collateral: $${initial.toFixed(2)}`,
+      `Final collateral: $${finalEquity.toFixed(2)}`,
+      `<b>Net PnL: ${netDiff >= 0 ? "+" : ""}$${netDiff.toFixed(2)}</b>`,
+    ].filter(Boolean);
+    await sendTelegramAlert(lines.join("\n"));
+  } catch (e) { console.error(`[auto-close #${jobId}] finish-job alert failed:`, e.message); }
+}
+
+// ── Combo (multi-leg) auto-close worker — same design, extended to N
+// option+futures leg pairs sharing one combined-equity target. ─────────────
+let _autoCloseComboRunning = false;
+function startAutoCloseComboWorker() {
+  if (_autoCloseComboRunning) return;
+  _autoCloseComboRunning = true;
+  console.log("[auto-close-combo] worker started");
+  autoCloseComboWorkerTick();
+  setInterval(autoCloseComboWorkerTick, 5000);
+}
+
+async function autoCloseComboWorkerTick() {
+  let jobs;
+  try { jobs = await db.listActiveComboJobs(); }
+  catch (e) { console.error("[auto-close-combo] DB query failed:", e.message); return; }
+  for (const job of jobs) {
+    try {
+      await autoCloseComboProcessJob(job);
+      if (job.consecutive_errors) await db.updateComboJob(job.id, { consecutive_errors: 0 });
+    } catch (err) {
+      const nextCount = (job.consecutive_errors || 0) + 1;
+      console.error(`[auto-close-combo #${job.id}] error ${nextCount}/${AC_ERROR_THRESHOLD}:`, err.message);
+      if (nextCount >= AC_ERROR_THRESHOLD) {
+        await db.appendComboLog(job.id, `Fatal error after ${nextCount} consecutive failures: ${err.message}`).catch(() => {});
+        await db.updateComboJob(job.id, { status: "failed", error_msg: err.message, completed: true }).catch(() => {});
+      } else {
+        await db.updateComboJob(job.id, { consecutive_errors: nextCount }).catch(() => {});
+      }
+    }
+  }
+}
+
+async function autoCloseComboProcessJob(job) {
+  if (job.status === "active") {
+    // If ANY leg's option has expired, escalate the whole combo to closing
+    // now — waiting on an equity target a dead leg may never let it reach.
+    const legs = await db.getComboJobLegs(job.id);
+    for (const leg of legs) {
+      if (parseFloat(leg.opt_qty || 0) === 0) continue;
+      if (await deribitIsOptionExpired(leg.opt_instrument)) {
+        await db.appendComboLog(job.id, `Leg ${leg.leg_index + 1} option ${leg.opt_instrument} has expired — moving the whole combo to closing.`);
+        await sendTelegramAlert([
+          `⏰ <b>Strike Expired</b> — Combo Job #${job.id}`,
+          `Leg ${leg.leg_index + 1} (${leg.leg_type || "?"}): ${leg.opt_instrument} expired before the +$${parseFloat(job.target_pnl).toFixed(2)} target was reached.`,
+          `Closing all legs now.`,
+        ].join("\n"));
+        await db.updateComboJob(job.id, { status: "closing", triggered: true });
+        return;
+      }
+    }
+
+    const col = await deribitCollateral(job.token);
+    const pnl = col.total_usd - parseFloat(job.initial_total_usd);
+    const targetPnl = parseFloat(job.target_pnl);
+    await db.updateComboJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
+
+    if (!job.approach_alert_sent && targetPnl > 0 && pnl >= targetPnl * AC_APPROACH_THRESHOLD) {
+      await db.updateComboJob(job.id, { approach_alert_sent: 1 });
+      await sendTelegramAlert([
+        `⚠️ <b>Combo Auto-Close Approaching Target</b> — Job #${job.id}`,
+        `PnL: +$${pnl.toFixed(2)} / target +$${targetPnl.toFixed(2)} (${((pnl / targetPnl) * 100).toFixed(1)}%)`,
+        `Auto-close will trigger soon — keep an eye on it.`,
+      ].join("\n"));
+    }
+
+    if (col.total_usd >= parseFloat(job.target_total_usd)) {
+      await db.appendComboLog(job.id,
+        `TARGET HIT — ${col.coin_symbol} $${col.coin_equity_usd.toFixed(2)} + USDC $${col.usdc_equity.toFixed(2)} = $${col.total_usd.toFixed(2)} | PnL +$${pnl.toFixed(2)}`);
+      await db.updateComboJob(job.id, { status: "closing", triggered: true });
+    }
+    return;
+  }
+
+  if (job.status === "closing") {
+    const legs = await db.getComboJobLegs(job.id);
+    let allDone = true;
+    for (const leg of legs) {
+      const optQty = parseFloat(leg.opt_qty || 0), futQty = parseFloat(leg.fut_qty || 0);
+      const optDone = optQty === 0 || !!leg.opt_done;
+      const futDone = futQty === 0 || !!leg.fut_done;
+      if (optQty !== 0 && !optDone) { allDone = false; await autoCloseComboCloseLegOption(job.id, leg); continue; }
+      if (futQty !== 0 && !futDone) { allDone = false; await autoCloseComboCloseLegFutures(job.id, leg); continue; }
+      if (optQty === 0 && !leg.opt_done) await db.updateComboLeg(leg.id, { opt_done: 1 });
+      if (futQty === 0 && !leg.fut_done) await db.updateComboLeg(leg.id, { fut_done: 1 });
+    }
+    if (allDone) {
+      await db.updateComboJob(job.id, { status: "completed", completed: true });
+      await autoCloseComboFinishJob(job.id);
+    }
+    return;
+  }
+}
+
+async function autoCloseComboCloseLegOption(comboJobId, leg) {
+  const optQty = parseFloat(leg.opt_qty);
+
+  if (await deribitPositionFlat(leg.opt_instrument)) {
+    let closePrice = null;
+    if (leg.opt_order_id) {
+      try {
+        const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id });
+        closePrice = parseFloat(state.average_price ?? state.price ?? 0) || null;
+      } catch (e) { /* order no longer queryable — leave unknown */ }
+    }
+    await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option position flat (${leg.opt_instrument})${closePrice != null ? ` — filled @ ${closePrice}` : " — expired/settled or closed outside the worker"}.`);
+    const patch = { opt_done: 1 };
+    if (closePrice != null) patch.opt_close_price = closePrice;
+    await db.updateComboLeg(leg.id, patch);
+    return;
+  }
+
+  if (leg.opt_order_id) {
+    const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id });
+
+    if (state.order_state === "filled") {
+      const closePrice = parseFloat(state.average_price ?? state.price ?? 0);
+      await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option ${leg.opt_order_id} filled: ${leg.opt_instrument} @ ${closePrice}`);
+      await db.updateComboLeg(leg.id, { opt_done: 1, opt_close_price: closePrice });
+      return;
+    }
+    if (state.order_state === "cancelled" || state.order_state === "rejected") {
+      await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option order ${state.order_state} — re-placing.`);
+      await db.updateComboLeg(leg.id, { opt_order_id: null });
+      return;
+    }
+
+    const ticker = await deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(leg.opt_instrument)}`);
+    const bid = ticker?.best_bid_price || 0, ask = ticker?.best_ask_price || 0;
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : (ticker?.mark_price || 0);
+    const orderPrice = parseFloat(state.price ?? 0);
+
+    if (mid > 0 && Math.abs(mid - orderPrice) > AC_OPT_REQUOTE_THRESHOLD) {
+      await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option mid moved ${orderPrice.toFixed(5)} → ${mid.toFixed(5)}, re-quoting...`);
+      try { await deribitPrivate("cancel", { order_id: leg.opt_order_id }); } catch (e) { /* already filled/cancelled */ }
+      await db.updateComboLeg(leg.id, { opt_order_id: null });
+      const freshLegs = await db.getComboJobLegs(comboJobId);
+      const freshLeg = freshLegs.find((l) => l.id === leg.id);
+      if (freshLeg) await autoCloseComboCloseLegOption(comboJobId, freshLeg);
+    }
+    return;
+  }
+
+  const result = await deribitPlaceLimitClose(leg.opt_instrument, optQty, leg.opt_dir);
+  const orderId = result?.order?.order_id, price = result?.order?.price;
+  await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option maker close placed: ${Math.abs(optQty)}x ${leg.opt_instrument} @ ${price} [order ${orderId}]`);
+  await db.updateComboLeg(leg.id, { opt_order_id: orderId });
+}
+
+async function autoCloseComboCloseLegFutures(comboJobId, leg) {
+  const futQty = parseFloat(leg.fut_qty || 0);
+  if (futQty === 0 || !leg.fut_instrument) { await db.updateComboLeg(leg.id, { fut_done: 1 }); return; }
+  if (await deribitPositionFlat(leg.fut_instrument)) {
+    await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} futures position flat (${leg.fut_instrument}) — nothing left to close.`);
+    await db.updateComboLeg(leg.id, { fut_done: 1 });
+    return;
+  }
+  const result = await deribitPlaceMarketClose(leg.fut_instrument, futQty, leg.fut_dir);
+  const closePrice = parseFloat(result?.order?.average_price ?? result?.order?.price ?? 0);
+  await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} futures market close: ${Math.abs(futQty)}x ${leg.fut_instrument} @ ${closePrice}`);
+  await db.updateComboLeg(leg.id, { fut_done: 1, fut_close_price: closePrice });
+}
+
+async function autoCloseComboFinishJob(comboJobId) {
+  try {
+    const job = await db.getComboJobRaw(comboJobId);
+    if (!job) return;
+    const legs = await db.getComboJobLegs(comboJobId);
+    const col = await deribitCollateral(job.token).catch(() => null);
+    const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
+    await db.updateComboJob(comboJobId, { final_equity_usd: finalEquity });
+    const initial = parseFloat(job.initial_total_usd);
+    const netDiff = finalEquity - initial;
+    const legLines = legs.map((leg) => {
+      const optEntry = leg.opt_entry_price != null ? parseFloat(leg.opt_entry_price) : null;
+      const optClose = leg.opt_close_price != null ? parseFloat(leg.opt_close_price) : null;
+      const futEntry = leg.fut_entry_price != null ? parseFloat(leg.fut_entry_price) : null;
+      const futClose = leg.fut_close_price != null ? parseFloat(leg.fut_close_price) : null;
+      const parts = [`<b>Leg ${leg.leg_index + 1}</b> (${leg.leg_type || "?"}): ${leg.opt_instrument}`];
+      if (optEntry != null) parts.push(`  Opt: $${optEntry.toFixed(4)} → ${optClose != null ? "$" + optClose.toFixed(4) : "—"}`);
+      if (leg.fut_instrument && futEntry != null) parts.push(`  Fut: $${futEntry.toFixed(2)} → ${futClose != null ? "$" + futClose.toFixed(2) : "—"}`);
+      return parts.join("\n");
+    });
+    const lines = [
+      `✅ <b>Combo Auto-Close Complete</b> — Job #${comboJobId}`, ``, ...legLines, ``,
+      `Initial collateral: $${initial.toFixed(2)}`,
+      `Final collateral: $${finalEquity.toFixed(2)}`,
+      `<b>Net PnL: ${netDiff >= 0 ? "+" : ""}$${netDiff.toFixed(2)}</b>`,
+    ];
+    await sendTelegramAlert(lines.join("\n"));
+  } catch (e) { console.error(`[auto-close-combo #${comboJobId}] finish-job alert failed:`, e.message); }
+}
 
 app.get("/api/report", async (req, res) => {
   const exchangeKey = req.query.botId || req.query.exchange || "binance";
@@ -4726,7 +5534,14 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
   console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
-  db.pingDb().then(ok => { if (ok) { seedEnvAccounts(); resumeSessions(); } });
+  db.pingDb().then(ok => {
+    if (ok) {
+      seedEnvAccounts();
+      resumeSessions();
+      startAutoCloseWorker();
+      startAutoCloseComboWorker();
+    }
+  });
 });
 
 // Seed a default account per exchange from the .env keys (HYPE-MAIN /
