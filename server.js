@@ -162,13 +162,18 @@ const wss = new WebSocket.Server({
 app.use(cors());
 app.use(express.json());
 app.use(sessionAuthMiddleware);
-app.use(express.static(__dirname));
-// New Next.js frontend (static export, built locally — see frontend/README
-// or the migration commits for why). Served under /next, coexisting with
-// the classic index.html at the site root during the incremental,
-// page-by-page migration. Registered after sessionAuthMiddleware, so it's
-// gated by the same session-cookie auth as everything else.
-//
+
+// New Next.js frontend (static export, built locally — see the migration
+// commits for why) is now the site's DEFAULT homepage — Bot Configuration,
+// Accounts, PnL Report, Active Bot, Options Dashboard. Registered after
+// sessionAuthMiddleware, so it's gated by the same session-cookie auth as
+// everything else. The classic dashboard's own index.html is reserved at
+// the explicit /index.html path (below, registered first so it always wins
+// that one path) for pages not yet migrated — Bot Logs, Add Strategy,
+// Combined Simulator, Options Analysis — and as a fallback if something
+// here breaks. Existing bookmarks to /index.html keep working unchanged.
+app.get("/index.html", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
 // Next's static export produces BOTH a route.html file AND a same-named
 // route/ directory (RSC prefetch payloads) for every page — e.g.
 // options-dashboard.html alongside options-dashboard/. express.static sees
@@ -177,13 +182,14 @@ app.use(express.static(__dirname));
 // through to static asset serving, mirroring the try_files pattern Next's
 // own docs recommend for nginx.
 const nextOutDir = path.join(__dirname, "frontend/out");
-app.use("/next", (req, res, next) => {
+app.use((req, res, next) => {
   const urlPath = req.path === "/" ? "/index" : req.path.replace(/\/$/, "");
   const htmlPath = path.join(nextOutDir, urlPath + ".html");
   if (fs.existsSync(htmlPath)) return res.sendFile(htmlPath);
   next();
 });
-app.use("/next", express.static(nextOutDir));
+app.use(express.static(nextOutDir, { index: false }));
+app.use(express.static(__dirname));
 
 // ── Login / Logout / Status ──
 app.post("/api/login", (req, res) => {

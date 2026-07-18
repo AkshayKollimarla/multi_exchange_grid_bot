@@ -3,34 +3,37 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// Items not yet migrated to Next.js stay visible (full visual parity with
-// the classic dashboard's sidebar) but are inert during the incremental,
-// page-by-page migration — the classic dashboard remains reachable via the
-// "Classic Dashboard" link below and still has all of these working.
+// This is the site's default frontend now. Pages not yet migrated link to
+// the classic dashboard, which stays reachable at the explicit /index.html
+// path (server.js special-cases that one path so it's never shadowed by
+// this app's own index.html) — it lands on the classic dashboard's default
+// view; from there the usual classic sidebar reaches Bot Logs / Add
+// Strategy / Combined Simulator / Options Analysis directly.
+const CLASSIC = "/index.html";
 const TRADING_ITEMS = [
   { key: "config", label: "Bot Configuration", icon: "⚙️", href: "/bot-configuration" },
   { key: "accounts", label: "Accounts", icon: "👤", href: "/accounts" },
   { key: "report", label: "PnL Report", icon: "📈", href: "/pnl-report" },
-  { key: "logs", label: "Bot Logs", icon: "📜", href: null },
+  { key: "logs", label: "Bot Logs", icon: "📜", href: CLASSIC, external: true },
   { key: "active", label: "Active Bot", icon: "🟢", href: "/active-bot" },
 ];
 
 const OPTIONS_ITEMS = [
   { key: "optdash", label: "Options Dashboard", icon: "▦", href: "/options-dashboard" },
-  { key: "optadd", label: "Add Strategy", icon: "＋", href: null },
-  { key: "optsim", label: "Combined Simulator", icon: "▤", href: null },
-  { key: "optanalysis", label: "Options Analysis", icon: "／", href: null },
+  { key: "optadd", label: "Add Strategy", icon: "＋", href: CLASSIC, external: true },
+  { key: "optsim", label: "Combined Simulator", icon: "▤", href: CLASSIC, external: true },
+  { key: "optanalysis", label: "Options Analysis", icon: "／", href: CLASSIC, external: true },
 ];
 
 function NavItem({ item, pathname }) {
-  const isActive = item.href && pathname === item.href;
-  if (!item.href) {
+  if (item.external) {
     return (
-      <div className="nav-item disabled" title="Not migrated yet — use the Classic Dashboard">
+      <a href={item.href} className="nav-item" title="Opens the classic dashboard — not migrated yet">
         <span className="ic">{item.icon}</span> {item.label}
-      </div>
+      </a>
     );
   }
+  const isActive = pathname === item.href;
   return (
     <Link href={item.href} className={`nav-item${isActive ? " active" : ""}`}>
       <span className="ic">{item.icon}</span> {item.label}
