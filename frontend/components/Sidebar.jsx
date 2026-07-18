@@ -20,7 +20,7 @@ const TRADING_ITEMS = [
 
 const OPTIONS_ITEMS = [
   { key: "optdash", label: "Options Dashboard", icon: "▦", href: "/options-dashboard" },
-  { key: "optadd", label: "Add Strategy", icon: "＋", href: CLASSIC, external: true },
+  { key: "optadd", label: "Add Strategy", icon: "＋", href: "/add-strategy" },
   { key: "optsim", label: "Combined Simulator", icon: "▤", href: "/combined-simulator" },
   { key: "optanalysis", label: "Options Analysis", icon: "／", href: "/options-analysis" },
 ];

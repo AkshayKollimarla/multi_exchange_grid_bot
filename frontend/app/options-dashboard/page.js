@@ -151,10 +151,9 @@ export default function OptionsDashboardPage() {
             </div>
             <button className="btn-refresh" onClick={clearFilters}>Clear filters</button>
             <a
-              href="/index.html"
+              href="/add-strategy"
               className="btn btn-start"
               style={{ marginLeft: "auto", padding: "10px 18px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-              title="Add Strategy isn't migrated yet — opens the classic dashboard"
             >
               ➕ Add Strategy
             </a>
@@ -175,7 +174,7 @@ export default function OptionsDashboardPage() {
                 {!loading && error && <tr><td colSpan={13} className="empty-td">Error: {error}</td></tr>}
                 {!loading && !error && rows.length === 0 && (
                   <tr><td colSpan={13} className="empty-td">
-                    No strategies found. <a href="/index.html">Add one.</a>
+                    No strategies found. <a href="/add-strategy">Add one.</a>
                   </td></tr>
                 )}
                 {!loading && !error && rows.map((r, i) =>
@@ -239,7 +238,7 @@ function TradeRow({ t, combined, groupId, onDelete }) {
       <td style={{ whiteSpace: "nowrap" }}>
         {combined
           ? <a href={`/combined-simulator?group=${encodeURIComponent(groupId)}`} style={{ color: "#7c3aed", fontWeight: 600 }}>Edit Combined</a>
-          : <a href="/index.html" style={{ color: "var(--brand)", fontWeight: 600 }} title="Editing isn't migrated yet — opens the classic dashboard">Edit / Close</a>}
+          : <a href={`/add-strategy?id=${t.id}`} style={{ color: "var(--brand)", fontWeight: 600 }}>Edit / Close</a>}
         {" "}&nbsp;{" "}
         <a href="#" onClick={(e) => { e.preventDefault(); onDelete(t.id); }} style={{ color: "var(--red)" }}>Delete</a>
       </td>
