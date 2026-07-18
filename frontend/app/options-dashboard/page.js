@@ -191,7 +191,7 @@ export default function OptionsDashboardPage() {
                       </td>
                     </tr>
                   ) : (
-                    <TradeRow key={r.trade.id} t={r.trade} combined={r.combined} onDelete={deleteTrade} />
+                    <TradeRow key={r.trade.id} t={r.trade} combined={r.combined} groupId={r.groupId} onDelete={deleteTrade} />
                   )
                 )}
               </tbody>
@@ -213,7 +213,7 @@ export default function OptionsDashboardPage() {
   );
 }
 
-function TradeRow({ t, combined, onDelete }) {
+function TradeRow({ t, combined, groupId, onDelete }) {
   const typeColor = t.option_type === "PUT" ? "var(--red)" : "var(--green)";
   const statusStyle = t.status === "open"
     ? { background: "#d1fae5", color: "#059669" }
@@ -237,7 +237,9 @@ function TradeRow({ t, combined, onDelete }) {
       <td style={{ color: pnlColor, fontWeight: 600 }}>{t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}</td>
       <td style={{ color: "#7c3aed", fontWeight: 600 }}>{t.apy != null ? Number(t.apy).toFixed(2) + "%" : "—"}</td>
       <td style={{ whiteSpace: "nowrap" }}>
-        <a href="/index.html" style={{ color: "var(--brand)", fontWeight: 600 }} title="Editing isn't migrated yet — opens the classic dashboard">Edit / Close</a>
+        {combined
+          ? <a href={`/combined-simulator?group=${encodeURIComponent(groupId)}`} style={{ color: "#7c3aed", fontWeight: 600 }}>Edit Combined</a>
+          : <a href="/index.html" style={{ color: "var(--brand)", fontWeight: 600 }} title="Editing isn't migrated yet — opens the classic dashboard">Edit / Close</a>}
         {" "}&nbsp;{" "}
         <a href="#" onClick={(e) => { e.preventDefault(); onDelete(t.id); }} style={{ color: "var(--red)" }}>Delete</a>
       </td>

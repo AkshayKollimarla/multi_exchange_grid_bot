@@ -7,6 +7,12 @@ export function fmtCcy(v) {
   return (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function fmtNum(v, dec = 2) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || Number.isNaN(n)) return "—";
+  return n.toFixed(dec);
+}
+
 export function fmtDate(d) {
   if (!d) return "—";
   const s = String(d);
