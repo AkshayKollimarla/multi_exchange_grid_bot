@@ -8,11 +8,12 @@ import { usePathname } from "next/navigation";
 // page-by-page migration — the classic dashboard remains reachable via the
 // "Classic Dashboard" link below and still has all of these working.
 const TRADING_ITEMS = [
-  { key: "config", label: "Bot Configuration", icon: "⚙️", href: null },
   { key: "accounts", label: "Accounts", icon: "👤", href: null },
   { key: "report", label: "PnL Report", icon: "📈", href: null },
   { key: "logs", label: "Bot Logs", icon: "📜", href: null },
-  { key: "active", label: "Active Bot", icon: "🟢", href: null },
+  // Bot Configuration is folded into Active Bot — one simple screen to
+  // configure, launch, monitor, and stop bots, instead of two separate pages.
+  { key: "active", label: "Active Bot", icon: "🟢", href: "/active-bot" },
 ];
 
 const OPTIONS_ITEMS = [
@@ -42,7 +43,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   return (
     <aside className="sidebar">
-      <div className="brand"><span className="logo">▲</span> GridBot</div>
+      <div className="brand"><span className="logo">▲</span> GridBot-MultiExchange</div>
       <div className="nav-group">Trading</div>
       {TRADING_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
       <div className="nav-group">Options Strategy</div>
