@@ -310,6 +310,12 @@ function AddStrategyInner() {
     setForm((f) => ({ ...f, ...patch }));
   }
 
+  // Fire-and-forget — a failed Telegram send should never block or fail
+  // the execute flow itself.
+  function sendEntryAlert(token, legs) {
+    apiPost("/api/entry-alert", { token, legs }).catch(() => {});
+  }
+
   async function handleExecute() {
     setExecuteError(null); setExecLogs([]);
     const payload = buildPayload();
@@ -343,6 +349,7 @@ function AddStrategyInner() {
         if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
         const price = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
         await persistFillPrices({ fut_entry_price: price != null ? String(price) : payload.fut_entry_price });
+        sendEntryAlert(payload.token, [{ fut_instrument: perp.instrument_name, fut_price: price }]);
         setPhase("done");
         return;
       }
@@ -353,13 +360,16 @@ function AddStrategyInner() {
       });
       if (markUsd != null) await persistFillPrices({ opt_entry_price: markUsd.toFixed(4) });
 
+      let futPrice = null, futInstName = null;
       if (futQty !== 0) {
         setPhase("futures_pending");
         const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}&prefer=${optInst.settlement}`);
         if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
-        const futPrice = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
+        futInstName = perp.instrument_name;
+        futPrice = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
         await persistFillPrices({ fut_entry_price: futPrice != null ? String(futPrice) : payload.fut_entry_price });
       }
+      sendEntryAlert(payload.token, [{ opt_instrument: optInst.instrument_name, opt_price: markUsd, fut_instrument: futInstName, fut_price: futPrice }]);
       setPhase("done");
     } catch (e) {
       setExecuteError(e.message);

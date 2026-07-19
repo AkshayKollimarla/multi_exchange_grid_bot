@@ -4309,6 +4309,36 @@ app.get("/api/deribit/perpetual", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fires once per successful Execute (Add Strategy: single leg; Combined
+// Simulator: every leg that filled) — independent of whether Auto-Close is
+// also started, so a plain Execute still gets an entry confirmation.
+// legs: [{ leg_type?, opt_instrument?, opt_price?, fut_instrument?, fut_price? }]
+app.post("/api/entry-alert", async (req, res) => {
+  try {
+    const { token, legs } = req.body || {};
+    if (!token || !Array.isArray(legs) || !legs.length) {
+      return res.status(400).json({ error: "token and legs[] required" });
+    }
+    const col = await deribitCollateral(token).catch(() => null);
+    const multi = legs.length > 1;
+    const legLines = legs.map((l, i) => {
+      const prefix = multi ? `<b>Leg ${i + 1}${l.leg_type ? ` (${l.leg_type})` : ""}</b>` : "";
+      const parts = [prefix].filter(Boolean);
+      if (l.opt_instrument && l.opt_price != null) parts.push(`${multi ? "  " : ""}Option: ${l.opt_instrument} @ $${Number(l.opt_price).toFixed(4)}`);
+      if (l.fut_instrument && l.fut_price != null) parts.push(`${multi ? "  " : ""}Futures: ${l.fut_instrument} @ $${Number(l.fut_price).toFixed(2)}`);
+      return parts.join("\n");
+    }).filter((s) => s.trim());
+    const lines = [
+      `🟢 <b>${multi ? "Combined Strategy" : "Strategy"} Entered</b>`,
+      ...legLines,
+      ``,
+      `Initial collateral: $${(col?.total_usd ?? 0).toFixed(2)}`,
+    ];
+    const alert = await sendTelegramAlert(lines.join("\n"));
+    res.json({ ok: alert.ok, error: alert.error });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ══════════════════════════════════════════════════════════════
 //  AUTO-CLOSE JOBS — single-leg (Add Strategy) + combo (Combined
 //  Simulator). CRUD here; the actual polling logic that drives status

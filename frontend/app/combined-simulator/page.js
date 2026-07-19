@@ -332,6 +332,13 @@ function CombinedSimulatorInner() {
       });
       comboFilledLegsRef.current = filledLegs;
 
+      const entryAlertLegs = filledLegs
+        .filter((l) => l.optFillPrice != null || l.futFillPrice != null)
+        .map((l) => ({ leg_type: l.legType, opt_instrument: l.optInst, opt_price: l.optFillPrice, fut_instrument: l.futInst, fut_price: l.futFillPrice }));
+      if (entryAlertLegs.length) {
+        apiPost("/api/entry-alert", { token: plans[0]?.token || "ETH", legs: entryAlertLegs }).catch(() => {});
+      }
+
       const failedLegs = plans.filter((p, idx) =>
         (p.optQty !== 0 && optOutcomes[idx].status === "rejected") ||
         (p.futQty !== 0 && optOutcomes[idx].status !== "rejected" && futOutcomes[idx].status === "rejected")
