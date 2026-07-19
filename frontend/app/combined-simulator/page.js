@@ -94,6 +94,8 @@ function CombinedSimulatorInner() {
   const [instruments, setInstruments] = useState([]);
   const [msg, setMsg] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAcct, setSelectedAcct] = useState("");
 
   // ── Multi-leg execute (maker-chase, all legs at once) ────────────────
   const [comboPhase, setComboPhase] = useState("idle"); // idle | running | done | error
@@ -113,6 +115,15 @@ function CombinedSimulatorInner() {
 
   useEffect(() => {
     apiGet("/api/deribit/instruments").then((list) => setInstruments(Array.isArray(list) ? list : [])).catch(() => {});
+    // Cosmetic only — matches Add Strategy's account selector for
+    // consistency. Execution always uses the single global DERIBIT_CLIENT_ID/
+    // SECRET from .env, not whichever account is picked here; real
+    // per-account execution isn't wired up for options yet.
+    apiGet("/api/accounts").then((list) => {
+      const deribitAccts = (Array.isArray(list) ? list : []).filter((a) => a.exchange === "deribit");
+      setAccounts(deribitAccts);
+      if (deribitAccts.length) setSelectedAcct(String(deribitAccts[0].id));
+    }).catch(() => {});
   }, []);
 
   const loadGroup = useCallback(async (groupId) => {
@@ -456,6 +467,16 @@ function CombinedSimulatorInner() {
             {legs.map((l, i) => <LegPill key={i} type={l.type} />)}
           </div>
         </div>
+
+        {accounts.length > 0 && (
+          <div className="field" style={{ maxWidth: 320, marginBottom: 16 }}>
+            <label>Account</label>
+            <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+            <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
+          </div>
+        )}
 
         {editGroupId && (
           <div style={{ marginBottom: 10, fontSize: 12, color: "var(--muted)" }}>
