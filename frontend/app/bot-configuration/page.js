@@ -137,12 +137,13 @@ export default function BotConfigurationPage() {
                       : filteredSymbols.map((s) => (
                         <div
                           key={s.ccxt}
-                          onClick={() => { setField("symbol", s.ccxt); setSymbolQuery(s.native); }}
+                          onClick={() => { setField("symbol", s.ccxt); setSymbolQuery(s.ccxt); }}
                           style={{ padding: "8px 12px", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
                           onMouseEnter={(e) => e.currentTarget.style.background = "var(--brand-soft)"}
                           onMouseLeave={(e) => e.currentTarget.style.background = ""}
                         >
-                          {s.native}
+                          {s.ccxt}
+                          {s.native !== s.ccxt && <span style={{ color: "var(--muted)", marginLeft: 8, fontSize: 11, fontWeight: 500 }}>{s.native}</span>}
                         </div>
                       ))}
                   </div>
