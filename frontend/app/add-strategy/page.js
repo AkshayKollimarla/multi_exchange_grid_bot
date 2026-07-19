@@ -76,10 +76,21 @@ function AddStrategyInner() {
   const [note, setNote] = useState("");
   const [msg, setMsg] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAcct, setSelectedAcct] = useState("");
   const fetchSeq = useRef(0);
 
   useEffect(() => {
     apiGet("/api/deribit/instruments").then((list) => setInstruments(Array.isArray(list) ? list : [])).catch(() => {});
+    // Cosmetic only — matches Bot Configuration's account selector for
+    // consistency. Execution always uses the single global DERIBIT_CLIENT_ID/
+    // SECRET from .env (see server.js), not whichever account is picked here;
+    // real per-account execution isn't wired up for options yet.
+    apiGet("/api/accounts").then((list) => {
+      const deribitAccts = (Array.isArray(list) ? list : []).filter((a) => a.exchange === "deribit");
+      setAccounts(deribitAccts);
+      if (deribitAccts.length) setSelectedAcct(String(deribitAccts[0].id));
+    }).catch(() => {});
   }, []);
 
   const loadTrade = useCallback(async (id) => {
@@ -384,6 +395,13 @@ function AddStrategyInner() {
     await handleExecute();
   }
 
+  // Single primary button: with a Target PnL entered, execute then start
+  // auto-close the instant it fills; without one, just execute.
+  async function handlePrimaryExecute() {
+    if (parseFloat(acTargetPnl) > 0) await handleExecuteAndAutoClose();
+    else await handleExecute();
+  }
+
   async function pollAcJob(jobId) {
     try {
       const d = await apiGet(`/api/auto-close?id=${jobId}`);
@@ -490,6 +508,15 @@ function AddStrategyInner() {
                   </>
                 ))}
               </div>
+              {accounts.length > 0 && (
+                <div className="field">
+                  <label>Account</label>
+                  <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
+                    {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
+                </div>
+              )}
               <div className="row-2">
                 {field("Option Type", (
                   <select value={form.option_type} onChange={(e) => handleTypeChange(e.target.value)}>
@@ -564,13 +591,33 @@ function AddStrategyInner() {
                 {field("Market Making PL", numInput("market_making_pl"))}
               </div>
 
-              <div className="btn-row" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-                <button className="btn btn-start" onClick={handleSave} disabled={saving}>💾 {editId != null ? "Update Strategy" : "Save Strategy"}</button>
-                <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleExecute} disabled={executing}>⚡ Execute</button>
-                {editId != null && <button className="btn" style={{ background: "var(--emerald,#16a34a)", color: "#fff" }} onClick={handleSaveAsNew} disabled={saving}>💾 Save as New</button>}
-                <button className="btn btn-stop" onClick={resetForm}>↺ Reset</button>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 10, marginTop: 18 }}>
+                <button className="btn" style={{ background: "var(--brand-2)", color: "#fff" }} onClick={handleSave} disabled={saving}>
+                  {saving ? "Saving…" : editId != null ? "Update Strategy" : "Save Strategy"}
+                </button>
+                {editId != null && (
+                  <button className="btn" style={{ background: "var(--green)", color: "#fff" }} onClick={handleSaveAsNew} disabled={saving}>
+                    {saving ? "Saving…" : "Save as New Strategy"}
+                  </button>
+                )}
+                <button className="btn" style={{ background: "var(--surface)", color: "var(--ink-2)", border: "1.5px solid var(--border-2)", boxShadow: "none" }} onClick={resetForm}>
+                  Reset
+                </button>
+                <div className="field" style={{ margin: 0, width: 130 }}>
+                  <label>Target PnL ($)</label>
+                  <input type="number" step="any" min="0" placeholder="e.g. 5" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} />
+                </div>
+                <button
+                  className="btn"
+                  style={{ background: "#ea580c", color: "#fff" }}
+                  onClick={handlePrimaryExecute}
+                  disabled={executing || acStarting}
+                >
+                  {executing ? "Executing…" : acStarting ? "Starting Monitor…" : `⚡ Execute${parseFloat(acTargetPnl) > 0 ? " + Auto-Close" : ""}`}
+                </button>
               </div>
               {msg && <div style={{ fontSize: 12, marginTop: 8, color: msg.ok === false ? "var(--red)" : msg.ok ? "var(--green)" : "var(--muted)" }}>{msg.text}</div>}
+              {acError && <div style={{ fontSize: 12, marginTop: 8, color: "var(--red)" }}>{acError}</div>}
 
               {(phase !== "idle" || executeError) && (
                 <div style={{ marginTop: 14, padding: 12, background: "#0b1220", borderRadius: 8, fontFamily: "var(--font-mono)", fontSize: 11.5 }}>
@@ -588,25 +635,6 @@ function AddStrategyInner() {
                   </div>
                 </div>
               )}
-
-              <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>🎯 Execute + Auto-Close</div>
-                {!acJob || ["completed", "failed", "stopped"].includes(acJob.status) ? (
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <input type="number" placeholder="Target PnL $" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} style={{ maxWidth: 160, padding: "8px 10px", border: "1.5px solid var(--border-2)", borderRadius: 8 }} />
-                    <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleExecuteAndAutoClose} disabled={executing || acStarting}>Execute + Monitor</button>
-                    {editId != null && <button className="btn-refresh" onClick={startAutoClose} disabled={acStarting}>Monitor Existing Position</button>}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12 }}>
-                    Job #{acJob.id} — <b>{acJob.status}</b> · target +${Number(acJob.target_pnl).toFixed(2)}
-                    {acJob.last_equity_usd != null && <> · equity ${Number(acJob.last_equity_usd).toFixed(2)}</>}
-                    {" "}<button className="btn-refresh" onClick={stopAutoClose} style={{ marginLeft: 8 }}>Stop</button>
-                    {" "}<a href={`/monitor?trade_id=${savedTradeIdRef.current || editId || ""}`} style={{ marginLeft: 8, color: "var(--brand)", fontWeight: 600 }}>Open Monitor</a>
-                  </div>
-                )}
-                {acError && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 6 }}>{acError}</div>}
-              </div>
             </div>
           </div>
 
@@ -644,6 +672,75 @@ function AddStrategyInner() {
                 <CalcRow label="Est Net Downside (Expiry)" val={fmtCcyOrDash(calc.netDnExpiry)} signed big />
               </CalcGroup>
             </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 18 }}>
+          <div className="card-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span>Auto-Close on Profit</span>
+            {acJob && (
+              <span className={`pill ${
+                acJob.status === "completed" ? "pill-green"
+                : acJob.status === "failed" ? "pill-red"
+                : acJob.status === "stopped" ? "pill-blue"
+                : "pill-amber"
+              }`}>
+                {acJob.status === "active" ? "● Monitoring"
+                  : acJob.status === "closing_option" ? "● Closing Option"
+                  : acJob.status === "closing_futures" ? "● Closing Futures"
+                  : acJob.status === "completed" ? "✓ Done"
+                  : acJob.status === "failed" ? "✕ Failed"
+                  : acJob.status === "stopped" ? "■ Stopped"
+                  : acJob.status}
+              </span>
+            )}
+          </div>
+          <div className="card-body">
+            {(!acJob || ["completed", "failed", "stopped"].includes(acJob.status)) ? (
+              <>
+                {acJob && (
+                  <div style={{ fontSize: 12, padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: "var(--surface-2)", color: "var(--muted)" }}>
+                    Previous job #{acJob.id}: {acJob.status}{acJob.error_msg ? ` — ${acJob.error_msg}` : ""}
+                  </div>
+                )}
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 10 }}>
+                  <div className="field" style={{ margin: 0, width: 160 }}>
+                    <label>Booking PnL Target ($)</label>
+                    <input type="number" step="any" min="0" placeholder="e.g. 500" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} />
+                  </div>
+                  <div className="field" style={{ margin: 0 }}>
+                    <label>Monitors</label>
+                    <div style={{ padding: "11px 14px", borderRadius: "var(--r-sm)", background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: 13, color: "var(--muted)" }}>
+                      Account Equity ($) — frozen at start, runs on server
+                    </div>
+                  </div>
+                  {parseFloat(acTargetPnl) > 0 && (
+                    <div className="field" style={{ margin: 0 }}>
+                      <label>Closes When PnL ≥</label>
+                      <div style={{ padding: "11px 14px", borderRadius: "var(--r-sm)", background: "var(--green-soft)", border: "1px solid var(--green)", fontSize: 13, fontWeight: 700, color: "var(--green-2)" }}>
+                        +${parseFloat(acTargetPnl).toFixed(2)}
+                      </div>
+                    </div>
+                  )}
+                  <button className="btn" style={{ background: "var(--green)", color: "#fff" }} onClick={startAutoClose} disabled={acStarting || editId == null || !parseFloat(acTargetPnl)}>
+                    {acStarting ? "Starting…" : "▶ Start Auto-Close"}
+                  </button>
+                </div>
+                <div className="hint" style={{ marginTop: 10 }}>
+                  Runs on the server — keeps monitoring and closes automatically even if you close this tab.
+                  {editId == null && " Save and execute the strategy first, then reload it in edit mode to start a standalone monitor."}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 13 }}>
+                Job #{acJob.id} — target +${Number(acJob.target_pnl).toFixed(2)}
+                {acJob.last_equity_usd != null && <> · equity ${Number(acJob.last_equity_usd).toFixed(2)}</>}
+                <div className="btn-row" style={{ marginTop: 10, gridTemplateColumns: "auto auto" }}>
+                  <button className="btn-refresh" onClick={stopAutoClose}>Stop</button>
+                  <a href={`/monitor?trade_id=${savedTradeIdRef.current || editId || ""}`} className="btn-refresh" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>Open Monitor</a>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>
