@@ -57,7 +57,13 @@ export default function BotConfigurationPage() {
   }, [form.priceSource]);
 
   const filteredSymbols = symbolQuery
-    ? symbols.filter((s) => s.native.toUpperCase().includes(symbolQuery.toUpperCase())).slice(0, 40)
+    ? symbols.filter((s) => {
+        const q = symbolQuery.toUpperCase();
+        // Match both forms — many Hyperliquid spot pairs (e.g. HYPE/USDC)
+        // have an opaque native id like "@107" instead of a readable
+        // ticker, so searching "hyp" only works against ccxt ("HYPE/USDC").
+        return s.ccxt.toUpperCase().includes(q) || s.native.toUpperCase().includes(q);
+      }).slice(0, 40)
     : symbols.slice(0, 40);
 
   function setField(key, value) { setForm((f) => ({ ...f, [key]: value })); }

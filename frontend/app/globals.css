@@ -481,6 +481,47 @@ a { color: inherit; text-decoration: none; }
 .pill-green  { background: var(--green-soft); color: var(--green-2); }
 .pill-red    { background: var(--red-soft);   color: var(--red-2); }
 
+/* ══════════════════════════════════════════════════════════════
+   LOG FEED — terminal-grade
+══════════════════════════════════════════════════════════════ */
+.log-feed {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 16px 18px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: linear-gradient(180deg, #0c1220 0%, #0a0f1c 100%);
+  color: #cbd5e1;
+  border-radius: var(--r-md);
+  line-height: 1.7;
+  letter-spacing: 0;
+  border: 1px solid #1e293b;
+}
+.log-line {
+  padding: 3px 0;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.log-line:last-child { border-bottom: none; }
+.log-time {
+  color: #64748b;
+  min-width: 78px;
+  font-weight: 600;
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+.log-text {
+  flex: 1;
+  word-break: break-word;
+}
+.log-text.info    { color: #cbd5e1; }
+.log-text.success { color: #4ade80; font-weight: 600; }
+.log-text.warn    { color: #fbbf24; font-weight: 600; }
+.log-text.error   { color: #f87171; font-weight: 700; }
+
 /* Scrollbars (subtle) */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
