@@ -96,6 +96,11 @@ function CombinedSimulatorInner() {
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [selectedAcct, setSelectedAcct] = useState("");
+  const legCardRefs = useRef({});
+
+  function refreshAllLegs() {
+    Object.values(legCardRefs.current).forEach((r) => r?.refreshTicker());
+  }
 
   // ── Multi-leg execute (maker-chase, all legs at once) ────────────────
   const [comboPhase, setComboPhase] = useState("idle"); // idle | running | done | error
@@ -475,15 +480,18 @@ function CombinedSimulatorInner() {
           </div>
         </div>
 
-        {accounts.length > 0 && (
-          <div className="field" style={{ maxWidth: 320, marginBottom: 16 }}>
-            <label>Account</label>
-            <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
-              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-            <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+          {accounts.length > 0 && (
+            <div className="field" style={{ maxWidth: 320, margin: 0 }}>
+              <label>Account</label>
+              <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
+            </div>
+          )}
+          <button className="btn-refresh" onClick={refreshAllLegs}>↻ Refresh All Legs</button>
+        </div>
 
         {editGroupId && (
           <div style={{ marginBottom: 10, fontSize: 12, color: "var(--muted)" }}>
@@ -495,7 +503,8 @@ function CombinedSimulatorInner() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 18 }}>
           {legs.map((leg, idx) => (
             <LegCard
-              key={idx} leg={leg} idx={idx} instruments={instruments}
+              key={idx} ref={(el) => { legCardRefs.current[idx] = el; }}
+              leg={leg} idx={idx} instruments={instruments}
               onChangeType={changeLegType} onSetField={setLegField}
               onRemove={removeLeg} canRemove={legs.length > 2}
             />

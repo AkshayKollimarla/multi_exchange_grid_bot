@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { fmtCcy, fmtNum } from "@/lib/format";
 import { strikeNumber } from "@/lib/blackScholes";
@@ -61,7 +61,7 @@ export function LegCalc({ derived }) {
 // dropdowns (shares the `instruments` chain fetched once at the page level),
 // entry fields, and its own auto-calc panel. Mirrors index.html's
 // odbLegCardHtml + odbLegLive* functions.
-export default function LegCard({ leg, idx, instruments, onChangeType, onSetField, onRemove, canRemove }) {
+const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeType, onSetField, onRemove, canRemove }, ref) {
   const { type, form } = leg;
   const color = LEG_COLORS[type];
   const [manualToken, setManualToken] = useState(form.token && !tokensFor(instruments).includes(form.token) ? form.token : "");
@@ -96,6 +96,13 @@ export default function LegCard({ leg, idx, instruments, onChangeType, onSetFiel
       if (seq === fetchSeq.current) setNote("Live fetch failed: " + e.message);
     }
   }
+
+  // Exposes a single refreshTicker() so the parent's "Refresh All" button
+  // (beside the Account dropdown) can re-fetch every leg's live price/IV at
+  // once, instead of each leg only being refreshable via its own button.
+  useImperativeHandle(ref, () => ({
+    refreshTicker: () => fetchLivePrice(form.token, form.expiry, form.options_strike),
+  }));
 
   function handleTokenChange(v) {
     onSetField(idx, "token", v);
@@ -203,6 +210,7 @@ export default function LegCard({ leg, idx, instruments, onChangeType, onSetFiel
       </div>
     </div>
   );
-}
+});
 
+export default LegCard;
 export { computeDerived, strikeNumber };
