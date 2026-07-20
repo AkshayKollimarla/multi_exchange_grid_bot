@@ -666,7 +666,10 @@ function computeOptionsDerived(d) {
   const option_type       = (d.option_type || "PUT").toUpperCase();
   const strike_num        = optStrikeNumber(d.options_strike);
 
-  const total_theta_gain_loss   = opt_entry_qty * opt_entry_price;
+  // opt_entry_qty is negative for SHORT legs, positive for LONG — theta decay
+  // is a gain for a short seller and a loss for a long holder, i.e. the
+  // opposite sign of the raw qty*price product.
+  const total_theta_gain_loss   = -(opt_entry_qty * opt_entry_price);
   const per_day_theta_gain_loss = optDiv(total_theta_gain_loss, days_to_expiry);
   const total_baskets           = optDiv(down_distance, basket_distance);
 
