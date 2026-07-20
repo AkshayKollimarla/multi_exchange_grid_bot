@@ -191,6 +191,8 @@ function CombinedSimulatorInner() {
   const bookedPnl = legs.reduce((s, l) => s + n(l.form.net_booked_pnl), 0);
   const mmPl = legs.reduce((s, l) => s + n(l.form.market_making_pl), 0);
   const combinedApy = totalInvestment ? (bookedPnl / totalInvestment) * 365 * 100 : null;
+  const totalTheta = deriveds.reduce((s, d) => s + n(d.total_theta_gain_loss), 0);
+  const perDayTheta = deriveds.reduce((s, d) => s + n(d.per_day_theta_gain_loss), 0);
 
   const upside = {
     opt: deriveds.reduce((s, d) => s + n(d.upside_opt_pnl), 0), fut: deriveds.reduce((s, d) => s + n(d.upside_fut_pnl), 0),
@@ -519,11 +521,13 @@ function CombinedSimulatorInner() {
         <div className="card">
           <div className="card-header">Combined Net PnL</div>
           <div className="card-body">
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 14 }}>
               <div className="pnl-card pnl-neutral"><div className="stat-label">Total Investment</div><div className="stat-value blue">{fmtCcy(totalInvestment)}</div></div>
               <div className="pnl-card pnl-neutral"><div className="stat-label">Booked PnL</div><div className="stat-value" style={{ color: bookedPnl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(bookedPnl)}</div></div>
               <div className="pnl-card pnl-neutral"><div className="stat-label">MM PL</div><div className="stat-value" style={{ color: mmPl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(mmPl)}</div></div>
               <div className="pnl-card pnl-neutral"><div className="stat-label">Combined APY</div><div className="stat-value" style={{ color: "#9333ea" }}>{combinedApy != null ? combinedApy.toFixed(2) + "%" : "—"}</div></div>
+              <div className="pnl-card pnl-neutral"><div className="stat-label">Total Theta</div><div className="stat-value" style={{ color: totalTheta >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(totalTheta)}</div></div>
+              <div className="pnl-card pnl-neutral"><div className="stat-label">Per Day Theta</div><div className="stat-value" style={{ color: perDayTheta >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(perDayTheta)}</div></div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <ScenarioBlock title="📈 Upside Scenario" scenario="up" totals={upside} deriveds={deriveds} bsToday={bsUpsideCombined} legs={legs} />
