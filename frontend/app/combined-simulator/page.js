@@ -120,10 +120,11 @@ function CombinedSimulatorInner() {
 
   useEffect(() => {
     apiGet("/api/deribit/instruments").then((list) => setInstruments(Array.isArray(list) ? list : [])).catch(() => {});
-    // Cosmetic only — matches Add Strategy's account selector for
-    // consistency. Execution always uses the single global DERIBIT_CLIENT_ID/
-    // SECRET from .env, not whichever account is picked here; real
-    // per-account execution isn't wired up for options yet.
+    // Drives real per-account execution — every leg's order/collateral/
+    // entry-alert call below threads selectedAcct through as account_id.
+    // Leaving it unselected falls back to the global .env Deribit key
+    // (server.js resolveDeribitCreds), matching every group saved before
+    // accounts were wired up.
     apiGet("/api/accounts").then((list) => {
       const deribitAccts = (Array.isArray(list) ? list : []).filter((a) => a.exchange === "deribit");
       setAccounts(deribitAccts);
@@ -141,6 +142,7 @@ function CombinedSimulatorInner() {
       setEditIds(members.map((m) => m.id));
       setEditGroupId(groupId);
       comboGroupIdRef.current = groupId;
+      if (members[0]?.account_id) setSelectedAcct(String(members[0].account_id));
     } catch (e) {
       setMsg({ ok: false, text: "Load failed: " + e.message });
     }
@@ -227,7 +229,7 @@ function CombinedSimulatorInner() {
     try {
       const groupId = `combined_${Date.now()}`;
       for (const leg of legs) {
-        await apiPost("/api/options-db/trades", { ...leg.form, group_id: groupId });
+        await apiPost("/api/options-db/trades", { ...leg.form, group_id: groupId, account_id: selectedAcct || undefined });
       }
       setMsg({ ok: true, text: `✓ Saved ${legs.length} legs.` });
       setTimeout(() => router.push("/options-dashboard"), 1200);
@@ -241,7 +243,7 @@ function CombinedSimulatorInner() {
     setSaving(true); setMsg({ ok: null, text: "Saving…" });
     try {
       for (let i = 0; i < legs.length; i++) {
-        const leg = legs[i], id = editIds[i], body = { ...leg.form, group_id: editGroupId };
+        const leg = legs[i], id = editIds[i], body = { ...leg.form, group_id: editGroupId, account_id: selectedAcct || undefined };
         if (id) await apiPut(`/api/options-db/trades/${id}`, body);
         else await apiPost("/api/options-db/trades", body);
       }
@@ -258,7 +260,7 @@ function CombinedSimulatorInner() {
     try {
       const newGroupId = `combined_${Date.now()}`;
       for (const leg of legs) {
-        await apiPost("/api/options-db/trades", { ...leg.form, group_id: newGroupId });
+        await apiPost("/api/options-db/trades", { ...leg.form, group_id: newGroupId, account_id: selectedAcct || undefined });
       }
       setMsg({ ok: true, text: "✓ Saved as new combined group." });
       setTimeout(() => router.push("/options-dashboard"), 1200);
@@ -290,7 +292,7 @@ function CombinedSimulatorInner() {
     });
     const newIds = [...editIds];
     for (let i = 0; i < legs.length; i++) {
-      const payload = { ...legs[i].form, ...priceByIndex[i], group_id: groupId };
+      const payload = { ...legs[i].form, ...priceByIndex[i], group_id: groupId, account_id: selectedAcct || undefined };
       try {
         if (newIds[i]) await apiPut(`/api/options-db/trades/${newIds[i]}`, payload);
         else newIds[i] = (await apiPost("/api/options-db/trades", payload)).id;
@@ -335,7 +337,7 @@ function CombinedSimulatorInner() {
         addComboLog(`Leg ${p.i + 1} (${p.leg.type}): placing option`);
         return await runOptionEntry({
           instrument: p.optInst.instrument_name, qty: p.optQty, isCoinSettled: p.optInst.settlement === "coin",
-          onLog: (m) => addComboLog(`Leg ${p.i + 1}: ${m}`), isCancelled: () => comboCancelRef.current,
+          onLog: (m) => addComboLog(`Leg ${p.i + 1}: ${m}`), isCancelled: () => comboCancelRef.current, accountId: selectedAcct,
         });
       }));
 
@@ -352,7 +354,7 @@ function CombinedSimulatorInner() {
         if (p.futQty === 0) return null;
         if (p.optQty !== 0 && optOutcomes[idx].status === "rejected") return null;
         if (!p.futInst) throw new Error(`No perpetual futures instrument found for ${p.token}`);
-        return await runFuturesEntry({ instrument: p.futInst, qty: p.futQty, onLog: (m) => addComboLog(`Leg ${p.i + 1}: ${m}`) });
+        return await runFuturesEntry({ instrument: p.futInst, qty: p.futQty, onLog: (m) => addComboLog(`Leg ${p.i + 1}: ${m}`), accountId: selectedAcct });
       }));
 
       plans.forEach((p, idx) => {
@@ -372,7 +374,7 @@ function CombinedSimulatorInner() {
         .filter((l) => l.optFillPrice != null || l.futFillPrice != null)
         .map((l) => ({ leg_type: l.legType, opt_instrument: l.optInst, opt_price: l.optFillPrice, fut_instrument: l.futInst, fut_price: l.futFillPrice }));
       if (entryAlertLegs.length) {
-        apiPost("/api/entry-alert", { token: plans[0]?.token || "ETH", legs: entryAlertLegs }).catch(() => {});
+        apiPost("/api/entry-alert", { token: plans[0]?.token || "ETH", legs: entryAlertLegs, account_id: selectedAcct || undefined }).catch(() => {});
         await persistExecutedLegs(filledLegs);
       }
 
@@ -442,7 +444,7 @@ function CombinedSimulatorInner() {
     setComboAcStarting(true);
     try {
       const token = (legs[0]?.form.token || "ETH").toUpperCase();
-      const bal = await getCollateral(token);
+      const bal = await getCollateral(token, selectedAcct);
       if (bal.error) throw new Error(bal.error);
 
       const legsPayload = legsToUse.map((l) => ({
@@ -457,6 +459,7 @@ function CombinedSimulatorInner() {
         initial_total_usd: bal.total_usd ?? 0,
         target_pnl: parseFloat(comboTargetPnl),
         legs: legsPayload,
+        account_id: selectedAcct || undefined,
       });
 
       clearInterval(comboAcTimerRef.current);

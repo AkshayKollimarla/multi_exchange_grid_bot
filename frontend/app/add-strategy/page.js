@@ -82,10 +82,11 @@ function AddStrategyInner() {
 
   useEffect(() => {
     apiGet("/api/deribit/instruments").then((list) => setInstruments(Array.isArray(list) ? list : [])).catch(() => {});
-    // Cosmetic only — matches Bot Configuration's account selector for
-    // consistency. Execution always uses the single global DERIBIT_CLIENT_ID/
-    // SECRET from .env (see server.js), not whichever account is picked here;
-    // real per-account execution isn't wired up for options yet.
+    // Drives real per-account execution — every order/collateral/entry-alert
+    // call below threads selectedAcct through as account_id. Leaving it
+    // unselected falls back to the global .env Deribit key (server.js
+    // resolveDeribitCreds), matching every strategy saved before accounts
+    // were wired up.
     apiGet("/api/accounts").then((list) => {
       const deribitAccts = (Array.isArray(list) ? list : []).filter((a) => a.exchange === "deribit");
       setAccounts(deribitAccts);
@@ -101,6 +102,7 @@ function AddStrategyInner() {
       setForm(tradeToForm(t));
       setIv("");
       setEditId(id);
+      if (t.account_id) setSelectedAcct(String(t.account_id));
       const isLiveToken = tokensFor(instruments).includes(t.token);
       if (!isLiveToken && t.token) setManualToken(t.token);
       else setManualToken("");
@@ -234,6 +236,7 @@ function AddStrategyInner() {
     const f = {};
     for (const k of FIELD_KEYS) f[k] = form[k] ?? "";
     if (f.token === "__other__") f.token = manualToken;
+    f.account_id = selectedAcct || "";
     return f;
   }
 
@@ -312,8 +315,8 @@ function AddStrategyInner() {
 
   // Fire-and-forget — a failed Telegram send should never block or fail
   // the execute flow itself.
-  function sendEntryAlert(token, legs) {
-    apiPost("/api/entry-alert", { token, legs }).catch(() => {});
+  function sendEntryAlert(token, legs, accountId) {
+    apiPost("/api/entry-alert", { token, legs, account_id: accountId || undefined }).catch(() => {});
   }
 
   async function handleExecute() {
@@ -347,16 +350,16 @@ function AddStrategyInner() {
       if (optQty === 0) {
         const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}`);
         if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
-        const price = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
+        const price = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog, accountId: payload.account_id });
         await persistFillPrices({ fut_entry_price: price != null ? String(price) : payload.fut_entry_price });
-        sendEntryAlert(payload.token, [{ fut_instrument: perp.instrument_name, fut_price: price }]);
+        sendEntryAlert(payload.token, [{ fut_instrument: perp.instrument_name, fut_price: price }], payload.account_id);
         setPhase("done");
         return;
       }
 
       const markUsd = await runOptionEntry({
         instrument: optInst.instrument_name, qty: optQty, isCoinSettled: optInst.settlement === "coin",
-        onLog: addExecLog, isCancelled: () => cancelRef.current,
+        onLog: addExecLog, isCancelled: () => cancelRef.current, accountId: payload.account_id,
       });
       if (markUsd != null) await persistFillPrices({ opt_entry_price: markUsd.toFixed(4) });
 
@@ -366,10 +369,10 @@ function AddStrategyInner() {
         const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}&prefer=${optInst.settlement}`);
         if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
         futInstName = perp.instrument_name;
-        futPrice = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog });
+        futPrice = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog, accountId: payload.account_id });
         await persistFillPrices({ fut_entry_price: futPrice != null ? String(futPrice) : payload.fut_entry_price });
       }
-      sendEntryAlert(payload.token, [{ opt_instrument: optInst.instrument_name, opt_price: markUsd, fut_instrument: futInstName, fut_price: futPrice }]);
+      sendEntryAlert(payload.token, [{ opt_instrument: optInst.instrument_name, opt_price: markUsd, fut_instrument: futInstName, fut_price: futPrice }], payload.account_id);
       setPhase("done");
     } catch (e) {
       setExecuteError(e.message);
@@ -436,7 +439,7 @@ function AddStrategyInner() {
 
     setAcStarting(true);
     try {
-      const bal = await getCollateral(token);
+      const bal = await getCollateral(token, selectedAcct);
       if (bal.error) throw new Error(bal.error);
       const perp = futQty !== 0 ? await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(token)}&prefer=${optInst.settlement}`) : null;
       const j = await apiPost("/api/auto-close", {
@@ -452,6 +455,7 @@ function AddStrategyInner() {
         fut_entry_price: form.fut_entry_price || null,
         initial_total_usd: bal.total_usd ?? 0,
         target_pnl: tPnl,
+        account_id: selectedAcct || undefined,
       });
       clearInterval(acTimerRef.current);
       pollAcJob(j.id);

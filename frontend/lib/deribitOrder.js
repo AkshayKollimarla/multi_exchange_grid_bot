@@ -1,15 +1,15 @@
 import { apiGet, apiPost, apiDelete } from "./api";
 
-export function placeOrder({ instrument, qty, direction, price, isMarket = false, postOnly = true }) {
-  return apiPost("/api/deribit-order", { instrument, qty, direction, price, is_market: isMarket, post_only: postOnly });
+export function placeOrder({ instrument, qty, direction, price, isMarket = false, postOnly = true, accountId }) {
+  return apiPost("/api/deribit-order", { instrument, qty, direction, price, is_market: isMarket, post_only: postOnly, account_id: accountId || undefined });
 }
 
-export function getOrderState(orderId) {
-  return apiGet(`/api/deribit-order?order_id=${encodeURIComponent(orderId)}`);
+export function getOrderState(orderId, accountId) {
+  return apiGet(`/api/deribit-order?order_id=${encodeURIComponent(orderId)}${accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""}`);
 }
 
-export function cancelOrder(orderId) {
-  return apiDelete(`/api/deribit-order?order_id=${encodeURIComponent(orderId)}`);
+export function cancelOrder(orderId, accountId) {
+  return apiDelete(`/api/deribit-order?order_id=${encodeURIComponent(orderId)}${accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""}`);
 }
 
 // Coin-settled instruments quote mark/bid/ask in the underlying coin, not
@@ -31,6 +31,6 @@ export async function getTickerMid(instrument, isCoinSettled) {
   };
 }
 
-export function getCollateral(token) {
-  return apiGet(`/api/deribit/collateral?token=${encodeURIComponent(token)}`);
+export function getCollateral(token, accountId) {
+  return apiGet(`/api/deribit/collateral?token=${encodeURIComponent(token)}${accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""}`);
 }

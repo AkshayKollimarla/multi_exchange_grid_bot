@@ -39,6 +39,8 @@ export default function AccountsPage() {
   const [creds, setCreds] = useState({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [testing, setTesting] = useState({});
+  const [testResult, setTestResult] = useState({});
 
   const load = () => {
     apiGet("/api/accounts")
@@ -67,6 +69,19 @@ export default function AccountsPage() {
       setMsg({ ok: false, text: "Failed: " + e.message });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTestAuth(id) {
+    setTesting((t) => ({ ...t, [id]: true }));
+    setTestResult((r) => ({ ...r, [id]: null }));
+    try {
+      const r = await apiPost(`/api/accounts/${id}/test-auth`, {});
+      setTestResult((res) => ({ ...res, [id]: r }));
+    } catch (e) {
+      setTestResult((res) => ({ ...res, [id]: { ok: false, error: e.message } }));
+    } finally {
+      setTesting((t) => ({ ...t, [id]: false }));
     }
   }
 
@@ -128,12 +143,27 @@ export default function AccountsPage() {
                   {!loadError && accounts && accounts.map((a) => {
                     const idv = a.identifier || a.walletAddress || "";
                     const masked = idv.length > 14 ? `${idv.slice(0, 6)}…${idv.slice(-4)}` : idv;
+                    const result = testResult[a.id];
                     return (
                       <tr key={a.id}>
                         <td><b>{a.name}</b></td>
                         <td>{ICON[a.exchange] || ""} {a.exchange || "hyperliquid"}</td>
                         <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{masked}</td>
-                        <td><button className="btn-refresh" style={{ color: "var(--red)" }} onClick={() => handleDelete(a.id)}>✕ Delete</button></td>
+                        <td>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                            {a.exchange === "deribit" && (
+                              <button className="btn-refresh" onClick={() => handleTestAuth(a.id)} disabled={testing[a.id]}>
+                                {testing[a.id] ? "Testing…" : "🔌 Test Connection"}
+                              </button>
+                            )}
+                            <button className="btn-refresh" style={{ color: "var(--red)" }} onClick={() => handleDelete(a.id)}>✕ Delete</button>
+                          </div>
+                          {result && (
+                            <div style={{ fontSize: 11, marginTop: 4, textAlign: "right", color: result.ok ? "var(--green)" : "var(--red)" }}>
+                              {result.ok ? `✓ ${result.message}${result.scope ? ` (${result.scope})` : ""}` : `✕ ${result.error}`}
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

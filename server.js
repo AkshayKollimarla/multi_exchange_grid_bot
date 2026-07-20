@@ -3930,15 +3930,32 @@ app.get("/api/deribit/ticker", async (req, res) => {
 
 // ══════════════════════════════════════════════════════════════
 //  DERIBIT LIVE EXECUTION — Options Multi-Agent DB "Save & Execute"
-//  Places REAL post-only limit orders on Deribit using the SAME
-//  DERIBIT_CLIENT_ID/DERIBIT_CLIENT_SECRET the grid bot already uses.
+//  Places REAL post-only limit orders on Deribit. Defaults to the global
+//  DERIBIT_CLIENT_ID/DERIBIT_CLIENT_SECRET the grid bot already uses, but
+//  every function here also accepts an optional accountId to execute
+//  against a specific trading_accounts row instead — pass undefined/null
+//  anywhere below and behavior is byte-identical to the single-account era.
 //  No dry-run mode — every call here places a live order (mainnet unless
 //  DERIBIT_TESTNET=true). Confirmation happens in the UI before this is hit.
 // ══════════════════════════════════════════════════════════════
-let _deribitToken = null, _deribitTokenExp = 0;
-async function deribitAuthToken() {
-  if (_deribitToken && Date.now() < _deribitTokenExp - 30000) return _deribitToken;
-  const cid = process.env.DERIBIT_CLIENT_ID, secret = process.env.DERIBIT_CLIENT_SECRET;
+const _deribitTokenCache = new Map(); // key: accountId ?? "__global__" → { token, exp }
+
+async function resolveDeribitCreds(accountId) {
+  if (accountId == null) {
+    return { key: "__global__", clientId: process.env.DERIBIT_CLIENT_ID, clientSecret: process.env.DERIBIT_CLIENT_SECRET };
+  }
+  const acc = await db.getAccount(parseInt(accountId, 10));
+  if (!acc) throw new Error(`Deribit account ${accountId} not found`);
+  if (acc.exchange !== "deribit") throw new Error(`Account ${accountId} (${acc.name}) is not a Deribit account`);
+  const c = acc.credentials || {};
+  if (!c.clientId || !c.clientSecret) throw new Error(`Account ${accountId} (${acc.name}) has no Deribit credentials saved`);
+  return { key: String(accountId), clientId: c.clientId, clientSecret: c.clientSecret };
+}
+
+async function deribitAuthToken(accountId) {
+  const { key, clientId: cid, clientSecret: secret } = await resolveDeribitCreds(accountId);
+  const cached = _deribitTokenCache.get(key);
+  if (cached && Date.now() < cached.exp - 30000) return cached.token;
   if (!cid || !secret) throw new Error("DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET missing in .env");
   const r = await Promise.race([
     fetch(`https://${deribitHost()}/api/v2/public/auth?grant_type=client_credentials&client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(secret)}`),
@@ -3946,12 +3963,12 @@ async function deribitAuthToken() {
   ]);
   const j = await r.json();
   if (j.error) throw new Error(`Deribit auth failed: ${j.error.message || j.error.code}`);
-  _deribitToken = j.result.access_token;
-  _deribitTokenExp = Date.now() + (Number(j.result.expires_in) || 900) * 1000;
-  return _deribitToken;
+  const token = j.result.access_token;
+  _deribitTokenCache.set(key, { token, exp: Date.now() + (Number(j.result.expires_in) || 900) * 1000 });
+  return token;
 }
-async function deribitPrivate(method, params) {
-  const token = await deribitAuthToken();
+async function deribitPrivate(method, params, accountId) {
+  const token = await deribitAuthToken(accountId);
   const qs = new URLSearchParams(params).toString();
   const r = await Promise.race([
     fetch(`https://${deribitHost()}/api/v2/private/${method}?${qs}`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -3995,7 +4012,7 @@ function deribitTickSizeFor(inst, price) {
 // Places ONE post-only limit order. side: "buy"|"sell". Never throws —
 // returns { ok:false, error } on any failure (incl. post_only_reject when
 // the price would cross the spread) so the caller can report per-leg status.
-async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label, inst) {
+async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label, inst, accountId) {
   try {
     const method = side === "sell" ? "sell" : "buy";
     const roundedAmount = deribitRoundToStep(Math.abs(amount), inst?.min_trade_amount);
@@ -4007,7 +4024,7 @@ async function deribitPlaceLimitOrder(instrumentName, side, amount, price, label
       price: String(roundedPrice),
       post_only: "true",
       label: String(label || "").slice(0, 64),
-    });
+    }, accountId);
     return {
       ok: true, instrument: instrumentName, side,
       orderId: result?.order?.order_id, state: result?.order?.order_state,
@@ -4079,11 +4096,11 @@ function deribitCoinLegFor(token) {
 }
 // Combined coin-wallet + USDC-wallet equity (USD) — the auto-close worker's
 // target-PnL tracking is against this combined total, not a single wallet.
-async function deribitCollateral(token) {
+async function deribitCollateral(token, accountId) {
   const coinSymbol = deribitCoinLegFor(token);
   const [coinR, usdcR] = await Promise.allSettled([
-    coinSymbol ? deribitPrivate("get_account_summary", { currency: coinSymbol, extended: "false" }) : Promise.resolve(null),
-    deribitPrivate("get_account_summary", { currency: "USDC", extended: "false" }),
+    coinSymbol ? deribitPrivate("get_account_summary", { currency: coinSymbol, extended: "false" }, accountId) : Promise.resolve(null),
+    deribitPrivate("get_account_summary", { currency: "USDC", extended: "false" }, accountId),
   ]);
   let coinIndex = 0;
   if (coinSymbol) {
@@ -4105,10 +4122,10 @@ async function deribitCollateral(token) {
 // Checks the REAL position on the exchange rather than trusting our own
 // order tracking — catches an option that auto-settled at expiry (no order
 // of ours involved) and an overlapping tick that already closed it.
-async function deribitPositionFlat(instrument) {
+async function deribitPositionFlat(instrument, accountId) {
   if (!instrument) return true;
   try {
-    const pos = await deribitPrivate("get_position", { instrument_name: instrument });
+    const pos = await deribitPrivate("get_position", { instrument_name: instrument }, accountId);
     return Math.abs(parseFloat(pos?.size ?? 0)) === 0;
   } catch (e) { return false; } // never assume closed on an API error
 }
@@ -4124,7 +4141,7 @@ async function deribitIsOptionExpired(instrument) {
 
 // Maker limit close at the current mid, rounded to tick — used by the
 // auto-close workers for the option leg (never falls back to market).
-async function deribitPlaceLimitClose(instrument, qty, dir) {
+async function deribitPlaceLimitClose(instrument, qty, dir, accountId) {
   const [ticker, info] = await Promise.all([
     deribitGet(`/api/v2/public/ticker?instrument_name=${encodeURIComponent(instrument)}`),
     deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`),
@@ -4137,12 +4154,12 @@ async function deribitPlaceLimitClose(instrument, qty, dir) {
   return deribitPrivate(dir, {
     instrument_name: instrument, amount: String(amount), type: "limit",
     price: String(price), reduce_only: "true",
-  });
+  }, accountId);
 }
-async function deribitPlaceMarketClose(instrument, qty, dir) {
+async function deribitPlaceMarketClose(instrument, qty, dir, accountId) {
   const info = await deribitGet(`/api/v2/public/get_instrument?instrument_name=${encodeURIComponent(instrument)}`);
   const amount = await deribitOrderAmount(info, qty);
-  return deribitPrivate(dir, { instrument_name: instrument, amount: String(amount), type: "market", reduce_only: "true" });
+  return deribitPrivate(dir, { instrument_name: instrument, amount: String(amount), type: "market", reduce_only: "true" }, accountId);
 }
 
 // Fire-and-forget-friendly Telegram sender for the auto-close workers —
@@ -4213,7 +4230,7 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
         if (!index) throw new Error("Could not fetch a live index price to convert the coin-settled option's price");
         optPriceForOrder = price / index;
       }
-      optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, optPriceForOrder, `optdb_${id}_opt`, inst);
+      optResult = await deribitPlaceLimitOrder(inst.instrument_name, optSide, qty, optPriceForOrder, `optdb_${id}_opt`, inst, trade.account_id);
     } catch (e) {
       optResult = { ok: false, instrument: inst.instrument_name, side: optSide, error: e.message };
     }
@@ -4235,7 +4252,7 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
         // notional (qty × entry price) before it's a legal order size, or a
         // "1.3" short silently becomes a ~$1 position instead of ~$1.3×price.
         const futAmount = perp.instrument_type === "reversed" ? Math.abs(futQty) * futPrice : futQty;
-        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futAmount, futPrice, `optdb_${id}_fut`, perp);
+        futResult = await deribitPlaceLimitOrder(perp.instrument_name, futSide, futAmount, futPrice, `optdb_${id}_fut`, perp, trade.account_id);
       }
     }
 
@@ -4256,7 +4273,7 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
 // post_only:false lets it fill immediately as a taker instead of being
 // rejected and forcing a manual retry.
 app.post("/api/deribit-order", async (req, res) => {
-  const { instrument, qty, direction, price, is_market = false, post_only = true } = req.body || {};
+  const { instrument, qty, direction, price, is_market = false, post_only = true, account_id } = req.body || {};
   if (!instrument || qty == null || !direction) {
     return res.status(400).json({ error: "instrument, qty, direction required" });
   }
@@ -4281,7 +4298,7 @@ app.post("/api/deribit-order", async (req, res) => {
       if (post_only) params.post_only = "true";
     }
     const method = direction === "buy" ? "buy" : "sell";
-    const result = await deribitPrivate(method, params);
+    const result = await deribitPrivate(method, params, account_id);
     const order = result?.order || {};
     res.json({
       ok: true, order_id: order.order_id, amount: order.amount,
@@ -4295,7 +4312,7 @@ app.get("/api/deribit-order", async (req, res) => {
   const orderId = req.query.order_id;
   if (!orderId) return res.status(400).json({ error: "order_id required" });
   try {
-    const result = await deribitPrivate("get_order_state", { order_id: orderId });
+    const result = await deribitPrivate("get_order_state", { order_id: orderId }, req.query.account_id);
     res.json({
       ok: true, order_id: result.order_id, instrument: result.instrument_name,
       amount: result.amount, filled_amount: result.filled_amount,
@@ -4307,12 +4324,12 @@ app.delete("/api/deribit-order", async (req, res) => {
   const orderId = req.query.order_id;
   if (!orderId) return res.status(400).json({ error: "order_id required" });
   try {
-    const result = await deribitPrivate("cancel", { order_id: orderId });
+    const result = await deribitPrivate("cancel", { order_id: orderId }, req.query.account_id);
     res.json({ ok: true, order_id: result.order_id, filled_amount: result.filled_amount, order_state: result.order_state });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get("/api/deribit/collateral", async (req, res) => {
-  try { res.json(await deribitCollateral(req.query.token || "ETH")); }
+  try { res.json(await deribitCollateral(req.query.token || "ETH", req.query.account_id)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Resolves the right perpetual futures instrument for a token — the
@@ -4333,11 +4350,11 @@ app.get("/api/deribit/perpetual", async (req, res) => {
 // legs: [{ leg_type?, opt_instrument?, opt_price?, fut_instrument?, fut_price? }]
 app.post("/api/entry-alert", async (req, res) => {
   try {
-    const { token, legs } = req.body || {};
+    const { token, legs, account_id } = req.body || {};
     if (!token || !Array.isArray(legs) || !legs.length) {
       return res.status(400).json({ error: "token and legs[] required" });
     }
-    const col = await deribitCollateral(token).catch(() => null);
+    const col = await deribitCollateral(token, account_id).catch(() => null);
     const multi = legs.length > 1;
     const legLines = legs.map((l, i) => {
       const prefix = multi ? `<b>Leg ${i + 1}${l.leg_type ? ` (${l.leg_type})` : ""}</b>` : "";
@@ -4411,6 +4428,7 @@ app.post("/api/auto-close", async (req, res) => {
       initial_total_usd: initialTotal,
       target_pnl: targetPnl,
       target_total_usd: targetTotal,
+      account_id: body.account_id || null,
     });
 
     startAutoCloseWorker();
@@ -4491,7 +4509,7 @@ app.post("/api/auto-close-combo", async (req, res) => {
     const targetPnl = parseFloat(body.target_pnl);
     const targetTotal = initialTotal + targetPnl;
     const jobId = await db.insertComboJob(
-      { group_id: body.group_id || null, token: body.token, initial_total_usd: initialTotal, target_pnl: targetPnl, target_total_usd: targetTotal },
+      { group_id: body.group_id || null, token: body.token, initial_total_usd: initialTotal, target_pnl: targetPnl, target_total_usd: targetTotal, account_id: body.account_id || null },
       body.legs.map((leg) => ({
         leg_type: leg.leg_type || null,
         opt_instrument: leg.opt_instrument || "", opt_qty: parseFloat(leg.opt_qty) || 0, opt_dir: leg.opt_dir || "sell",
@@ -4608,7 +4626,7 @@ async function autoCloseProcessJob(job) {
       return;
     }
 
-    const col = await deribitCollateral(job.token);
+    const col = await deribitCollateral(job.token, job.account_id);
     const pnl = col.total_usd - parseFloat(job.initial_total_usd);
     const targetPnl = parseFloat(job.target_pnl);
     await db.updateAutoCloseJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
@@ -4643,11 +4661,11 @@ async function autoCloseProcessJob(job) {
 async function autoCloseCloseOption(job) {
   const optQty = parseFloat(job.opt_qty);
 
-  if (await deribitPositionFlat(job.opt_instrument)) {
+  if (await deribitPositionFlat(job.opt_instrument, job.account_id)) {
     let closePrice = null;
     if (job.opt_order_id) {
       try {
-        const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id });
+        const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id }, job.account_id);
         closePrice = parseFloat(state.average_price ?? state.price ?? 0) || null;
       } catch (e) { /* order no longer queryable — leave unknown */ }
     }
@@ -4662,7 +4680,7 @@ async function autoCloseCloseOption(job) {
   }
 
   if (job.opt_order_id) {
-    const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id });
+    const state = await deribitPrivate("get_order_state", { order_id: job.opt_order_id }, job.account_id);
 
     if (state.order_state === "filled") {
       const filled = parseFloat(state.filled_amount ?? state.amount ?? Math.abs(optQty));
@@ -4692,7 +4710,7 @@ async function autoCloseCloseOption(job) {
 
     if (mid > 0 && Math.abs(mid - orderPrice) > AC_OPT_REQUOTE_THRESHOLD) {
       await db.appendAutoCloseLog(job.id, `Option mid moved ${orderPrice.toFixed(5)} → ${mid.toFixed(5)}, re-quoting maker order...`);
-      try { await deribitPrivate("cancel", { order_id: job.opt_order_id }); } catch (e) { /* already filled/cancelled */ }
+      try { await deribitPrivate("cancel", { order_id: job.opt_order_id }, job.account_id); } catch (e) { /* already filled/cancelled */ }
       await db.updateAutoCloseJob(job.id, { opt_order_id: null });
       const fresh = await db.getAutoCloseJobRaw(job.id);
       await autoCloseCloseOption(fresh);
@@ -4700,7 +4718,7 @@ async function autoCloseCloseOption(job) {
     return;
   }
 
-  const result = await deribitPlaceLimitClose(job.opt_instrument, optQty, job.opt_dir);
+  const result = await deribitPlaceLimitClose(job.opt_instrument, optQty, job.opt_dir, job.account_id);
   const orderId = result?.order?.order_id, price = result?.order?.price;
   await db.appendAutoCloseLog(job.id, `Option maker close placed: ${Math.abs(optQty)}x ${job.opt_instrument} @ ${price} [order ${orderId}]`);
   await db.updateAutoCloseJob(job.id, { opt_order_id: orderId, opt_placed: true });
@@ -4714,13 +4732,13 @@ async function autoCloseCloseFutures(job) {
     await autoCloseFinishJob(job.id);
     return;
   }
-  if (await deribitPositionFlat(job.fut_instrument)) {
+  if (await deribitPositionFlat(job.fut_instrument, job.account_id)) {
     await db.appendAutoCloseLog(job.id, `Futures position already flat (${job.fut_instrument}) — nothing left to close.`);
     await db.updateAutoCloseJob(job.id, { status: "completed", completed: true });
     await autoCloseFinishJob(job.id);
     return;
   }
-  const result = await deribitPlaceMarketClose(job.fut_instrument, futQty, job.fut_dir);
+  const result = await deribitPlaceMarketClose(job.fut_instrument, futQty, job.fut_dir, job.account_id);
   const orderId = result?.order?.order_id;
   const closePrice = parseFloat(result?.order?.average_price ?? result?.order?.price ?? 0);
   await db.appendAutoCloseLog(job.id, `Futures market close placed: ${Math.abs(futQty)}x ${job.fut_instrument} @ ${closePrice} [order ${orderId}]`);
@@ -4732,7 +4750,7 @@ async function autoCloseFinishJob(jobId) {
   try {
     const job = await db.getAutoCloseJobRaw(jobId);
     if (!job) return;
-    const col = await deribitCollateral(job.token).catch(() => null);
+    const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
     const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateAutoCloseJob(jobId, { final_equity_usd: finalEquity });
     const initial = parseFloat(job.initial_total_usd);
@@ -4806,7 +4824,7 @@ async function autoCloseComboProcessJob(job) {
       }
     }
 
-    const col = await deribitCollateral(job.token);
+    const col = await deribitCollateral(job.token, job.account_id);
     const pnl = col.total_usd - parseFloat(job.initial_total_usd);
     const targetPnl = parseFloat(job.target_pnl);
     await db.updateComboJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
@@ -4835,8 +4853,8 @@ async function autoCloseComboProcessJob(job) {
       const optQty = parseFloat(leg.opt_qty || 0), futQty = parseFloat(leg.fut_qty || 0);
       const optDone = optQty === 0 || !!leg.opt_done;
       const futDone = futQty === 0 || !!leg.fut_done;
-      if (optQty !== 0 && !optDone) { allDone = false; await autoCloseComboCloseLegOption(job.id, leg); continue; }
-      if (futQty !== 0 && !futDone) { allDone = false; await autoCloseComboCloseLegFutures(job.id, leg); continue; }
+      if (optQty !== 0 && !optDone) { allDone = false; await autoCloseComboCloseLegOption(job.id, leg, job.account_id); continue; }
+      if (futQty !== 0 && !futDone) { allDone = false; await autoCloseComboCloseLegFutures(job.id, leg, job.account_id); continue; }
       if (optQty === 0 && !leg.opt_done) await db.updateComboLeg(leg.id, { opt_done: 1 });
       if (futQty === 0 && !leg.fut_done) await db.updateComboLeg(leg.id, { fut_done: 1 });
     }
@@ -4848,14 +4866,14 @@ async function autoCloseComboProcessJob(job) {
   }
 }
 
-async function autoCloseComboCloseLegOption(comboJobId, leg) {
+async function autoCloseComboCloseLegOption(comboJobId, leg, accountId) {
   const optQty = parseFloat(leg.opt_qty);
 
-  if (await deribitPositionFlat(leg.opt_instrument)) {
+  if (await deribitPositionFlat(leg.opt_instrument, accountId)) {
     let closePrice = null;
     if (leg.opt_order_id) {
       try {
-        const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id });
+        const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id }, accountId);
         closePrice = parseFloat(state.average_price ?? state.price ?? 0) || null;
       } catch (e) { /* order no longer queryable — leave unknown */ }
     }
@@ -4867,7 +4885,7 @@ async function autoCloseComboCloseLegOption(comboJobId, leg) {
   }
 
   if (leg.opt_order_id) {
-    const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id });
+    const state = await deribitPrivate("get_order_state", { order_id: leg.opt_order_id }, accountId);
 
     if (state.order_state === "filled") {
       const closePrice = parseFloat(state.average_price ?? state.price ?? 0);
@@ -4888,30 +4906,30 @@ async function autoCloseComboCloseLegOption(comboJobId, leg) {
 
     if (mid > 0 && Math.abs(mid - orderPrice) > AC_OPT_REQUOTE_THRESHOLD) {
       await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option mid moved ${orderPrice.toFixed(5)} → ${mid.toFixed(5)}, re-quoting...`);
-      try { await deribitPrivate("cancel", { order_id: leg.opt_order_id }); } catch (e) { /* already filled/cancelled */ }
+      try { await deribitPrivate("cancel", { order_id: leg.opt_order_id }, accountId); } catch (e) { /* already filled/cancelled */ }
       await db.updateComboLeg(leg.id, { opt_order_id: null });
       const freshLegs = await db.getComboJobLegs(comboJobId);
       const freshLeg = freshLegs.find((l) => l.id === leg.id);
-      if (freshLeg) await autoCloseComboCloseLegOption(comboJobId, freshLeg);
+      if (freshLeg) await autoCloseComboCloseLegOption(comboJobId, freshLeg, accountId);
     }
     return;
   }
 
-  const result = await deribitPlaceLimitClose(leg.opt_instrument, optQty, leg.opt_dir);
+  const result = await deribitPlaceLimitClose(leg.opt_instrument, optQty, leg.opt_dir, accountId);
   const orderId = result?.order?.order_id, price = result?.order?.price;
   await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} option maker close placed: ${Math.abs(optQty)}x ${leg.opt_instrument} @ ${price} [order ${orderId}]`);
   await db.updateComboLeg(leg.id, { opt_order_id: orderId });
 }
 
-async function autoCloseComboCloseLegFutures(comboJobId, leg) {
+async function autoCloseComboCloseLegFutures(comboJobId, leg, accountId) {
   const futQty = parseFloat(leg.fut_qty || 0);
   if (futQty === 0 || !leg.fut_instrument) { await db.updateComboLeg(leg.id, { fut_done: 1 }); return; }
-  if (await deribitPositionFlat(leg.fut_instrument)) {
+  if (await deribitPositionFlat(leg.fut_instrument, accountId)) {
     await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} futures position flat (${leg.fut_instrument}) — nothing left to close.`);
     await db.updateComboLeg(leg.id, { fut_done: 1 });
     return;
   }
-  const result = await deribitPlaceMarketClose(leg.fut_instrument, futQty, leg.fut_dir);
+  const result = await deribitPlaceMarketClose(leg.fut_instrument, futQty, leg.fut_dir, accountId);
   const closePrice = parseFloat(result?.order?.average_price ?? result?.order?.price ?? 0);
   await db.appendComboLog(comboJobId, `Leg ${leg.leg_index + 1} futures market close: ${Math.abs(futQty)}x ${leg.fut_instrument} @ ${closePrice}`);
   await db.updateComboLeg(leg.id, { fut_done: 1, fut_close_price: closePrice });
@@ -4922,7 +4940,7 @@ async function autoCloseComboFinishJob(comboJobId) {
     const job = await db.getComboJobRaw(comboJobId);
     if (!job) return;
     const legs = await db.getComboJobLegs(comboJobId);
-    const col = await deribitCollateral(job.token).catch(() => null);
+    const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
     const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateComboJob(comboJobId, { final_equity_usd: finalEquity });
     const initial = parseFloat(job.initial_total_usd);
@@ -5040,8 +5058,40 @@ app.post("/api/accounts", async (req, res) => {
 
 app.delete("/api/accounts/:id", async (req, res) => {
   if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
-  try { await db.deleteAccount(parseInt(req.params.id, 10)); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  const id = parseInt(req.params.id, 10);
+  try {
+    if (await db.isAccountReferenced(id)) {
+      return res.status(409).json({ error: "This account is referenced by an open strategy or an active auto-close job — stop/close it first." });
+    }
+    await db.deleteAccount(id);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// One-off auth check against Deribit itself — never touches orders/positions,
+// just confirms the saved client_id/secret actually authenticate, before the
+// account gets used for real execution.
+app.post("/api/accounts/:id/test-auth", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  const acc = await db.getAccount(parseInt(req.params.id, 10));
+  if (!acc) return res.json({ ok: false, error: "Account not found" });
+  if (acc.exchange !== "deribit") return res.json({ ok: false, error: `Test Connection is only implemented for Deribit accounts (this is ${acc.exchange}).` });
+  const { clientId, clientSecret } = acc.credentials || {};
+  if (!clientId || !clientSecret) return res.json({ ok: false, error: "No Client ID/Secret saved for this account." });
+  const host = deribitHost();
+  try {
+    const r = await fetch(`https://${host}/api/v2/public/auth?grant_type=client_credentials&client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}`);
+    const j = await r.json();
+    if (j.error) {
+      return res.json({
+        ok: false, error: `Deribit rejected the credentials: "${j.error.message}" (code ${j.error.code})`,
+        endpoint: host, client_id_preview: clientId.slice(0, 8) + "…",
+      });
+    }
+    return res.json({ ok: true, message: "Authentication successful!", scope: j.result?.scope, endpoint: host });
+  } catch (e) {
+    return res.json({ ok: false, error: `Network error: ${e.message}` });
+  }
 });
 
 // ── Options Multi-Agent Database (Dashboard / Add / Simulator / Analysis) ──

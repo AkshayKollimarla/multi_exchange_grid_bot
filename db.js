@@ -124,6 +124,11 @@ async function pingDb() {
     // Upgrade older installs that pre-date the Save & Execute feature.
     try { await conn.query("ALTER TABLE options_trades ADD COLUMN execution_json JSON NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Which trading_accounts row this leg executes against — NULL means
+    // "use the global .env Deribit key", exactly today's behavior, so every
+    // existing row (and anything that never sets it) is unaffected.
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN account_id INT NULL DEFAULT NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
 
     // Trading accounts (multiple wallets/keys per exchange). Credentials are
     // stored as JSON so each exchange can keep its own shape:
@@ -190,6 +195,10 @@ async function pingDb() {
         INDEX idx_ac_status (status)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    // NULL = the global .env Deribit key, matching every job created before
+    // per-account execution existed (including any already-active job).
+    try { await conn.query("ALTER TABLE auto_close_jobs ADD COLUMN account_id INT NULL DEFAULT NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
 
     // Auto-close jobs (multi-leg / Combined Simulator) — same design as
     // auto_close_jobs, spanning N option+futures leg pairs sharing one
@@ -217,6 +226,11 @@ async function pingDb() {
         INDEX idx_acc_status (status)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+    // One account per combo job (inherited by every leg) — a combo spanning
+    // two Deribit accounts isn't a supported scenario, since the whole point
+    // is one shared equity target across all its legs.
+    try { await conn.query("ALTER TABLE auto_close_combo_jobs ADD COLUMN account_id INT NULL DEFAULT NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     await conn.query(`
       CREATE TABLE IF NOT EXISTS auto_close_combo_legs (
         id               INT AUTO_INCREMENT PRIMARY KEY,
@@ -614,6 +628,24 @@ async function deleteAccount(id) {
   catch (e) { console.error("[DB] deleteAccount failed:", e.message); }
 }
 
+// Guards account deletion: refuses if this account is behind an open
+// strategy or an active/closing job, so deleting it can never yank
+// credentials out from under something still executing.
+async function isAccountReferenced(id) {
+  const p = getPool();
+  if (!p) return false;
+  const [[a]] = await p.query("SELECT COUNT(*) c FROM options_trades WHERE account_id = ? AND status = 'open'", [id]);
+  if (a.c > 0) return true;
+  const [[b]] = await p.query(
+    "SELECT COUNT(*) c FROM auto_close_jobs WHERE account_id = ? AND status IN ('active','closing_option','closing_futures')", [id]
+  );
+  if (b.c > 0) return true;
+  const [[c]] = await p.query(
+    "SELECT COUNT(*) c FROM auto_close_combo_jobs WHERE account_id = ? AND status IN ('active','closing')", [id]
+  );
+  return c.c > 0;
+}
+
 // ============================================================
 //  OPTIONS MULTI-AGENT DATABASE
 //  Ported 1:1 from the standalone options_pnl_report app
@@ -626,7 +658,7 @@ const OPT_MANUAL_COLS = [
   "opt_entry_qty","opt_entry_price","opt_exit_price",
   "fut_qty","fut_entry_price","fut_exit_price",
   "upside_distance","down_distance","basket_distance","basket_loss",
-  "net_booked_pnl","market_making_pl","end_date","status","group_id",
+  "net_booked_pnl","market_making_pl","end_date","status","group_id","account_id",
 ];
 const OPT_DERIVED_COLS = [
   "days_to_expiry","total_theta_gain_loss","per_day_theta_gain_loss",
@@ -860,12 +892,12 @@ async function insertAutoCloseJob(f) {
     `INSERT INTO auto_close_jobs
        (trade_id, token, opt_instrument, opt_qty, opt_dir, opt_entry_price,
         fut_instrument, fut_qty, fut_dir, fut_entry_price,
-        initial_total_usd, target_pnl, target_total_usd)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        initial_total_usd, target_pnl, target_total_usd, account_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       f.trade_id || null, f.token, f.opt_instrument, f.opt_qty, f.opt_dir, f.opt_entry_price ?? null,
       f.fut_instrument || "", f.fut_qty || 0, f.fut_dir || "sell", f.fut_entry_price ?? null,
-      f.initial_total_usd, f.target_pnl, f.target_total_usd,
+      f.initial_total_usd, f.target_pnl, f.target_total_usd, f.account_id || null,
     ]
   );
   return result.insertId;
@@ -969,9 +1001,9 @@ async function insertComboJob(f, legs) {
   const p = getPool();
   if (!p) throw new Error("MySQL not configured");
   const [result] = await p.query(
-    `INSERT INTO auto_close_combo_jobs (group_id, token, initial_total_usd, target_pnl, target_total_usd)
-     VALUES (?,?,?,?,?)`,
-    [f.group_id || null, f.token, f.initial_total_usd, f.target_pnl, f.target_total_usd]
+    `INSERT INTO auto_close_combo_jobs (group_id, token, initial_total_usd, target_pnl, target_total_usd, account_id)
+     VALUES (?,?,?,?,?,?)`,
+    [f.group_id || null, f.token, f.initial_total_usd, f.target_pnl, f.target_total_usd, f.account_id || null]
   );
   const jobId = result.insertId;
   const legRows = legs.map((leg, i) => [
@@ -1035,7 +1067,7 @@ module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
   loadAllSessions, dbConfigured,
-  listAccounts, getAccount, addAccount, deleteAccount,
+  listAccounts, getAccount, addAccount, deleteAccount, isAccountReferenced,
   listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,
   deleteOptionsTrade, computeOptionsDerived, optStrikeNumber, recordOptionsExecution,
   listAutoCloseJobs, getAutoCloseJob, getAutoCloseJobRaw, findActiveAutoCloseJob,

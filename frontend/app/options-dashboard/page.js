@@ -18,6 +18,7 @@ export default function OptionsDashboardPage() {
   const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [acctMap, setAcctMap] = useState({});
   // Bumped by clearFilters() so a reload always fires even when the filters
   // were already at their default values — a plain state reset wouldn't
   // change status/from/to and so wouldn't re-trigger the effect below,
@@ -66,6 +67,14 @@ export default function OptionsDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  useEffect(() => {
+    apiGet("/api/accounts").then((list) => {
+      const map = {};
+      (Array.isArray(list) ? list : []).forEach((a) => { map[a.id] = a.name; });
+      setAcctMap(map);
+    }).catch(() => {});
+  }, []);
+
   function gotoPage(p) {
     setPage(p);
     reload(p);
@@ -104,7 +113,8 @@ export default function OptionsDashboardPage() {
       seenGroups.add(t.group_id);
       const members = trades.filter((x) => x.group_id === t.group_id);
       const combinedPnl = members.reduce((s, m) => s + Number(m.net_booked_pnl || 0), 0);
-      rows.push({ kind: "group-banner", groupId: t.group_id, count: members.length, combinedPnl });
+      const perLegInv = Number(members[0]?.investment || 0);
+      rows.push({ kind: "group-banner", groupId: t.group_id, count: members.length, combinedPnl, perLegInv });
       for (const m of members) rows.push({ kind: "row", trade: m, combined: true, groupId: t.group_id });
     } else {
       rows.push({ kind: "row", trade: t, combined: false });
@@ -165,32 +175,37 @@ export default function OptionsDashboardPage() {
             <table className="ord-table">
               <thead>
                 <tr>
-                  <th>#</th><th>Date</th><th>Token</th><th>Type</th><th>Strike</th><th>Expiry</th>
+                  <th>#</th><th>Date</th><th>Token</th><th>Account</th><th>Type</th><th>Strike</th><th>Expiry</th>
                   <th>Days</th><th>Status</th><th>Investment</th><th>MM PL</th><th>Booked PnL</th><th>APY</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={13} className="empty-td">Loading…</td></tr>}
-                {!loading && error && <tr><td colSpan={13} className="empty-td">Error: {error}</td></tr>}
+                {loading && <tr><td colSpan={14} className="empty-td">Loading…</td></tr>}
+                {!loading && error && <tr><td colSpan={14} className="empty-td">Error: {error}</td></tr>}
                 {!loading && !error && rows.length === 0 && (
-                  <tr><td colSpan={13} className="empty-td">
+                  <tr><td colSpan={14} className="empty-td">
                     No strategies found. <a href="/add-strategy">Add one.</a>
                   </td></tr>
                 )}
                 {!loading && !error && rows.map((r, i) =>
                   r.kind === "group-banner" ? (
                     <tr key={`g-${r.groupId}`} style={{ background: "#f5f3ff" }}>
-                      <td colSpan={13} style={{ padding: "8px 12px", borderLeft: "4px solid #7c3aed" }}>
+                      <td colSpan={14} style={{ padding: "8px 12px", borderLeft: "4px solid #7c3aed" }}>
                         <span style={{ background: "#7c3aed", color: "#fff", padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
                           COMBINED · {r.count} legs
                         </span>
+                        {r.perLegInv > 0 && (
+                          <span style={{ marginLeft: 10, fontSize: 12, color: "var(--muted)" }}>
+                            Per leg: <b>{fmtCcy(r.perLegInv)}</b>
+                          </span>
+                        )}
                         <span style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, color: r.combinedPnl >= 0 ? "var(--green)" : "var(--red)" }}>
                           Combined PnL: {fmtCcy(r.combinedPnl)}
                         </span>
                       </td>
                     </tr>
                   ) : (
-                    <TradeRow key={r.trade.id} t={r.trade} combined={r.combined} groupId={r.groupId} onDelete={deleteTrade} />
+                    <TradeRow key={r.trade.id} t={r.trade} combined={r.combined} groupId={r.groupId} onDelete={deleteTrade} acctMap={acctMap} />
                   )
                 )}
               </tbody>
@@ -212,12 +227,13 @@ export default function OptionsDashboardPage() {
   );
 }
 
-function TradeRow({ t, combined, groupId, onDelete }) {
+function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
   const typeColor = t.option_type === "PUT" ? "var(--red)" : "var(--green)";
   const statusStyle = t.status === "open"
     ? { background: "#d1fae5", color: "#059669" }
     : { background: "#f1f5f9", color: "#475569" };
   const pnlColor = Number(t.net_booked_pnl) >= 0 ? "var(--green)" : "var(--red)";
+  const monitorHref = combined ? `/monitor?group_id=${encodeURIComponent(groupId)}` : `/monitor?trade_id=${t.id}`;
   return (
     <tr style={combined ? { borderLeft: "4px solid #ddd6fe" } : undefined}>
       <td style={{ fontFamily: "monospace", color: "var(--muted)", fontSize: 11 }}>{t.id}</td>
@@ -226,6 +242,7 @@ function TradeRow({ t, combined, groupId, onDelete }) {
         <b>{t.token}</b>
         {combined && <div style={{ fontSize: 10, color: "#a78bfa" }}>leg</div>}
       </td>
+      <td style={{ fontSize: 12, color: "var(--muted)" }}>{t.account_id && acctMap?.[t.account_id] ? acctMap[t.account_id] : "—"}</td>
       <td><span style={{ color: typeColor, fontWeight: 700, fontSize: 11 }}>{t.option_type}</span></td>
       <td>{t.options_strike || "—"}</td>
       <td style={{ whiteSpace: "nowrap" }}>{fmtDate(t.expiry)}</td>
@@ -239,6 +256,8 @@ function TradeRow({ t, combined, groupId, onDelete }) {
         {combined
           ? <a href={`/combined-simulator?group=${encodeURIComponent(groupId)}`} style={{ color: "#7c3aed", fontWeight: 600 }}>Edit Combined</a>
           : <a href={`/add-strategy?id=${t.id}`} style={{ color: "var(--brand)", fontWeight: 600 }}>Edit / Close</a>}
+        {" "}&nbsp;{" "}
+        <a href={monitorHref} style={{ color: "var(--blue, #2563eb)", fontWeight: 600 }}>Monitor</a>
         {" "}&nbsp;{" "}
         <a href="#" onClick={(e) => { e.preventDefault(); onDelete(t.id); }} style={{ color: "var(--red)" }}>Delete</a>
       </td>
