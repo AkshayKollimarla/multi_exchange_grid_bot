@@ -104,10 +104,16 @@ function CombinedSimulatorInner() {
   const [saving, setSaving] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [selectedAcct, setSelectedAcct] = useState("");
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const legCardRefs = useRef({});
 
-  function refreshAllLegs() {
-    Object.values(legCardRefs.current).forEach((r) => r?.refreshTicker());
+  async function refreshAllLegs() {
+    setRefreshingAll(true);
+    try {
+      await Promise.all(Object.values(legCardRefs.current).map((r) => r?.refreshTicker?.()));
+    } finally {
+      setRefreshingAll(false);
+    }
   }
 
   // ── Multi-leg execute (maker-chase, all legs at once) ────────────────
@@ -529,31 +535,52 @@ function CombinedSimulatorInner() {
       <div className="header"><div className="header-logo">Grid<span>Bot</span> — Multi-Exchange</div></div>
       <section className="section">
         <div className="sec-head" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <span>🧮 Combined Simulator</span>
+          <button className="btn-refresh" onClick={() => router.back()} style={{ padding: "6px 10px" }}>←</button>
+          <span>{editGroupId ? "Edit Combined Strategy" : "🧮 Combined Simulator"}</span>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {legs.map((l, i) => <LegPill key={i} type={l.type} />)}
           </div>
+          {editGroupId && (
+            <span style={{ marginLeft: "auto", background: "#ede9fe", color: "#7c3aed", padding: "3px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+              Editing group: {editGroupId}{" "}
+              <a href="#" onClick={(e) => { e.preventDefault(); resetNew(); }} style={{ color: "inherit", textDecoration: "underline", fontWeight: 600 }}>· new instead</a>
+            </span>
+          )}
         </div>
 
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-          {accounts.length > 0 && (
-            <div className="field" style={{ maxWidth: 320, margin: 0 }}>
-              <label>Account</label>
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-body" style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+            <div className="field" style={{ maxWidth: 260, margin: 0 }}>
+              <label>Exchange Account</label>
               <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
+                <option value="">— Manual entry (no live data) —</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
-              <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
             </div>
-          )}
-          <button className="btn-refresh" onClick={refreshAllLegs}>↻ Refresh All Legs</button>
-        </div>
-
-        {editGroupId && (
-          <div style={{ marginBottom: 10, fontSize: 12, color: "var(--muted)" }}>
-            Editing combined group <b>{editGroupId}</b> ·{" "}
-            <a href="#" onClick={(e) => { e.preventDefault(); resetNew(); }}>start a new one instead</a>
+            <a href="/accounts" target="_blank" style={{ fontSize: 12, color: "var(--brand)", fontWeight: 600, whiteSpace: "nowrap" }}>Manage Accounts</a>
+            <button className="btn-refresh" onClick={refreshAllLegs} disabled={refreshingAll}>
+              {refreshingAll ? "⏳ Refreshing…" : "↻ Refresh Live (All Legs)"}
+            </button>
+            <div className="field" style={{ maxWidth: 130, margin: 0 }}>
+              <label>Target PnL ($)</label>
+              <input type="number" placeholder="e.g. 10" value={comboTargetPnl} onChange={(e) => setComboTargetPnl(e.target.value)} />
+            </div>
+            <button className="btn" style={{ background: "var(--brand)", color: "#fff" }} onClick={handleComboExecute} disabled={executing}>
+              ⚡ Execute All Legs
+            </button>
+            <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleComboExecuteAndAutoClose} disabled={executing || comboAcStarting}>
+              {executing ? "Executing…" : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
+            </button>
+            {comboPhase === "running" && (
+              <button className="btn-refresh" onClick={cancelComboExecute} style={{ color: "var(--red)" }}>✕ Cancel</button>
+            )}
+            {editGroupId && (!comboAcJob?.job || ["completed", "failed", "stopped"].includes(comboAcJob.job.status)) && (
+              <button className="btn-refresh" onClick={startMonitorForExisting} disabled={comboAcStarting}>
+                {comboAcStarting ? "Starting…" : "▶ Start Monitor Only (no new orders)"}
+              </button>
+            )}
           </div>
-        )}
+        </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 18 }}>
           {legs.map((leg, idx) => (
@@ -605,12 +632,9 @@ function CombinedSimulatorInner() {
                 ))}
               </tbody>
             </table>
-            <div className="btn-row" style={{ marginTop: 16, gridTemplateColumns: editGroupId ? "repeat(3, 1fr)" : "repeat(2, 1fr)" }}>
+            <div className="btn-row" style={{ marginTop: 16, gridTemplateColumns: editGroupId ? "repeat(2, 1fr)" : "auto" }}>
               <button className="btn btn-start" onClick={saveAll} disabled={saving}>
                 {editGroupId ? "💾 Update Strategy" : "💾 Save All Legs"}
-              </button>
-              <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleComboExecute} disabled={executing}>
-                ⚡ Execute All Legs
               </button>
               {editGroupId && (
                 <button className="btn" style={{ background: "var(--green)", color: "#fff" }} onClick={saveAsNew} disabled={saving}>
@@ -637,24 +661,18 @@ function CombinedSimulatorInner() {
               </div>
             )}
 
-            <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>🎯 Execute + Auto-Close (combined equity target)</div>
-              {!comboAcJob?.job || ["completed", "failed", "stopped"].includes(comboAcJob.job.status) ? (
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <input type="number" placeholder="Target PnL $" value={comboTargetPnl} onChange={(e) => setComboTargetPnl(e.target.value)} style={{ maxWidth: 160, padding: "8px 10px", border: "1.5px solid var(--border-2)", borderRadius: 8 }} />
-                  <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleComboExecuteAndAutoClose} disabled={executing || comboAcStarting}>Execute All + Monitor</button>
-                  {editGroupId && <button className="btn-refresh" onClick={startMonitorForExisting} disabled={comboAcStarting}>Monitor Existing Position</button>}
-                </div>
-              ) : (
+            {comboAcJob?.job && !["completed", "failed", "stopped"].includes(comboAcJob.job.status) && (
+              <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>🎯 Combo Auto-Close</div>
                 <div style={{ fontSize: 12 }}>
                   Job #{comboAcJob.job.id} — <b>{comboAcJob.job.status}</b> · target +${Number(comboAcJob.job.target_pnl).toFixed(2)}
                   {comboAcJob.job.last_equity_usd != null && <> · equity ${Number(comboAcJob.job.last_equity_usd).toFixed(2)}</>}
                   {" "}<button className="btn-refresh" onClick={stopComboAutoClose} style={{ marginLeft: 8 }}>Stop</button>
                   {" "}<a href={`/monitor?group_id=${encodeURIComponent(comboGroupIdRef.current || editGroupId || "")}`} style={{ marginLeft: 8, color: "var(--brand)", fontWeight: 600 }}>Open Monitor</a>
                 </div>
-              )}
-              {comboAcError && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 6 }}>{comboAcError}</div>}
-            </div>
+              </div>
+            )}
+            {comboAcError && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 6 }}>{comboAcError}</div>}
           </div>
         </div>
       </section>
