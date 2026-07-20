@@ -33,6 +33,99 @@ function LogPanel({ logs }) {
   );
 }
 
+// ── Live preview (independent of the 10s job-status poll) ──────────────
+// The job row only updates last_equity_usd on its own worker tick (every
+// 5s server-side, but the client only re-fetches it every 10s here) —
+// this gives a live between-ticks read of collateral + mark-to-market
+// option/futures PnL, purely for display. Never touches orders/positions.
+const LIVE_POLL_MS = 30000;
+
+function isCoinSettledInst(instrument) {
+  return !!instrument && !/_USDC|_USDT/i.test(instrument);
+}
+
+async function fetchTickerUsd(instrument) {
+  if (!instrument) return null;
+  try {
+    const t = await apiGet(`/api/deribit/ticker?instrument=${encodeURIComponent(instrument)}`);
+    const underlying = t.underlying_price ?? t.index_price ?? 1;
+    const mark = t.mark_price ?? 0;
+    return isCoinSettledInst(instrument) ? mark * underlying : mark;
+  } catch (e) { return null; }
+}
+
+// dir is the CLOSING direction the job stores (opt_dir/fut_dir): "sell"
+// closes a long (original qty was positive), "buy" closes a short
+// (original qty was negative) — same convention as server.js's workers.
+function signedQty(qty, dir) {
+  const mag = Math.abs(Number(qty) || 0);
+  return dir === "sell" ? mag : -mag;
+}
+
+function legLivePnl(leg, tickers) {
+  let pnl = 0;
+  if (leg.opt_instrument && Number(leg.opt_qty)) {
+    const mark = tickers[leg.opt_instrument];
+    if (mark != null) pnl += (mark - Number(leg.opt_entry_price || 0)) * signedQty(leg.opt_qty, leg.opt_dir);
+  }
+  if (leg.fut_instrument && Number(leg.fut_qty)) {
+    const mark = tickers[leg.fut_instrument];
+    if (mark != null) pnl += (mark - Number(leg.fut_entry_price || 0)) * signedQty(leg.fut_qty, leg.fut_dir);
+  }
+  return pnl;
+}
+
+// items: either [job] (single-leg) or the combo's legs array — both shapes
+// carry opt_instrument/opt_qty/opt_dir/opt_entry_price (+ fut_* equivalents).
+function useLivePreview(job, items, isTerminal) {
+  const [preview, setPreview] = useState(null);
+  const timerRef = useRef(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  const refresh = useCallback(async () => {
+    if (!job || !job.token) return;
+    try {
+      const curItems = itemsRef.current;
+      const instruments = [...new Set(curItems.flatMap((l) => [l.opt_instrument, l.fut_instrument].filter(Boolean)))];
+      const [bal, ...tickerVals] = await Promise.all([
+        apiGet(`/api/deribit/collateral?token=${encodeURIComponent(job.token)}${job.account_id ? `&account_id=${job.account_id}` : ""}`),
+        ...instruments.map(fetchTickerUsd),
+      ]);
+      const tickers = {};
+      instruments.forEach((inst, i) => { tickers[inst] = tickerVals[i]; });
+      const bsPnl = curItems.reduce((s, l) => s + legLivePnl(l, tickers), 0);
+      setPreview({ liveEquity: bal && !bal.error ? bal.total_usd : null, bsPnl });
+    } catch (e) { /* keep last preview on a transient fetch error */ }
+  }, [job?.id, job?.token, job?.account_id]);
+
+  useEffect(() => {
+    if (!job || isTerminal) return;
+    refresh();
+    timerRef.current = setInterval(refresh, LIVE_POLL_MS);
+    return () => clearInterval(timerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, isTerminal, refresh]);
+
+  return preview;
+}
+
+function LivePreviewRow({ preview }) {
+  if (!preview) return null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 12, marginBottom: 14 }}>
+      <div className="pnl-card pnl-neutral">
+        <div className="stat-label">Live Equity</div>
+        <div className="stat-value">{preview.liveEquity != null ? fmtCcy(preview.liveEquity) : "—"}</div>
+      </div>
+      <div className="pnl-card pnl-neutral">
+        <div className="stat-label">Live Mark-to-Market PnL</div>
+        <div className="stat-value" style={{ color: preview.bsPnl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(preview.bsPnl)}</div>
+      </div>
+    </div>
+  );
+}
+
 function SingleLegMonitor({ tradeId }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState(null);
@@ -66,11 +159,13 @@ function SingleLegMonitor({ tradeId }) {
     finally { setStopping(false); }
   }
 
+  const isTerminal = job ? ["completed", "failed", "stopped"].includes(job.status) : true;
+  const preview = useLivePreview(job, job ? [job] : [], isTerminal);
+
   if (error && !job) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>{error}</div></div>;
   if (!job) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>Loading…</div></div>;
 
   const pnl = job.last_equity_usd != null ? Number(job.last_equity_usd) - Number(job.initial_total_usd) : null;
-  const isTerminal = ["completed", "failed", "stopped"].includes(job.status);
 
   return (
     <>
@@ -86,6 +181,7 @@ function SingleLegMonitor({ tradeId }) {
             <div className="pnl-card pnl-neutral"><div className="stat-label">PnL / Target</div><div className="stat-value" style={{ color: pnl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(pnl)} / +{fmtCcy(job.target_pnl)}</div></div>
             <div className="pnl-card pnl-neutral"><div className="stat-label">Final Equity</div><div className="stat-value">{job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"}</div></div>
           </div>
+          {!isTerminal && <LivePreviewRow preview={preview} />}
           <table className="ord-table">
             <thead><tr><th>Leg</th><th>Entry</th><th>Close</th></tr></thead>
             <tbody>
@@ -137,11 +233,13 @@ function ComboMonitor({ groupId }) {
     finally { setStopping(false); }
   }
 
+  const isTerminal = job ? ["completed", "failed", "stopped"].includes(job.status) : true;
+  const preview = useLivePreview(job, legs, isTerminal);
+
   if (error && !job) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>{error}</div></div>;
   if (!job) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>Loading…</div></div>;
 
   const pnl = job.last_equity_usd != null ? Number(job.last_equity_usd) - Number(job.initial_total_usd) : null;
-  const isTerminal = ["completed", "failed", "stopped"].includes(job.status);
 
   return (
     <div className="card">
@@ -156,6 +254,7 @@ function ComboMonitor({ groupId }) {
           <div className="pnl-card pnl-neutral"><div className="stat-label">PnL / Target</div><div className="stat-value" style={{ color: pnl >= 0 ? "var(--green)" : "var(--red)" }}>{fmtCcy(pnl)} / +{fmtCcy(job.target_pnl)}</div></div>
           <div className="pnl-card pnl-neutral"><div className="stat-label">Final Equity</div><div className="stat-value">{job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"}</div></div>
         </div>
+        {!isTerminal && <LivePreviewRow preview={preview} />}
         <table className="ord-table">
           <thead><tr><th>Leg</th><th>Type</th><th>Opt Entry</th><th>Opt Close</th><th>Fut Entry</th><th>Fut Close</th></tr></thead>
           <tbody>

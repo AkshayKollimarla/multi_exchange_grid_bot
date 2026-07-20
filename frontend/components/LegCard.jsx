@@ -16,6 +16,13 @@ const LEG_PILL = {
   "PUT SHORT": { bg: "#fee2e2", text: "#b91c1c" },
 };
 
+// BTC/ETH have both a coin-margined ("inverse") perpetual and a
+// USDC-margined ("linear") one; every other token only has the linear
+// form, so the toggle below is meaningless there.
+function futuresHasBothTypes(token) {
+  return token === "BTC" || token === "ETH";
+}
+
 export function legPillHtml(type) {
   const p = LEG_PILL[type], c = LEG_COLORS[type];
   return { p, c };
@@ -191,7 +198,18 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeTyp
         </div>
         <div className="row-2">{field("Entry Price (live mark)", numInput("opt_entry_price"))}{field("Exit Price", numInput("opt_exit_price"))}</div>
         <div className="row-2">{field("Fut Qty", numInput("fut_qty"))}{field("Fut Entry Price", numInput("fut_entry_price"))}</div>
-        <div className="row-2">{field("Fut Exit Price", numInput("fut_exit_price"))}{field("IV (%) for BS (live)", numInput("iv"))}</div>
+        <div className="row-2">
+          {field("Fut Exit Price", numInput("fut_exit_price"))}
+          {futuresHasBothTypes(form.token)
+            ? field("Fut Instrument Type", (
+              <select value={form.fut_instrument_type || "inverse"} onChange={(e) => onSetField(idx, "fut_instrument_type", e.target.value)}>
+                <option value="inverse">Coin-margined</option>
+                <option value="linear">USDC-margined</option>
+              </select>
+            ))
+            : field("IV (%) for BS (live)", numInput("iv"))}
+        </div>
+        {futuresHasBothTypes(form.token) && <div className="row-2">{field("IV (%) for BS (live)", numInput("iv"))}<div /></div>}
         <div className="row-2">{field("Upside Distance", numInput("upside_distance"))}{field("Down Distance", numInput("down_distance"))}</div>
         <div className="row-2">{field("Basket Distance", numInput("basket_distance"))}{field("Basket Loss", numInput("basket_loss"))}</div>
         <div className="row-2">{field("Net Booked PnL", numInput("net_booked_pnl"))}{field("Market Making PL", numInput("market_making_pl"))}</div>

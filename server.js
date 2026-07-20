@@ -4753,6 +4753,13 @@ async function autoCloseFinishJob(jobId) {
     const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
     const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateAutoCloseJob(jobId, { final_equity_usd: finalEquity });
+    // Snapshot the job's own audit trail onto its trade row too, so it
+    // survives even if this job record is later cleaned up.
+    if (job.trade_id) {
+      await db.updateOptionsTrade(job.trade_id, {
+        execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
+      }).catch((e) => console.error(`[auto-close #${jobId}] trade snapshot failed:`, e.message));
+    }
     const initial = parseFloat(job.initial_total_usd);
     const netDiff = finalEquity - initial;
     const optEntry = job.opt_entry_price != null ? parseFloat(job.opt_entry_price) : null;
@@ -4943,6 +4950,16 @@ async function autoCloseComboFinishJob(comboJobId) {
     const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
     const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateComboJob(comboJobId, { final_equity_usd: finalEquity });
+    // Snapshot the combo job's own audit trail onto every leg's trade row,
+    // so it survives even if this job record is later cleaned up.
+    if (job.group_id) {
+      const { trades } = await db.listOptionsTrades({ groupId: job.group_id }).catch(() => ({ trades: [] }));
+      for (const t of trades || []) {
+        await db.updateOptionsTrade(t.id, {
+          execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
+        }).catch((e) => console.error(`[auto-close-combo #${comboJobId}] trade ${t.id} snapshot failed:`, e.message));
+      }
+    }
     const initial = parseFloat(job.initial_total_usd);
     const netDiff = finalEquity - initial;
     const legLines = legs.map((leg) => {

@@ -12,16 +12,23 @@ import { getCollateral } from "@/lib/deribitOrder";
 const FIELD_KEYS = [
   "entry_date", "token", "option_type", "investment", "status", "end_date",
   "options_strike", "expiry", "opt_entry_qty", "opt_entry_price", "opt_exit_price",
-  "fut_qty", "fut_entry_price", "fut_exit_price", "upside_distance", "down_distance",
+  "fut_qty", "fut_entry_price", "fut_exit_price", "fut_instrument_type", "upside_distance", "down_distance",
   "basket_distance", "basket_loss", "net_booked_pnl", "market_making_pl",
 ];
+
+// BTC/ETH have both a coin-margined ("inverse") perpetual (BTC-PERPETUAL)
+// and a USDC-margined ("linear") one (BTC_USDC-PERPETUAL); every other
+// token only has the linear one, so the toggle is meaningless there.
+function futuresHasBothTypes(token) {
+  return token === "BTC" || token === "ETH";
+}
 
 function emptyForm() {
   return {
     entry_date: new Date().toISOString().slice(0, 10), token: "", option_type: "PUT",
     investment: "", status: "open", end_date: "",
     options_strike: "", expiry: "", opt_entry_qty: "", opt_entry_price: "", opt_exit_price: "",
-    fut_qty: "", fut_entry_price: "", fut_exit_price: "",
+    fut_qty: "", fut_entry_price: "", fut_exit_price: "", fut_instrument_type: "inverse",
     upside_distance: "", down_distance: "", basket_distance: "", basket_loss: "",
     net_booked_pnl: "", market_making_pl: "",
   };
@@ -348,7 +355,11 @@ function AddStrategyInner() {
     try {
       // Futures-only path: immediate market order, no chase.
       if (optQty === 0) {
-        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}`);
+        // No option leg to auto-match settlement from — respect the manual
+        // inverse/linear toggle (BTC/ETH only; every other token only has
+        // one perpetual form and ignores this param).
+        const prefer = payload.fut_instrument_type === "inverse" ? "coin" : payload.fut_instrument_type === "linear" ? "usdc" : "";
+        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(payload.token)}${prefer ? `&prefer=${prefer}` : ""}`);
         if (!perp?.instrument_name) throw new Error(`No perpetual futures instrument found for ${payload.token}`);
         const price = await runFuturesEntry({ instrument: perp.instrument_name, qty: futQty, onLog: addExecLog, accountId: payload.account_id });
         await persistFillPrices({ fut_entry_price: price != null ? String(price) : payload.fut_entry_price });
@@ -460,6 +471,10 @@ function AddStrategyInner() {
       clearInterval(acTimerRef.current);
       pollAcJob(j.id);
       acTimerRef.current = setInterval(() => pollAcJob(j.id), 5000);
+      // Snapshot the target/collateral onto the trade row immediately, not
+      // just when the job finishes — visible right away, survives even if
+      // the job is later stopped/deleted before completing.
+      if (id) apiPut(`/api/options-db/trades/${id}`, { target_pnl: tPnl, initial_collateral_usd: bal.total_usd ?? 0 }).catch(() => {});
     } catch (e) {
       setAcError(e.message);
     } finally {
@@ -588,6 +603,12 @@ function AddStrategyInner() {
                 {field("Fut Entry Price", numInput("fut_entry_price"))}
               </div>
               {field("Fut Exit Price", numInput("fut_exit_price"))}
+              {futuresHasBothTypes(form.token) && field("Fut Instrument Type", (
+                <select value={form.fut_instrument_type || "inverse"} onChange={(e) => setField("fut_instrument_type", e.target.value)}>
+                  <option value="inverse">Coin-margined ({form.token}-PERPETUAL)</option>
+                  <option value="linear">USDC-margined ({form.token}_USDC-PERPETUAL)</option>
+                </select>
+              ), <span style={{ fontSize: 10, color: "var(--muted)" }}> only applies when there's no option leg to auto-match settlement from</span>)}
 
               <div className="section-title">Distances &amp; Basket</div>
               <div className="row-2">

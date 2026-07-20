@@ -129,6 +129,20 @@ async function pingDb() {
     // existing row (and anything that never sets it) is unaffected.
     try { await conn.query("ALTER TABLE options_trades ADD COLUMN account_id INT NULL DEFAULT NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Manual override for a futures-only leg's perpetual settlement
+    // currency (coin-margined "inverse" vs USDC-margined "linear") — only
+    // consulted when there's no option leg to auto-match settlement from.
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN fut_instrument_type VARCHAR(20) NULL DEFAULT 'inverse'"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Snapshot of the auto-close job's own log/target/collateral — written
+    // back onto the trade row when the job finishes, so the audit trail
+    // survives even after the job record itself is cleaned up.
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN execution_log LONGTEXT NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN target_pnl DECIMAL(12,4) NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN initial_collateral_usd DECIMAL(14,4) NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
 
     // Trading accounts (multiple wallets/keys per exchange). Credentials are
     // stored as JSON so each exchange can keep its own shape:
@@ -656,9 +670,10 @@ async function isAccountReferenced(id) {
 const OPT_MANUAL_COLS = [
   "entry_date","token","option_type","investment","options_strike","expiry",
   "opt_entry_qty","opt_entry_price","opt_exit_price",
-  "fut_qty","fut_entry_price","fut_exit_price",
+  "fut_qty","fut_entry_price","fut_exit_price","fut_instrument_type",
   "upside_distance","down_distance","basket_distance","basket_loss",
   "net_booked_pnl","market_making_pl","end_date","status","group_id","account_id",
+  "execution_log","target_pnl","initial_collateral_usd",
 ];
 const OPT_DERIVED_COLS = [
   "days_to_expiry","total_theta_gain_loss","per_day_theta_gain_loss",

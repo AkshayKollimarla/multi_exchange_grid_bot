@@ -11,11 +11,18 @@ import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
 import LegCard, { LegPill, LEG_TYPES } from "@/components/LegCard";
 
+// BTC/ETH have both a coin-margined ("inverse") perpetual (BTC-PERPETUAL)
+// and a USDC-margined ("linear") one (BTC_USDC-PERPETUAL); every other
+// token only has the linear one, so the toggle is meaningless there.
+function futuresHasBothTypes(token) {
+  return token === "BTC" || token === "ETH";
+}
+
 function emptyLegForm() {
   return {
     entry_date: "", token: "", investment: "", options_strike: "", expiry: "",
     opt_entry_qty: "", opt_entry_price: "", opt_exit_price: "", iv: "",
-    fut_qty: "", fut_entry_price: "", fut_exit_price: "",
+    fut_qty: "", fut_entry_price: "", fut_exit_price: "", fut_instrument_type: "inverse",
     upside_distance: "", down_distance: "", basket_distance: "", basket_loss: "",
     net_booked_pnl: "", market_making_pl: "", end_date: "", status: "open", option_type: "CALL",
   };
@@ -36,6 +43,7 @@ function tradeToLegForm(t) {
     options_strike: t.options_strike || "", expiry: toInputDate(t.expiry),
     opt_entry_qty: t.opt_entry_qty ?? "", opt_entry_price: t.opt_entry_price ?? "", opt_exit_price: t.opt_exit_price ?? "",
     iv: "", fut_qty: t.fut_qty ?? "", fut_entry_price: t.fut_entry_price ?? "", fut_exit_price: t.fut_exit_price ?? "",
+    fut_instrument_type: t.fut_instrument_type || "inverse",
     upside_distance: t.upside_distance ?? "", down_distance: t.down_distance ?? "",
     basket_distance: t.basket_distance ?? "", basket_loss: t.basket_loss ?? "",
     net_booked_pnl: t.net_booked_pnl ?? "", market_making_pl: t.market_making_pl ?? "",
@@ -345,7 +353,11 @@ function CombinedSimulatorInner() {
       // both the order call and the auto-close-combo payload afterward.
       await Promise.all(plans.map(async (p) => {
         if (p.futQty === 0) return;
-        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(p.token)}${p.optInst ? `&prefer=${p.optInst.settlement}` : ""}`);
+        // With an option leg, auto-match its settlement currency; otherwise
+        // (futures-only leg) respect the manual inverse/linear toggle.
+        const fit = p.leg.form.fut_instrument_type;
+        const prefer = p.optInst ? p.optInst.settlement : fit === "inverse" ? "coin" : fit === "linear" ? "usdc" : "";
+        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent(p.token)}${prefer ? `&prefer=${prefer}` : ""}`);
         p.futInst = perp?.instrument_name || "";
       }));
 
@@ -465,6 +477,12 @@ function CombinedSimulatorInner() {
       clearInterval(comboAcTimerRef.current);
       pollComboAcJob(j.id);
       comboAcTimerRef.current = setInterval(() => pollComboAcJob(j.id), 5000);
+      // Snapshot the target/collateral onto every leg's trade row
+      // immediately, not just when the job finishes.
+      const tPnl = parseFloat(comboTargetPnl), initUsd = bal.total_usd ?? 0;
+      editIds.filter(Boolean).forEach((id) => {
+        apiPut(`/api/options-db/trades/${id}`, { target_pnl: tPnl, initial_collateral_usd: initUsd }).catch(() => {});
+      });
     } catch (e) {
       setComboAcError(e.message);
     } finally {
@@ -490,7 +508,9 @@ function CombinedSimulatorInner() {
       const optInst = findInstrument(instruments, leg.form.token, leg.form.expiry, leg.form.option_type, leg.form.options_strike);
       let futInst = "";
       if (futQty !== 0) {
-        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent((leg.form.token || "ETH").toUpperCase())}${optInst ? `&prefer=${optInst.settlement}` : ""}`);
+        const fit = leg.form.fut_instrument_type;
+        const prefer = optInst ? optInst.settlement : fit === "inverse" ? "coin" : fit === "linear" ? "usdc" : "";
+        const perp = await apiGet(`/api/deribit/perpetual?token=${encodeURIComponent((leg.form.token || "ETH").toUpperCase())}${prefer ? `&prefer=${prefer}` : ""}`);
         futInst = perp?.instrument_name || "";
       }
       return {
