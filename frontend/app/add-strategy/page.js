@@ -153,7 +153,7 @@ function AddStrategyInner() {
       const index = Number(t.index_price ?? t.underlying_price) || 0;
       const rawMark = Number(t.mark_price) || 0;
       const markUsd = inst.settlement === "coin" ? rawMark * index : rawMark;
-      if (markUsd) setForm((f) => ({ ...f, opt_entry_price: markUsd.toFixed(4), fut_entry_price: f.fut_entry_price || (index ? index.toFixed(4) : f.fut_entry_price) }));
+      if (markUsd) setForm((f) => ({ ...f, opt_entry_price: markUsd.toFixed(4), fut_entry_price: index ? index.toFixed(4) : f.fut_entry_price }));
       if (t.mark_iv != null) setIv(Number(t.mark_iv).toFixed(1));
       const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
       setNote(`${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv || 0).toFixed(1)}% · index $${index.toFixed(2)}`);

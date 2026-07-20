@@ -89,7 +89,7 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeTyp
       const markUsd = inst.settlement === "coin" ? rawMark * index : rawMark;
       if (markUsd) onSetField(idx, "opt_entry_price", markUsd.toFixed(4));
       if (t.mark_iv != null) onSetField(idx, "iv", Number(t.mark_iv).toFixed(1));
-      if (!form.fut_entry_price && index) onSetField(idx, "fut_entry_price", index.toFixed(4));
+      if (index) onSetField(idx, "fut_entry_price", index.toFixed(4));
       const settleTag = inst.settlement === "coin" ? " (coin-settled)" : "";
       setNote(`${inst.instrument_name}${settleTag} · mark $${markUsd.toFixed(4)} · IV ${Number(t.mark_iv || 0).toFixed(1)}% · index $${index.toFixed(2)}`);
     } catch (e) {
