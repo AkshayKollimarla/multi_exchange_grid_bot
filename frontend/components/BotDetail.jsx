@@ -9,6 +9,10 @@ export default function BotDetail({ bot }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+        <span className="pill pill-blue" style={{ textTransform: "none" }}>👤 Account: {bot.accountName || "Default (.env)"}</span>
+        {bot.symbol && <span>Symbol: <b style={{ color: "var(--ink)" }}>{bot.symbol}</b></span>}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
         <Stat label="Live Price" value={bot.lastPrice != null ? `$${bot.lastPrice}` : "—"} cls="green" />
         <Stat label="Entry Price" value={bot.entryPrice != null ? `$${bot.entryPrice}` : "—"} />

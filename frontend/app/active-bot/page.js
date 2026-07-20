@@ -103,6 +103,9 @@ export default function ActiveBotPage() {
                 <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "capitalize" }}>
                   {b.exchangeKey}{b.id !== b.exchangeKey ? ` · ${b.id}` : ""}
                 </span>
+                <span className="pill pill-blue" style={{ textTransform: "none" }} title="Trading account">
+                  👤 {b.accountName || "Default (.env)"}
+                </span>
                 {b.running && b.lastPrice != null && (
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>${b.lastPrice}</span>
                 )}

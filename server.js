@@ -3791,6 +3791,7 @@ function buildStateSnapshot() {
       logsRecent          : b.logs.slice(0, 50),
       symbol              : b.config?.symbol || null,
       priceSource         : b.config?.priceSource || null,
+      accountName         : b.config?.accountName || null,
       hedge               : b.exchangeKey === "binance" ? {
         enabled         : b.hedge.enabled,
         spotInventory   : b.hedge.spotInventory,
