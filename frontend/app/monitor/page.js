@@ -179,6 +179,90 @@ function ComboMonitor({ groupId }) {
   );
 }
 
+const ACTIVE_STATUSES = ["active", "closing", "closing_option", "closing_futures"];
+
+// Landing view when opened with no trade_id/group_id — e.g. from the sidebar,
+// or after navigating away from Add Strategy/Combined Simulator and losing
+// the in-page "Open Monitor" link. Lists every job so a running monitor is
+// always reachable, not just from the tab that started it.
+function AllJobsList() {
+  const [singleJobs, setSingleJobs] = useState(null);
+  const [comboJobs, setComboJobs] = useState(null);
+  const [error, setError] = useState(null);
+  const timerRef = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [s, c] = await Promise.all([apiGet("/api/auto-close"), apiGet("/api/auto-close-combo")]);
+      setSingleJobs(s.jobs || []);
+      setComboJobs(c.jobs || []);
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    timerRef.current = setInterval(load, 10000);
+    return () => clearInterval(timerRef.current);
+  }, [load]);
+
+  if (error) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>{error}</div></div>;
+  if (singleJobs == null || comboJobs == null) return <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>Loading…</div></div>;
+
+  const active = [...singleJobs.filter((j) => ACTIVE_STATUSES.includes(j.status)).map((j) => ({ ...j, kind: "single" })),
+    ...comboJobs.filter((j) => ACTIVE_STATUSES.includes(j.status)).map((j) => ({ ...j, kind: "combo" }))];
+  const recent = [...singleJobs.filter((j) => !ACTIVE_STATUSES.includes(j.status)).map((j) => ({ ...j, kind: "single" })),
+    ...comboJobs.filter((j) => !ACTIVE_STATUSES.includes(j.status)).map((j) => ({ ...j, kind: "combo" }))].slice(0, 15);
+
+  function JobRow({ j }) {
+    const href = j.kind === "single" ? `/monitor?trade_id=${encodeURIComponent(j.trade_id)}` : `/monitor?group_id=${encodeURIComponent(j.group_id)}`;
+    const label = j.kind === "single" ? `${j.opt_instrument}${j.fut_instrument ? ` + ${j.fut_instrument}` : ""}` : `Combo — ${j.token} (Job #${j.id})`;
+    return (
+      <tr>
+        <td><a href={href} style={{ color: "var(--brand)", fontWeight: 600 }}>{label}</a></td>
+        <td><StatusPill status={j.status} /></td>
+        <td>{fmtCcy(j.initial_total_usd)}</td>
+        <td>+{fmtCcy(j.target_pnl)}</td>
+        <td>{j.last_equity_usd != null ? fmtCcy(j.last_equity_usd) : "—"}</td>
+        <td>{j.created_at ? new Date(j.created_at).toLocaleString("en-IN") : "—"}</td>
+      </tr>
+    );
+  }
+
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">🟢 Active ({active.length})</div>
+        <div className="card-body" style={{ padding: 0 }}>
+          <table className="ord-table">
+            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Equity</th><th>Started</th></tr></thead>
+            <tbody>
+              {active.length === 0
+                ? <tr><td colSpan={6} className="empty-td">No active monitors — start one from Add Strategy or Combined Simulator.</td></tr>
+                : active.map((j) => <JobRow key={`${j.kind}-${j.id}`} j={j} />)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-header">Recent</div>
+        <div className="card-body" style={{ padding: 0 }}>
+          <table className="ord-table">
+            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Equity</th><th>Started</th></tr></thead>
+            <tbody>
+              {recent.length === 0
+                ? <tr><td colSpan={6} className="empty-td">Nothing yet.</td></tr>
+                : recent.map((j) => <JobRow key={`${j.kind}-${j.id}`} j={j} />)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function MonitorInner() {
   const searchParams = useSearchParams();
   const tradeId = searchParams.get("trade_id");
@@ -189,11 +273,7 @@ function MonitorInner() {
       <div className="header"><div className="header-logo">Grid<span>Bot</span> — Multi-Exchange</div></div>
       <section className="section">
         <div className="sec-head">📡 Auto-Close Monitor</div>
-        {!tradeId && !groupId && (
-          <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>
-            Open this page from Add Strategy or Combined Simulator once an auto-close job is running (Execute + Auto-Close).
-          </div></div>
-        )}
+        {!tradeId && !groupId && <AllJobsList />}
         {tradeId && <SingleLegMonitor tradeId={tradeId} />}
         {groupId && <ComboMonitor groupId={groupId} />}
       </section>

@@ -274,6 +274,35 @@ function CombinedSimulatorInner() {
     setComboLogs((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 100));
   }
 
+  // Real orders just filled on the exchange — save (or update) every leg
+  // so the combined strategy shows up on the Options Dashboard with its
+  // actual fill prices, the same way Add Strategy's persistFillPrices does
+  // for a single leg. Reuses editIds/editGroupId if already in edit mode,
+  // otherwise creates the group on first execute.
+  async function persistExecutedLegs(filledLegs) {
+    const groupId = comboGroupIdRef.current || editGroupId || `combined_${Date.now()}`;
+    comboGroupIdRef.current = groupId;
+    const priceByIndex = {};
+    filledLegs.forEach((l) => {
+      const patch = priceByIndex[l.legIndex] || (priceByIndex[l.legIndex] = {});
+      if (l.optFillPrice != null) patch.opt_entry_price = l.optFillPrice.toFixed(4);
+      if (l.futFillPrice != null) patch.fut_entry_price = String(l.futFillPrice);
+    });
+    const newIds = [...editIds];
+    for (let i = 0; i < legs.length; i++) {
+      const payload = { ...legs[i].form, ...priceByIndex[i], group_id: groupId };
+      try {
+        if (newIds[i]) await apiPut(`/api/options-db/trades/${newIds[i]}`, payload);
+        else newIds[i] = (await apiPost("/api/options-db/trades", payload)).id;
+      } catch (e) {
+        addComboLog(`Leg ${i + 1}: Warning — could not save to Options Dashboard (${e.message})`);
+      }
+    }
+    setEditGroupId(groupId);
+    setEditIds(newIds);
+    addComboLog("✓ Strategy saved to Options Dashboard.");
+  }
+
   // All legs' OPTIONS placed at the same time (each still chases its own
   // mid independently) so the underlying price hasn't had time to drift
   // between legs by the time the last one goes in. Futures hedges only
@@ -330,7 +359,7 @@ function CombinedSimulatorInner() {
         const optFillPrice = optOutcomes[idx].status === "fulfilled" ? optOutcomes[idx].value : null;
         const futFillPrice = futOutcomes[idx].status === "fulfilled" ? futOutcomes[idx].value : null;
         filledLegs.push({
-          legType: p.leg.type,
+          legIndex: p.i, legType: p.leg.type,
           optInst: p.optInst?.instrument_name || "", optQty: p.optQty, optDir: p.optQty > 0 ? "sell" : "buy", optFillPrice,
           futInst: p.futInst, futQty: p.futQty, futDir: p.futQty > 0 ? "sell" : "buy", futFillPrice,
         });
@@ -344,6 +373,7 @@ function CombinedSimulatorInner() {
         .map((l) => ({ leg_type: l.legType, opt_instrument: l.optInst, opt_price: l.optFillPrice, fut_instrument: l.futInst, fut_price: l.futFillPrice }));
       if (entryAlertLegs.length) {
         apiPost("/api/entry-alert", { token: plans[0]?.token || "ETH", legs: entryAlertLegs }).catch(() => {});
+        await persistExecutedLegs(filledLegs);
       }
 
       const failedLegs = plans.filter((p, idx) =>

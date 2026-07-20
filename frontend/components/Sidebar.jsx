@@ -21,6 +21,7 @@ const OPTIONS_ITEMS = [
   { key: "optadd", label: "Add Strategy", icon: "＋", href: "/add-strategy" },
   { key: "optsim", label: "Combined Simulator", icon: "▤", href: "/combined-simulator" },
   { key: "optanalysis", label: "Options Analysis", icon: "／", href: "/options-analysis" },
+  { key: "optmonitor", label: "Monitor", icon: "📡", href: "/monitor" },
 ];
 
 function NavItem({ item, pathname }) {
