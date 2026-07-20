@@ -279,7 +279,12 @@ const bots = {
 
 let botIdCounter = 1;
 function createBotInstance(exchangeKey, label) {
-  const botId = `${exchangeKey}_${++botIdCounter}`;
+  // botIdCounter resets to 1 on every server restart, but a resumed session
+  // can now occupy an arbitrary-looking id (e.g. "hyperliquid_5") that this
+  // counter has no idea about — skip any id already taken so a fresh bot
+  // can never collide with (and silently overwrite) a resumed one.
+  let botId;
+  do { botId = `${exchangeKey}_${++botIdCounter}`; } while (bots[botId]);
   const bot = makeFreshBot(exchangeKey, botId);
   bot.label = label || botId;
   bots[botId] = bot;
@@ -5159,21 +5164,42 @@ app.post("/api/start", async (req, res) => {
   }
 
   // ── DYNAMIC BOT INSTANCE ──
-  // First bot of an exchange (when the legacy slot is free) reuses the
-  // legacy slot — keeps Binance hedge + Telegram menus working. Additional
-  // bots get a fresh unique instance so many run simultaneously.
+  // True resume (from resumeSessions() on boot) MUST reuse the EXACT
+  // original botId the session was persisted under — not get dynamically
+  // reassigned to whichever slot happens to be free. Session persistence
+  // (saveSessionState every 30s, clearSession on stop) is always keyed by
+  // the bot's CURRENT runtime botId, not by whatever key it was originally
+  // saved under. Before this, a resumed bot could land on a different slot
+  // each restart (first-come-first-served on the shared legacy slot), so
+  // /api/stop's clearSession(runtimeBotId) would delete the wrong row (or
+  // none at all) — leaving the ORIGINAL row orphaned in bot_sessions,
+  // untouched by any future save/clear, and re-resumed forever on every
+  // subsequent restart even after being "stopped". Reusing the original id
+  // keeps every save/clear operation pointed at the one row it came from.
+  const resumeBotId = req.body?.resume === true ? req.body?._resumeBotId : null;
   let bot, botId;
-  const legacy = bots[exchangeKey];
-  if (legacy && !legacy.running) {
-    bot   = legacy;
-    botId = exchangeKey;
-    // refresh the legacy slot
-    bots[exchangeKey] = makeFreshBot(exchangeKey, exchangeKey);
-    bot   = bots[exchangeKey];
+  if (resumeBotId) {
+    if (bots[resumeBotId]?.running) {
+      return res.status(409).json({ error: `Bot ${resumeBotId} is already running` });
+    }
+    botId = resumeBotId;
+    bot = makeFreshBot(exchangeKey, botId);
+    bots[botId] = bot;
   } else {
-    const lbl = `${cfg.symbol || exchangeKey} ${priceSource.includes("spot") ? "Spot" : priceSource.includes("hyperliquid") ? "Perp" : ""}`.trim();
-    bot   = createBotInstance(exchangeKey, lbl);
-    botId = bot.botId;
+    // First bot of an exchange (when the legacy slot is free) reuses the
+    // legacy slot — keeps Binance hedge + Telegram menus working. Additional
+    // bots get a fresh unique instance so many run simultaneously.
+    const legacy = bots[exchangeKey];
+    if (legacy && !legacy.running) {
+      botId = exchangeKey;
+      // refresh the legacy slot
+      bots[exchangeKey] = makeFreshBot(exchangeKey, exchangeKey);
+      bot = bots[exchangeKey];
+    } else {
+      const lbl = `${cfg.symbol || exchangeKey} ${priceSource.includes("spot") ? "Spot" : priceSource.includes("hyperliquid") ? "Perp" : ""}`.trim();
+      bot = createBotInstance(exchangeKey, lbl);
+      botId = bot.botId;
+    }
   }
   bot.label = `${cfg.symbol || exchangeKey}`;
 
@@ -5625,12 +5651,14 @@ async function resumeSessions() {
   console.log(`[RESUME] Found ${sessions.length} persisted session(s) — restarting...`);
   for (const s of sessions) {
     try {
-      // True continuation: pass resume:true + the persisted state. /api/start
-      // skips cancelAllOrders + initial maintainGrid when these are present.
+      // True continuation: pass resume:true + the persisted state, AND the
+      // exact original botId (_resumeBotId) so /api/start reuses that same
+      // slot instead of dynamically assigning a new one — keeps this row
+      // the one every future save/clear targets, instead of orphaning it.
       const r = await fetch(`http://127.0.0.1:${PORT}/api/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...s.config, resume: true, _resumeState: s.state }),
+        body: JSON.stringify({ ...s.config, resume: true, _resumeState: s.state, _resumeBotId: s.botId }),
       });
       const body = await r.json().catch(() => ({}));
       if (r.ok) {
