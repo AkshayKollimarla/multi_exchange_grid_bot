@@ -514,10 +514,29 @@ function AddStrategyInner() {
     <>
       <div className="header"><div className="header-logo">Grid<span>Bot</span> — Multi-Exchange</div></div>
       <section className="section">
-        <div className="sec-head">➕ Add Strategy</div>
-        {editId != null && (
-          <div style={{ marginBottom: 10, fontSize: 12, color: "var(--muted)" }}>Editing strategy <b>#{editId}</b></div>
-        )}
+        <div className="sec-head" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button className="btn-refresh" onClick={() => router.back()} style={{ padding: "6px 10px" }}>←</button>
+          <span>{editId != null ? "Edit / Close Strategy" : "➕ Add Strategy"}</span>
+          {editId != null && (
+            <span style={{ marginLeft: "auto", background: "#dbeafe", color: "#1d4ed8", padding: "3px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+              Strategy #{editId}
+            </span>
+          )}
+        </div>
+
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-body" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div className="field" style={{ maxWidth: 280, margin: 0 }}>
+              <label>Exchange Account</label>
+              <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
+                <option value="">— Manual entry (no live data) —</option>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
+            <a href="/accounts" target="_blank" style={{ fontSize: 12, color: "var(--brand)", fontWeight: 600, whiteSpace: "nowrap" }}>Manage Accounts</a>
+          </div>
+        </div>
+
         <div className="page" style={{ alignItems: "start", gridTemplateColumns: "1.7fr 1fr" }}>
           <div className="card">
             <div className="card-header">Strategy Details</div>
@@ -537,15 +556,6 @@ function AddStrategyInner() {
                   </>
                 ))}
               </div>
-              {accounts.length > 0 && (
-                <div className="field">
-                  <label>Account</label>
-                  <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
-                    {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                  <div className="hint">Manage accounts in the <b>Accounts</b> tab. Execution always uses the single Deribit key configured in .env.</div>
-                </div>
-              )}
               <div className="row-2">
                 {field("Option Type", (
                   <select value={form.option_type} onChange={(e) => handleTypeChange(e.target.value)}>
