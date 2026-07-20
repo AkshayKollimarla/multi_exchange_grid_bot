@@ -2224,6 +2224,156 @@ async function gridLoop(botId) {
 // ============================================================
 //  CHECK FILLS
 // ============================================================
+// Records a fill and does whatever it implies (open a pending round trip
+// for an entry fill, or close one out for a target fill). This is the
+// SINGLE place a fill gets processed, called both from the normal poll
+// below (checkAndHandleFills) AND from every place a cancel attempt can
+// discover "oh, this order actually already filled" — placeTargetOrder's
+// victim eviction, maintainGrid's far-order cleanup (both exchanges), and
+// syncOrdersFromExchange's orphan cleanup. Before this existed, those
+// cancel-race paths either silently dropped the fill (Hyperliquid) or
+// just left it stuck as "cancel failed, retry next loop" for an extra
+// ~9s tick until the normal poll eventually caught it on its own (CCXT) —
+// this makes recognition immediate and guarantees it's never dropped
+// regardless of which code path discovers the fill first.
+//
+// `order` is the CCXT fetchOrder() result when available (Binance/
+// Deribit) — used for the exact fill price/qty/fee. Omitted for
+// Hyperliquid (no cheap equivalent lookup), which falls back to the
+// tracked order's own resting price/qty — the same assumption the
+// pre-existing Hyperliquid fill path already made, since its orders are
+// always post-only limit orders that fill exactly at their resting price.
+async function processFilledOrder(botId, tracked, order) {
+  const bot = bots[botId];
+  if (!bot) return;
+  const exchangeKey = bot.exchangeKey;
+  const cfg = bot.config;
+
+  const fillTs    = new Date().toISOString();
+  const fillPrice = order ? parseFloat(order.average || order.price || tracked.price) : tracked.price;
+  const fillQty   = order ? parseFloat(order.filled  || order.amount || tracked.qty)   : tracked.qty;
+
+  // Hyperliquid never returns a real fee — always an estimate (maker rate,
+  // since orders are always post-only). CCXT exchanges (Binance/Deribit)
+  // report a real fee when available, defaulting to 0 — not an estimate —
+  // when they don't (e.g. Binance futures often omits it on fetchOrder).
+  // This matches each exchange's pre-extraction behavior exactly.
+  const feeKnown = order ? (order.fee != null && order.fee.cost != null) : false;
+  const feeCost  = order ? parseFloat(order.fee?.cost ?? 0) : estimateFee(cfg.priceSource, fillPrice, fillQty);
+  const feeCcy   = order?.fee?.currency || "USDC";
+
+  if (order) {
+    log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee:${feeKnown ? "$" + feeCost.toFixed(4) : "n/a"}`, "success");
+  } else {
+    log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee≈$${feeCost.toFixed(4)}`, "success");
+  }
+
+  const fillRecord = {
+    side: tracked.side, price: fillPrice, qty: fillQty,
+    type: tracked.type, ts: fillTs,
+    fee: feeCost, feeCcy, orderId: tracked.id,
+  };
+  bot.fillHistory.unshift(fillRecord);
+  db.recordFill(bot, fillRecord);
+
+  if (tracked.type === "entry") {
+    const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
+    const targetSide  = tracked.side === "sell" ? "buy" : "sell";
+    const targetPrice = tracked.side === "sell"
+      ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
+      : roundPrice(fillPrice + cfg.targetSpread, tickSize);
+
+    bot.pendingRoundTrips.push({
+      id: `rt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      openSide: tracked.side, openPrice: fillPrice,
+      targetOrderId: null, targetSide, targetPrice,
+      qty: fillQty, openTs: fillTs,
+      openOrderId: tracked.id,
+      openFee: feeKnown ? feeCost : null,
+    });
+    log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
+    return;
+  }
+
+  if (tracked.type === "target") {
+    const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
+    if (matched.length === 0) {
+      const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
+      const entrySide  = tracked.side === "buy" ? "sell" : "buy";
+      const entryPrice = tracked.side === "buy"
+        ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
+        : roundPrice(fillPrice - cfg.targetSpread, tickSize);
+      const fallbackIdx = bot.pendingRoundTrips.findIndex(
+        rt => rt.openSide === entrySide && Math.abs(rt.openPrice - entryPrice) < tickSize
+      );
+      if (fallbackIdx !== -1) {
+        matched.push(bot.pendingRoundTrips[fallbackIdx]);
+        log(botId, `Target matched by price fallback`, "warn");
+      } else {
+        log(botId, `Target filled but no pending RT linked — fill recorded as standalone`, "warn");
+      }
+    }
+
+    bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => !matched.includes(rt));
+
+    for (const rt of matched) {
+      const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
+      const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
+      const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+
+      let openFee, closeFee;
+      if (exchangeKey === "hyperliquid") {
+        openFee  = estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
+        closeFee = estimateFee(cfg.priceSource, fillPrice, rt.qty);
+      } else {
+        // Take ACTUAL exchange fees for both legs (incl. 0 — e.g. a 0-maker
+        // promo). fetchOrder omits the fee on some exchanges (Binance
+        // futures), so if either leg's fee is unknown, pull it from the
+        // trade history (one call, matched by order id). Estimate only when
+        // the exchange still gives us nothing.
+        let realOpen  = rt.openFee;
+        let realClose = feeKnown ? feeCost : null;
+        if (realOpen == null || realClose == null) {
+          try {
+            const trades = await bot.exchange.fetchMyTrades(cfg.symbol, undefined, 100);
+            const byOid = {};
+            for (const t of trades) {
+              const oid = String(t.order ?? t.info?.orderId ?? t.info?.order_id ?? "");
+              if (oid) byOid[oid] = (byOid[oid] || 0) + parseFloat(t.fee?.cost ?? 0);
+            }
+            if (realOpen  == null && byOid[String(rt.openOrderId)] !== undefined) realOpen  = byOid[String(rt.openOrderId)];
+            if (realClose == null && byOid[String(tracked.id)]     !== undefined) realClose = byOid[String(tracked.id)];
+          } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
+        }
+        openFee  = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
+        closeFee = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty);
+      }
+      const totalFee = parseFloat((openFee + closeFee).toFixed(8));
+      const netPnl   = parseFloat((grossPnl - totalFee).toFixed(8));
+
+      const rtRecord = {
+        id: rt.id, openSide: rt.openSide,
+        openPrice: rt.openPrice, closePrice: fillPrice,
+        buyPrice, sellPrice, qty: rt.qty,
+        pnl: grossPnl,
+        grossPnl, totalFee, netPnl,
+        openTs: rt.openTs, closeTs: fillTs,
+        durationMs: Date.now() - new Date(rt.openTs).getTime(),
+      };
+      bot.completedRoundTrips.unshift(rtRecord);
+      db.recordRoundTrip(bot, rtRecord, bot.completedRoundTrips.length);
+      const netSign = netPnl >= 0 ? "+" : "";
+      log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
+      if (cfg?.telegramToken && cfg?.telegramChatId) {
+        const tag = EXCHANGE_TAG[exchangeKey];
+        sendTelegram(cfg.telegramToken, cfg.telegramChatId,
+          `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
+        );
+      }
+    }
+  }
+}
+
 async function checkAndHandleFills(botId, currentPrice) {
   const bot = bots[botId];
   if (!bot) return;
@@ -2298,85 +2448,7 @@ async function checkAndHandleFills(botId, currentPrice) {
       }
 
       // Treat as FILLED.
-      const fillTs    = new Date().toISOString();
-      const fillPrice = tracked.price;
-      const fillQty   = tracked.qty;
-      // Estimate maker fee for this fill (post-only ensures maker rate)
-      const feeEst    = estimateFee(cfg.priceSource, fillPrice, fillQty);
-      log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee≈$${feeEst.toFixed(4)}`, "success");
-
-      const hlFill = {
-        side: tracked.side, price: fillPrice, qty: fillQty,
-        type: tracked.type, ts: fillTs,
-        fee: feeEst, feeCcy: "USDC", orderId: tracked.id,
-      };
-      bot.fillHistory.unshift(hlFill);
-      db.recordFill(bot, hlFill);
-
-      if (tracked.type === "entry") {
-        const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
-        const targetSide  = tracked.side === "sell" ? "buy" : "sell";
-        const targetPrice = tracked.side === "sell"
-          ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
-          : roundPrice(fillPrice + cfg.targetSpread, tickSize);
-
-        bot.pendingRoundTrips.push({
-          id: `rt_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
-          openSide: tracked.side, openPrice: fillPrice,
-          targetOrderId: null, targetSide, targetPrice,
-          qty: fillQty, openTs: fillTs,
-        });
-        log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
-
-      } else if (tracked.type === "target") {
-        const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
-        if (matched.length === 0) {
-          // Fallback: price-based
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
-          const entrySide  = tracked.side === "buy" ? "sell" : "buy";
-          const entryPrice = tracked.side === "buy"
-            ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
-            : roundPrice(fillPrice - cfg.targetSpread, tickSize);
-          const fallbackIdx = bot.pendingRoundTrips.findIndex(
-            rt => rt.openSide === entrySide && Math.abs(rt.openPrice - entryPrice) < tickSize
-          );
-          if (fallbackIdx !== -1) {
-            matched.push(bot.pendingRoundTrips[fallbackIdx]);
-            log(botId, `Target matched by price fallback`, "warn");
-          }
-        }
-        bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => !matched.includes(rt));
-        for (const rt of matched) {
-          const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
-          const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
-          const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
-          // Estimate fees for BOTH fills of this round trip (entry + close).
-          // Post-only is enforced, so both are maker rate.
-          const openFee   = estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
-          const closeFee  = estimateFee(cfg.priceSource, fillPrice,     rt.qty);
-          const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
-          const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
-          const hlRt = {
-            id: rt.id, openSide: rt.openSide,
-            openPrice: rt.openPrice, closePrice: fillPrice,
-            buyPrice, sellPrice, qty: rt.qty,
-            pnl: grossPnl,           // gross (kept for backward compat)
-            grossPnl, totalFee, netPnl,
-            openTs: rt.openTs, closeTs: fillTs,
-            durationMs: Date.now() - new Date(rt.openTs).getTime(),
-          };
-          bot.completedRoundTrips.unshift(hlRt);
-          db.recordRoundTrip(bot, hlRt, bot.completedRoundTrips.length);
-          const netSign = netPnl >= 0 ? "+" : "";
-          log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
-          if (cfg?.telegramToken && cfg?.telegramChatId) {
-            const tag = EXCHANGE_TAG[exchangeKey];
-            sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-              `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
-            );
-          }
-        }
-      }
+      await processFilledOrder(botId, tracked);
     }
     bot.openOrders = stillOpenLocal;
     return;
@@ -2390,126 +2462,7 @@ async function checkAndHandleFills(botId, currentPrice) {
       const order = await bot.exchange.fetchOrder(tracked.id, cfg.symbol);
 
       if (order.status === "closed" || order.status === "filled") {
-        const fillTs    = new Date().toISOString();
-        const fillPrice = parseFloat(order.average || order.price || tracked.price);
-        const fillQty   = parseFloat(order.filled  || order.amount || tracked.qty);
-        const feeCost   = parseFloat(order.fee?.cost ?? 0);
-        const feeCcy    = order.fee?.currency || "";
-        // Did the exchange actually report a fee for this fill? (0 is a valid
-        // real fee — e.g. 0-maker promos — and must NOT be treated as missing.)
-        const feeKnown  = order.fee != null && order.fee.cost != null;
-
-        log(botId, `FILLED [${tracked.type.toUpperCase()}] ${tracked.side.toUpperCase()} @ $${fillPrice}  qty:${fillQty}  fee:${feeKnown ? "$"+feeCost.toFixed(4) : "n/a"}`, "success");
-
-        const ccxtFill = {
-          side: tracked.side, price: fillPrice, qty: fillQty,
-          type: tracked.type, ts: fillTs,
-          fee: feeCost, feeCcy, orderId: tracked.id,
-        };
-        bot.fillHistory.unshift(ccxtFill);
-        db.recordFill(bot, ccxtFill);
-
-        if (tracked.type === "entry") {
-          // Just record the pending round trip. The strict-6 algorithm in
-          // maintainGrid (which runs immediately after this in gridLoop)
-          // will handle target placement and entry promotion.
-          const targetSide  = tracked.side === "sell" ? "buy" : "sell";
-          const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
-          const targetPrice = tracked.side === "sell"
-            ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
-            : roundPrice(fillPrice + cfg.targetSpread, tickSize);
-
-          bot.pendingRoundTrips.push({
-            id              : `rt_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
-            openSide        : tracked.side,
-            openPrice       : fillPrice,
-            targetOrderId   : null,
-            targetSide,
-            targetPrice,
-            qty             : fillQty,
-            openTs          : fillTs,
-            openOrderId     : tracked.id,                  // to look up the real open-leg fee later
-            openFee         : feeKnown ? feeCost : null,   // actual open-leg fee (null = estimate/lookup later)
-          });
-          log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
-
-        } else if (tracked.type === "target") {
-          // Find ALL pending RTs that point to this order id
-          const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
-
-          if (matched.length === 0) {
-            // Fallback: try price-based match for legacy/external orders
-            const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
-            const entrySide  = tracked.side === "buy" ? "sell" : "buy";
-            const entryPrice = tracked.side === "buy"
-              ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
-              : roundPrice(fillPrice - cfg.targetSpread, tickSize);
-            const fallbackIdx = bot.pendingRoundTrips.findIndex(
-              rt => rt.openSide === entrySide && Math.abs(rt.openPrice - entryPrice) < tickSize
-            );
-            if (fallbackIdx !== -1) {
-              matched.push(bot.pendingRoundTrips[fallbackIdx]);
-              log(botId, `Target matched by price fallback`, "warn");
-            } else {
-              log(botId, `Target filled but no pending RT linked — fill recorded as standalone`, "warn");
-            }
-          }
-
-          // Remove matched RTs from pending and add to completed
-          bot.pendingRoundTrips = bot.pendingRoundTrips.filter(rt => !matched.includes(rt));
-
-          for (const rt of matched) {
-            const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
-            const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
-            const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
-            // Take ACTUAL exchange fees for both legs (incl. 0 — e.g. a 0-maker
-            // promo). fetchOrder omits the fee on some exchanges (Binance
-            // futures), so if either leg's fee is unknown, pull it from the
-            // trade history (one call, matched by order id). Estimate only when
-            // the exchange still gives us nothing.
-            let realOpen  = rt.openFee;
-            let realClose = feeKnown ? feeCost : null;
-            if (realOpen == null || realClose == null) {
-              try {
-                const trades = await bot.exchange.fetchMyTrades(cfg.symbol, undefined, 100);
-                const byOid = {};
-                for (const t of trades) {
-                  const oid = String(t.order ?? t.info?.orderId ?? t.info?.order_id ?? "");
-                  if (oid) byOid[oid] = (byOid[oid] || 0) + parseFloat(t.fee?.cost ?? 0);
-                }
-                if (realOpen  == null && byOid[String(rt.openOrderId)] !== undefined) realOpen  = byOid[String(rt.openOrderId)];
-                if (realClose == null && byOid[String(tracked.id)]     !== undefined) realClose = byOid[String(tracked.id)];
-              } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
-            }
-            const openFee   = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
-            const closeFee  = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty);
-            const totalFee  = parseFloat((openFee + closeFee).toFixed(8));
-            const netPnl    = parseFloat((grossPnl - totalFee).toFixed(8));
-
-            const ccxtRt = {
-              id: rt.id, openSide: rt.openSide,
-              openPrice: rt.openPrice, closePrice: fillPrice,
-              buyPrice, sellPrice,
-              qty: rt.qty,
-              pnl: grossPnl,         // gross (kept for backward compat)
-              grossPnl, totalFee, netPnl,
-              openTs: rt.openTs, closeTs: fillTs,
-              durationMs: Date.now() - new Date(rt.openTs).getTime(),
-            };
-            bot.completedRoundTrips.unshift(ccxtRt);
-            db.recordRoundTrip(bot, ccxtRt, bot.completedRoundTrips.length);
-            const netSign = netPnl >= 0 ? "+" : "";
-            log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
-
-            if (cfg?.telegramToken && cfg?.telegramChatId) {
-              const tag = EXCHANGE_TAG[exchangeKey];
-              sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-                `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
-              );
-            }
-          }
-        }
-
+        await processFilledOrder(botId, tracked, order);
       } else if (order.status === "open" || order.status === "partially_filled") {
         stillOpen.push(tracked);
       }
@@ -2566,12 +2519,17 @@ async function placeTargetOrder(botId, filledSide, fillPrice, fillQty) {
     const victim = sideOrders.filter(o => o.type === "entry")
       .sort((a,b) => Math.abs(b.price - fillPrice) - Math.abs(a.price - fillPrice))[0];
     if (victim) {
-      const ok = await cancelSingleOrder(botId, victim.id, cfg.symbol);
-      if (ok) {
+      const result = await cancelSingleOrder(botId, victim.id, cfg.symbol);
+      if (result.status === "cancelled") {
         bot.recentlyCancelled = bot.recentlyCancelled || {};
         bot.recentlyCancelled[victim.id] = Date.now();
         bot.openOrders = bot.openOrders.filter(o => o.id !== victim.id);
         log(botId, `Removed ENTRY ${victim.side.toUpperCase()} @ $${victim.price} — making room for target`);
+      } else if (result.status === "filled") {
+        // It filled instead of cancelling — process it as a real fill
+        // (opens its own pending round trip) rather than losing it.
+        bot.openOrders = bot.openOrders.filter(o => o.id !== victim.id);
+        await processFilledOrder(botId, victim, result.order);
       } else {
         log(botId, `Could not remove entry ${victim.id} — will retry`, "warn");
       }
@@ -2845,8 +2803,11 @@ async function maintainGrid(botId, currentPrice) {
           const o = toCancel.find(x => Number(x.id) === r.id);
           if (!o) continue;
           const s = r.status;
-          const gone = (s === "success") || (s && s.error && /never placed|already cancel|filled/i.test(s.error));
-          if (gone) {
+          const cancelled = (s === "success") || (s && s.error && /never placed|already cancel/i.test(s.error));
+          // "filled" specifically means it executed, not that it's gone —
+          // process it as a real fill instead of silently dropping it.
+          const filled = s && s.error && /filled/i.test(s.error) && !cancelled;
+          if (cancelled) {
             bot.recentlyCancelled = bot.recentlyCancelled || {};
             bot.recentlyCancelled[o.id] = Date.now();
             bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
@@ -2856,6 +2817,9 @@ async function maintainGrid(botId, currentPrice) {
               }
             }
             log(botId, `↓ Cancelled ${o.type?.toUpperCase()||""} ${o.side.toUpperCase()} @ $${o.price} — far from price`);
+          } else if (filled) {
+            bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
+            await processFilledOrder(botId, o);
           }
         }
       } else {
@@ -2865,8 +2829,8 @@ async function maintainGrid(botId, currentPrice) {
       // CCXT path (Binance/Deribit): serial is fine, those APIs are fast
       for (const o of toCancel) {
         if (!bot.running) break;
-        const ok = await cancelSingleOrder(botId, o.id, cfg.symbol);
-        if (ok) {
+        const result = await cancelSingleOrder(botId, o.id, cfg.symbol);
+        if (result.status === "cancelled") {
           bot.recentlyCancelled = bot.recentlyCancelled || {};
           bot.recentlyCancelled[o.id] = Date.now();
           bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
@@ -2876,6 +2840,9 @@ async function maintainGrid(botId, currentPrice) {
             }
           }
           log(botId, `↓ Cancelled ${o.type?.toUpperCase()||""} ${o.side.toUpperCase()} @ $${o.price} — far from price`);
+        } else if (result.status === "filled") {
+          bot.openOrders = bot.openOrders.filter(x => x.id !== o.id);
+          await processFilledOrder(botId, o, result.order);
         } else {
           log(botId, `Cancel failed for ${o.id} — will retry next loop`, "warn");
         }
@@ -3117,21 +3084,32 @@ async function placeSingleOrder(botId, side, qty, price, symbol, orderParams) {
 // actions with the API wallet's private key and POSTs to /exchange.
 
 // Single-order cancel wrapper: uses native SDK for Hyperliquid (fast),
-// CCXT for others. Returns true on success, false on real failure.
-// Already-filled/cancelled orders count as success.
+// CCXT for others.
+// Returns { status: "cancelled" | "filled" | "failed", order? }. Callers
+// MUST branch on status — "filled" means the order actually executed and
+// needs processFilledOrder(), not "cancelled" bookkeeping. Before this
+// fix, a cancel attempt that raced against a genuine fill was indistinct
+// from a clean cancel (or from a real failure), which is exactly how a
+// fill could get silently dropped: this bot never saw it, never opened a
+// pending round trip or a closing target for it, yet the exchange had
+// already executed it.
 async function cancelSingleOrder(botId, orderId, symbol) {
   const bot = bots[botId];
   const exchangeKey = bot.exchangeKey;
   if (exchangeKey === "hyperliquid") {
     const result = await hyperliquidNativeCancel(bot, [orderId]);
-    if (!result.ok) return false;
+    if (!result.ok) return { status: "failed" };
     const s = result.results[0]?.status;
-    if (s === "success") return true;
+    if (s === "success") return { status: "cancelled" };
     if (s && s.error) {
       const m = s.error.toLowerCase();
-      return m.includes("never placed") || m.includes("already cancel") || m.includes("filled");
+      // "filled" specifically means the order already executed — that's a
+      // fill to process, not a cancellation. Only "never placed"/"already
+      // cancelled" genuinely mean it's gone with nothing to record.
+      if (m.includes("filled")) return { status: "filled" };
+      if (m.includes("never placed") || m.includes("already cancel")) return { status: "cancelled" };
     }
-    return false;
+    return { status: "failed" };
   }
   // CCXT path for Binance/Deribit, with timeout safety
   try {
@@ -3139,11 +3117,21 @@ async function cancelSingleOrder(botId, orderId, symbol) {
       bot.exchange.cancelOrder(orderId, symbol),
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout 5s")), 5000)),
     ]);
-    return true;
+    return { status: "cancelled" };
   } catch (err) {
     const m = (err.message || "").toLowerCase();
-    if (m.includes("never placed") || m.includes("already cancel") || m.includes("filled") || m.includes("not found")) return true;
-    return false;
+    if (m.includes("never placed") || m.includes("already cancel")) return { status: "cancelled" };
+    // Ambiguous failure (Binance's actual wording for "already filled" is
+    // typically "Unknown order sent.", which doesn't literally say
+    // "filled") — ask the exchange directly instead of guessing from error
+    // text, which is exactly what silently dropped fills before this fix.
+    try {
+      const order = await bot.exchange.fetchOrder(orderId, symbol);
+      const os = String(order?.status || "").toLowerCase();
+      if (os === "closed" || os === "filled") return { status: "filled", order };
+      if (["canceled", "cancelled", "expired", "rejected"].includes(os)) return { status: "cancelled" };
+    } catch (e2) { /* fetchOrder itself failed too — genuinely can't tell, retry next loop */ }
+    return { status: "failed" };
   }
 }
 
@@ -3287,9 +3275,17 @@ async function cancelAllOrders(botId) {
           log(botId, `  ↳ Cancelled ${tag}`, "info");
           ok++;
         } else if (status && status.error) {
-          if (status.error.toLowerCase().includes("never placed") ||
-              status.error.toLowerCase().includes("already cancel") ||
-              status.error.toLowerCase().includes("filled")) {
+          const m = status.error.toLowerCase();
+          if (m.includes("filled")) {
+            // It filled instead of cancelling — the bot is stopping (and
+            // discards pendingRoundTrips right after this loop regardless),
+            // but the resulting position is real and now unmanaged. Warn
+            // clearly instead of folding it into "already gone" — silence
+            // here is exactly how a stopped bot leaves an unexpected open
+            // position nobody notices.
+            log(botId, `  ↳ ⚠️ ${tag} FILLED instead of cancelling — you now have an open position from this order, it will not be tracked after stop`, "warn");
+            ok++;
+          } else if (m.includes("never placed") || m.includes("already cancel")) {
             log(botId, `  ↳ ${tag} already gone (${status.error})`, "info");
             ok++;
           } else {
@@ -3406,7 +3402,15 @@ async function syncOrdersFromExchange(botId) {
       const ids = orphans.map(o => o.oid);
       const result = await hyperliquidNativeCancel(bot, ids);
       if (result.ok) {
-        log(botId, `Cleared ${orphans.length} orphan(s)`, "success");
+        // Orphans were never tracked locally (no known entry/target type),
+        // so there's no round trip to open for one that turns out to have
+        // filled instead of cancelling — but that must not be silently
+        // folded into "cleared" as if it were a clean cancel.
+        const filled = result.results.filter(r => r.status && r.status.error && /filled/i.test(r.status.error) && !/never placed|already cancel/i.test(r.status.error));
+        if (filled.length > 0) {
+          log(botId, `⚠️ ${filled.length} orphan order(s) filled instead of cancelling — untracked position(s), please verify on the exchange`, "warn");
+        }
+        log(botId, `Cleared ${orphans.length - filled.length} orphan(s)${filled.length ? `, ${filled.length} filled` : ""}`, "success");
       } else {
         log(botId, `Orphan cancel failed: ${result.error}`, "warn");
       }
@@ -3436,8 +3440,16 @@ async function syncOrdersFromExchange(botId) {
     if (orphans.length > 0) {
       log(botId, `Found ${orphans.length} orphan orders on exchange — cancelling`, "warn");
       for (const o of orphans) {
-        const ok = await cancelSingleOrder(botId, o.id, cfg.symbol);
-        if (ok) bot.recentlyCancelled[o.id] = now;
+        const result = await cancelSingleOrder(botId, o.id, cfg.symbol);
+        if (result.status === "cancelled") {
+          bot.recentlyCancelled[o.id] = now;
+        } else if (result.status === "filled") {
+          // Orphans were never tracked locally (no known entry/target type),
+          // so there's no round trip to open for it here — but this must
+          // not be silently treated as "cancelled". Surface it so it can be
+          // reconciled manually instead of vanishing from the logs.
+          log(botId, `⚠️ Orphan order ${o.id} (${o.side} @ $${o.price}) filled instead of cancelling — untracked position, please verify on the exchange`, "warn");
+        }
       }
     }
 
