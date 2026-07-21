@@ -204,14 +204,19 @@ function CombinedSimulatorInner() {
     opt: deriveds.reduce((s, d) => s + n(d.down_opt_pnl), 0), fut: deriveds.reduce((s, d) => s + n(d.downside_fut_pnl), 0),
     mm: deriveds.reduce((s, d) => s + n(d.total_mm_loss), 0), net: deriveds.reduce((s, d) => s + n(d.estimated_downside_net_pnl), 0),
   };
+  // Combined total, same shape as "Est. Net" (opt + fut + mm loss) — just
+  // swapping in the Today-BS option value instead of the expiry/intrinsic
+  // one. Previously this summed ONLY the option leg's BS-today PnL, so it
+  // could land on the opposite sign from the real combined position (e.g.
+  // a short-heavy futures hedge that more than offsets the option side).
   const bsUpsideCombined = legs.reduce((s, l) => {
     const S = parseFloat(l.form.fut_entry_price) || 0, opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S + (parseFloat(l.form.upside_distance) || 0));
-  }, 0);
+  }, 0) + upside.fut + upside.mm;
   const bsDownsideCombined = legs.reduce((s, l) => {
     const S = parseFloat(l.form.fut_entry_price) || 0, opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
-  }, 0);
+  }, 0) + downside.fut + downside.mm;
 
   const rowsDef = [
     { label: "Upside Opt PnL", key: "upside_opt_pnl", total: upside.opt },
