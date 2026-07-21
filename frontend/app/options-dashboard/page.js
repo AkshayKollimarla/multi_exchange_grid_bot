@@ -123,50 +123,40 @@ export default function OptionsDashboardPage() {
 
   return (
     <>
-      <div className="header">
-        <div className="header-logo">Grid<span>Bot</span> — Multi-Exchange</div>
-      </div>
-
       <section className="section">
-        <div className="sec-head">📋 Options Dashboard</div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 14 }}>
-          <div className="pnl-card pnl-neutral"><div className="stat-label">Total (page)</div><div className="stat-value blue">{trades.length} / {total}</div></div>
-          <div className="pnl-card pnl-neutral"><div className="stat-label">Open (page)</div><div className="stat-value">{open}</div></div>
-          <div className="pnl-card pnl-neutral"><div className="stat-label">Closed (page)</div><div className="stat-value">{closed}</div></div>
-          <div className="pnl-card pnl-neutral"><div className="stat-label">Booked PnL (page)</div><div className="stat-value">{fmtCcy(booked)}</div></div>
+        <div className="sec-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>Options Strategy</span>
+          <a href="/add-strategy" className="btn" style={{ textDecoration: "none", background: "var(--brand)", color: "#fff" }}>
+            + Add Strategy
+          </a>
         </div>
 
-        <div className="card" style={{ marginBottom: 14 }}>
-          <div className="card-body" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "end" }}>
-            <div className="field" style={{ margin: 0, minWidth: 150 }}>
-              <label>Status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="all">All</option>
-                <option value="open">Open</option>
-                <option value="closed">Closed</option>
-              </select>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
+          <div className="pnl-card pnl-neutral"><div className="stat-label">Total (this page)</div><div className="stat-value blue">{trades.length} / {total}</div></div>
+          <div className="pnl-card pnl-neutral"><div className="stat-label">Open (page)</div><div className="stat-value green">{open}</div></div>
+          <div className="pnl-card pnl-neutral"><div className="stat-label">Closed (page)</div><div className="stat-value">{closed}</div></div>
+          <div className="pnl-card pnl-neutral"><div className="stat-label">Booked PnL (page)</div><div className="stat-value" style={{ color: booked >= 0 ? "#16a34a" : "#dc2626" }}>{fmtCcy(booked)}</div></div>
+        </div>
+
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-body" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            <div className="tab-row" style={{ margin: 0 }}>
+              <button className={`tab-btn${status === "all" ? " active" : ""}`} onClick={() => setStatus("all")}>All</button>
+              <button className={`tab-btn${status === "open" ? " active" : ""}`} onClick={() => setStatus("open")}>Open</button>
+              <button className={`tab-btn${status === "closed" ? " active" : ""}`} onClick={() => setStatus("closed")}>Closed</button>
             </div>
-            <div className="field" style={{ margin: 0, minWidth: 150 }}>
-              <label>Search Token</label>
-              <input type="text" placeholder="e.g. BTC" value={token} onChange={(e) => setToken(e.target.value)} />
+            <div className="search-box" style={{ minWidth: 180 }}>
+              <span className="search-icon">🔍</span>
+              <input type="text" placeholder="Search token…" value={token} onChange={(e) => setToken(e.target.value)}
+                style={{ height: 38, padding: "0 12px 0 34px", border: "1px solid var(--border-2)", borderRadius: "var(--r-sm)", fontSize: 13, width: "100%" }} />
             </div>
-            <div className="field" style={{ margin: 0 }}>
-              <label>From</label>
-              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-            </div>
-            <div className="field" style={{ margin: 0 }}>
-              <label>To</label>
-              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-            </div>
-            <button className="btn-refresh" onClick={clearFilters}>Clear filters</button>
-            <a
-              href="/add-strategy"
-              className="btn btn-start"
-              style={{ marginLeft: "auto", padding: "10px 18px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-            >
-              ➕ Add Strategy
-            </a>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+              style={{ height: 38, padding: "0 12px", border: "1px solid var(--border-2)", borderRadius: "var(--r-sm)", fontSize: 13 }} />
+            <span style={{ color: "var(--muted-2)", fontSize: 12 }}>to</span>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+              style={{ height: 38, padding: "0 12px", border: "1px solid var(--border-2)", borderRadius: "var(--r-sm)", fontSize: 13 }} />
+            <button className="btn-refresh" onClick={clearFilters} style={{ height: 38 }}>Clear filters</button>
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted-2)" }}>{total} records total</span>
           </div>
         </div>
 
@@ -189,17 +179,18 @@ export default function OptionsDashboardPage() {
                 )}
                 {!loading && !error && rows.map((r, i) =>
                   r.kind === "group-banner" ? (
-                    <tr key={`g-${r.groupId}`} style={{ background: "#f5f3ff" }}>
-                      <td colSpan={14} style={{ padding: "8px 12px", borderLeft: "4px solid #7c3aed" }}>
-                        <span style={{ background: "#7c3aed", color: "#fff", padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
-                          COMBINED · {r.count} legs
+                    <tr key={`g-${r.groupId}`} style={{ background: "var(--purple-soft)" }}>
+                      <td colSpan={14} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--purple)", color: "#fff", padding: "4px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, letterSpacing: ".02em" }}>
+                          🔗 COMBINED STRATEGY
                         </span>
+                        <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted-3)" }}>{r.count} legs</span>
                         {r.perLegInv > 0 && (
-                          <span style={{ marginLeft: 10, fontSize: 12, color: "var(--muted)" }}>
-                            Per leg: <b>{fmtCcy(r.perLegInv)}</b>
+                          <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted-3)" }}>
+                            Per leg: <b style={{ color: "var(--ink)" }}>{fmtCcy(r.perLegInv)}</b>
                           </span>
                         )}
-                        <span style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, color: r.combinedPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                        <span style={{ marginLeft: 12, fontSize: 12, fontWeight: 600, color: r.combinedPnl >= 0 ? "#16a34a" : "#dc2626" }}>
                           Combined PnL: {fmtCcy(r.combinedPnl)}
                         </span>
                       </td>
@@ -214,7 +205,7 @@ export default function OptionsDashboardPage() {
         </div>
 
         {pages > 1 && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 2px", fontSize: 12, color: "var(--muted)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 2px", fontSize: 12, color: "var(--muted)" }}>
             <span>Page {page} of {pages} · {total} records</span>
             <span>
               <button className="btn-refresh" disabled={page <= 1} onClick={() => gotoPage(page - 1)}>‹ Prev</button>{" "}
@@ -228,38 +219,35 @@ export default function OptionsDashboardPage() {
 }
 
 function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
-  const typeColor = t.option_type === "PUT" ? "var(--red)" : "var(--green)";
-  const statusStyle = t.status === "open"
-    ? { background: "#d1fae5", color: "#059669" }
-    : { background: "#f1f5f9", color: "#475569" };
-  const pnlColor = Number(t.net_booked_pnl) >= 0 ? "var(--green)" : "var(--red)";
+  const typeColor = t.option_type === "PUT" ? "#dc2626" : "#16a34a";
+  const pnlColor = Number(t.net_booked_pnl) >= 0 ? "#16a34a" : "#dc2626";
   const monitorHref = combined ? `/monitor?group_id=${encodeURIComponent(groupId)}` : `/monitor?trade_id=${t.id}`;
   return (
     <tr style={combined ? { borderLeft: "4px solid #ddd6fe" } : undefined}>
-      <td style={{ fontFamily: "monospace", color: "var(--muted)", fontSize: 11 }}>{t.id}</td>
+      <td style={{ fontFamily: "var(--font-mono)", color: "var(--muted)", fontSize: 12 }}>{t.id}</td>
       <td style={{ whiteSpace: "nowrap" }}>{fmtDate(t.entry_date)}</td>
       <td>
         <b>{t.token}</b>
-        {combined && <div style={{ fontSize: 10, color: "#a78bfa" }}>leg</div>}
+        {combined && <div style={{ fontSize: 10, color: "var(--purple)" }}>leg</div>}
       </td>
-      <td style={{ fontSize: 12, color: "var(--muted)" }}>{t.account_id && acctMap?.[t.account_id] ? acctMap[t.account_id] : "—"}</td>
-      <td><span style={{ color: typeColor, fontWeight: 700, fontSize: 11 }}>{t.option_type}</span></td>
+      <td style={{ fontSize: 13, color: "var(--muted)" }}>{t.account_id && acctMap?.[t.account_id] ? acctMap[t.account_id] : "—"}</td>
+      <td><span style={{ color: typeColor, fontWeight: 700, fontSize: 12 }}>{t.option_type}</span></td>
       <td>{t.options_strike || "—"}</td>
       <td style={{ whiteSpace: "nowrap" }}>{fmtDate(t.expiry)}</td>
       <td>{t.days_to_expiry ?? "—"}</td>
-      <td><span style={{ ...statusStyle, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 700, textTransform: "capitalize" }}>{t.status}</span></td>
-      <td>{fmtCcy(t.investment)}</td>
-      <td style={{ color: Number(t.market_making_pl) >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>{fmtCcy(t.market_making_pl)}</td>
+      <td><span className={`pill ${t.status === "open" ? "pill-green" : "pill-grey"}`}>{t.status}</span></td>
+      <td style={{ fontWeight: 500, color: "var(--ink)" }}>{fmtCcy(t.investment)}</td>
+      <td style={{ color: Number(t.market_making_pl) >= 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>{fmtCcy(t.market_making_pl)}</td>
       <td style={{ color: pnlColor, fontWeight: 600 }}>{t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}</td>
-      <td style={{ color: "#7c3aed", fontWeight: 600 }}>{t.apy != null ? Number(t.apy).toFixed(2) + "%" : "—"}</td>
+      <td style={{ color: "var(--purple)", fontWeight: 600 }}>{t.apy != null ? Number(t.apy).toFixed(2) + "%" : "—"}</td>
       <td style={{ whiteSpace: "nowrap" }}>
-        {combined
-          ? <a href={`/combined-simulator?group=${encodeURIComponent(groupId)}`} style={{ color: "#7c3aed", fontWeight: 600 }}>Edit Combined</a>
-          : <a href={`/add-strategy?id=${t.id}`} style={{ color: "var(--brand)", fontWeight: 600 }}>Edit / Close</a>}
-        {" "}&nbsp;{" "}
-        <a href={monitorHref} style={{ color: "var(--blue, #2563eb)", fontWeight: 600 }}>Monitor</a>
-        {" "}&nbsp;{" "}
-        <a href="#" onClick={(e) => { e.preventDefault(); onDelete(t.id); }} style={{ color: "var(--red)" }}>Delete</a>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {combined
+            ? <a href={`/combined-simulator?group=${encodeURIComponent(groupId)}`} className="btn-outline btn-outline-purple" style={{ textDecoration: "none" }}>Edit Combined</a>
+            : <a href={`/add-strategy?id=${t.id}`} className="btn-outline" style={{ color: "var(--brand)", textDecoration: "none" }}>Edit / Close</a>}
+          <a href={monitorHref} className="btn-outline btn-outline-green" style={{ textDecoration: "none" }}>Monitor</a>
+          <a href="#" onClick={(e) => { e.preventDefault(); onDelete(t.id); }} className="btn-outline btn-outline-red" style={{ textDecoration: "none" }}>Delete</a>
+        </div>
       </td>
     </tr>
   );

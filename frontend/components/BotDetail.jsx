@@ -21,7 +21,7 @@ export default function BotDetail({ bot }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
         <Stat label="Runtime" value={bot.runtimeStr || "—"} cls="blue" />
-        <Stat label="Net PnL (after fees)" value={fmtCcy(stats.netPnl)} sub={`Gross: ${fmtCcy(stats.grossPnl)}`} />
+        <Stat label="Net PnL (after fees)" value={fmtCcy(stats.netPnl)} sub={`Gross: ${fmtCcy(stats.grossPnl)}`} cls="green" />
         <Stat label="Total Fees Paid" value={fmtCcy(stats.totalFees)} cls="red" sub={stats.totalRoundTrips ? `Avg: ${fmtCcy(stats.rtFees / stats.totalRoundTrips)}/RT` : undefined} />
         <Stat label="Round Trips" value={stats.totalRoundTrips ?? 0} cls="blue" sub={`Pending: ${stats.pendingLegs ?? 0}`} />
       </div>

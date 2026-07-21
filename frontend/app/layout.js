@@ -1,16 +1,17 @@
-import { Plus_Jakarta_Sans, IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import Sidebar from "@/components/Sidebar";
 import "./globals.css";
 
-// Same three fonts/weights as the classic dashboard's Google Fonts <link>
-// (index.html), just self-hosted via next/font instead of an external
-// request — visually identical, faster load.
-const fontDisplay = Plus_Jakarta_Sans({
+// Single Inter family for both display and body text, self-hosted via
+// next/font. Kept as two next/font instances (same underlying font) so
+// globals.css's existing --font-display / --font-body variable split
+// doesn't need touching anywhere else in the app.
+const fontDisplay = Inter({
   subsets: ["latin"],
   weight: ["500", "600", "700", "800"],
   variable: "--font-display-raw",
 });
-const fontBody = IBM_Plex_Sans({
+const fontBody = Inter({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-body-raw",
