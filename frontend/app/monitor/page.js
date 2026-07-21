@@ -40,17 +40,24 @@ function LogPanel({ logs }) {
 // option/futures PnL, purely for display. Never touches orders/positions.
 const LIVE_POLL_MS = 30000;
 
-function isCoinSettledInst(instrument) {
-  return !!instrument && !/_USDC|_USDT/i.test(instrument);
+// Perpetuals (inverse coin-margined AND linear USDC-margined alike) always
+// quote mark_price in USD already — only coin-settled OPTIONS report
+// mark_price in the underlying coin and need the underlying-price multiply.
+function isPerpetual(instrument) {
+  return /-PERPETUAL$/i.test(instrument || "");
+}
+function isCoinSettledOption(instrument) {
+  return !!instrument && !isPerpetual(instrument) && !/_USDC|_USDT/i.test(instrument);
 }
 
 async function fetchTickerUsd(instrument) {
   if (!instrument) return null;
   try {
     const t = await apiGet(`/api/deribit/ticker?instrument=${encodeURIComponent(instrument)}`);
-    const underlying = t.underlying_price ?? t.index_price ?? 1;
     const mark = t.mark_price ?? 0;
-    return isCoinSettledInst(instrument) ? mark * underlying : mark;
+    if (isPerpetual(instrument)) return mark;
+    const underlying = t.underlying_price ?? t.index_price ?? 1;
+    return isCoinSettledOption(instrument) ? mark * underlying : mark;
   } catch (e) { return null; }
 }
 
