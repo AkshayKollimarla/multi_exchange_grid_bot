@@ -1,4 +1,4 @@
-import { strikeNumber } from "./blackScholes";
+import { strikeNumber, bsPrice } from "./blackScholes";
 
 function f(v) { const n = parseFloat(v); return isNaN(n) ? 0.0 : n; }
 function divSafe(a, b) { return b === 0 ? 0.0 : a / b; }
@@ -56,6 +56,24 @@ export function computeDerived(d) {
     upper_limit, lower_limit, upside_opt_pnl, down_opt_pnl, upside_fut_pnl, downside_fut_pnl,
     estimated_upside_net_pnl, estimated_downside_net_pnl, apy,
   };
+}
+
+// Option PnL "if the underlying hits Starget today" — full Black-Scholes
+// value (keeps time value) rather than computeDerived()'s upside/down_opt_pnl,
+// which price the option at intrinsic value only (i.e. assume it's held to
+// expiry). Shared by the per-leg card and the combined-simulator page's
+// aggregate "Today BS Upside/Downside" totals, so both stay in sync.
+export function legBsTodayPnl(form, optType, Starget) {
+  const K = strikeNumber(form.options_strike), ep = parseFloat(form.opt_entry_price) || 0, qty = parseFloat(form.opt_entry_qty) || 0;
+  if (!K || !qty) return 0;
+  const sigma = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const expD = form.expiry ? new Date(form.expiry + "T00:00:00") : null;
+  const dte = expD && !isNaN(expD) ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
+  const T = dte / 365;
+  if (T > 0) return (bsPrice(optType.toLowerCase(), Starget, K, T, sigma, 0.05) - ep) * qty;
+  const intrinsic = optType === "CALL" ? Math.max(Starget - K, 0) : Math.max(K - Starget, 0);
+  return (intrinsic - ep) * qty;
 }
 
 export function toInputDate(d) {

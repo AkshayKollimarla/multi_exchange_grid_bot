@@ -4,8 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { fmtCcy } from "@/lib/format";
-import { bsPrice, strikeNumber } from "@/lib/blackScholes";
-import { computeDerived, toInputDate } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate, legBsTodayPnl } from "@/lib/optionsDerived";
 import { findInstrument } from "@/lib/deribitLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
@@ -49,19 +48,6 @@ function tradeToLegForm(t) {
     net_booked_pnl: t.net_booked_pnl ?? "", market_making_pl: t.market_making_pl ?? "",
     end_date: toInputDate(t.end_date), status: t.status || "open", option_type: t.option_type || "CALL",
   };
-}
-
-function legBsTodayPnl(form, optType, Starget) {
-  const K = strikeNumber(form.options_strike), ep = parseFloat(form.opt_entry_price) || 0, qty = parseFloat(form.opt_entry_qty) || 0;
-  if (!K || !qty) return 0;
-  const sigma = Math.max(0.01, (parseFloat(form.iv) || 30) / 100);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const expD = form.expiry ? new Date(form.expiry + "T00:00:00") : null;
-  const dte = expD && !isNaN(expD) ? Math.max(0, Math.round((expD - today) / 86400000)) : 0;
-  const T = dte / 365;
-  if (T > 0) return (bsPrice(optType.toLowerCase(), Starget, K, T, sigma, 0.05) - ep) * qty;
-  const intrinsic = optType === "CALL" ? Math.max(Starget - K, 0) : Math.max(K - Starget, 0);
-  return (intrinsic - ep) * qty;
 }
 
 function ScenarioBlock({ title, scenario, totals, deriveds, bsToday, legs }) {

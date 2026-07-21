@@ -4,7 +4,7 @@ import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { fmtCcy, fmtNum } from "@/lib/format";
 import { strikeNumber } from "@/lib/blackScholes";
-import { computeDerived } from "@/lib/optionsDerived";
+import { computeDerived, legBsTodayPnl } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
 
 export const LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
@@ -49,20 +49,36 @@ function CalcRow({ label, val, big, signed, loss }) {
   );
 }
 
-export function LegCalc({ derived }) {
+export function LegCalc({ derived, form }) {
+  // "Today" values keep the option's remaining time value (full
+  // Black-Scholes at the current IV/DTE) instead of assuming it's held to
+  // expiry — i.e. the PnL if the underlying hit the upside/down target
+  // right now. Futures have no time-decay distinction, so their PnL is the
+  // same figure either way (derived.upside_fut_pnl / downside_fut_pnl).
+  const S = parseFloat(form?.fut_entry_price) || 0;
+  const optType = (form?.option_type || "PUT").toUpperCase();
+  const bsUpToday = form ? legBsTodayPnl(form, optType, S + (parseFloat(form.upside_distance) || 0)) : 0;
+  const bsDownToday = form ? legBsTodayPnl(form, optType, S - (parseFloat(form.down_distance) || 0)) : 0;
+  const netUpToday = derived.total_mm_loss + bsUpToday + derived.upside_fut_pnl;
+  const netDownToday = derived.total_mm_loss + bsDownToday + derived.downside_fut_pnl;
+
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", color: "var(--muted)", letterSpacing: ".07em", marginBottom: 6, paddingBottom: 5, borderBottom: "1px solid var(--border)" }}>
         Auto-Calculated
       </div>
       <CalcRow label="Days to Expiry" val={fmtNum(derived.days_to_expiry, 0)} />
-      <CalcRow label="Opt PnL (Upside)" val={fmtCcy(derived.upside_opt_pnl)} signed />
-      <CalcRow label="Opt PnL (Down)" val={fmtCcy(derived.down_opt_pnl)} signed />
+      <CalcRow label="Opt PnL Upside (Expiry)" val={fmtCcy(derived.upside_opt_pnl)} signed />
+      <CalcRow label="Opt PnL Down (Expiry)" val={fmtCcy(derived.down_opt_pnl)} signed />
+      <CalcRow label="Opt PnL Upside (Today BS)" val={fmtCcy(bsUpToday)} signed />
+      <CalcRow label="Opt PnL Down (Today BS)" val={fmtCcy(bsDownToday)} signed />
       <CalcRow label="Fut PnL (Upside)" val={fmtCcy(derived.upside_fut_pnl)} signed />
       <CalcRow label="Fut PnL (Down)" val={fmtCcy(derived.downside_fut_pnl)} signed />
       <CalcRow label="Total MM Loss" val={fmtCcy(derived.total_mm_loss)} loss />
-      <CalcRow label="Est. Net (Upside)" val={fmtCcy(derived.estimated_upside_net_pnl)} signed big />
-      <CalcRow label="Est. Net (Down)" val={fmtCcy(derived.estimated_downside_net_pnl)} signed big />
+      <CalcRow label="Est. Net (Upside, Expiry)" val={fmtCcy(derived.estimated_upside_net_pnl)} signed big />
+      <CalcRow label="Est. Net (Down, Expiry)" val={fmtCcy(derived.estimated_downside_net_pnl)} signed big />
+      <CalcRow label="Net Upside (Today)" val={fmtCcy(netUpToday)} signed big />
+      <CalcRow label="Net Downside (Today)" val={fmtCcy(netDownToday)} signed big />
       <CalcRow label="APY" val={derived.apy != null ? Number(derived.apy).toFixed(2) + "%" : "—"} signed big />
     </div>
   );
@@ -227,7 +243,7 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeTyp
           {field("End Date", numInput("end_date", "date"))}
         </div>
         <div style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "12px 14px", marginTop: 4 }}>
-          <LegCalc derived={derived} />
+          <LegCalc derived={derived} form={form} />
         </div>
       </div>
     </div>
