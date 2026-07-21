@@ -76,15 +76,31 @@ function isCoinSettledOption(instrument) {
   return !!instrument && !isPerpetual(instrument) && !/_USDC|_USDT/i.test(instrument);
 }
 
-async function fetchTickerUsd(instrument) {
-  if (!instrument) return null;
+// Fetches both the live mark and the account's REAL average_price for this
+// instrument (from Deribit's own position, not our recorded entry price) —
+// the two use the same coin/USD convention so both get the same conversion.
+// The real position is the source of truth: our recorded entry_price can
+// drift from it (a re-quote landing at a different fill than logged, or the
+// same instrument carrying other activity on the account), and Deribit's
+// own average_price is exactly what its own position/PnL screens show.
+async function fetchInstrumentLive(instrument, accountId) {
+  if (!instrument) return { markUsd: null, avgPriceUsd: null };
+  const acctQs = accountId ? `&account_id=${encodeURIComponent(accountId)}` : "";
   try {
-    const t = await apiGet(`/api/deribit/ticker?instrument=${encodeURIComponent(instrument)}`);
-    const mark = t.mark_price ?? 0;
-    if (isPerpetual(instrument)) return mark;
+    const [t, pos] = await Promise.all([
+      apiGet(`/api/deribit/ticker?instrument=${encodeURIComponent(instrument)}`),
+      apiGet(`/api/deribit/position?instrument=${encodeURIComponent(instrument)}${acctQs}`).catch(() => null),
+    ]);
+    const perp = isPerpetual(instrument);
+    const coinOpt = isCoinSettledOption(instrument);
     const underlying = t.underlying_price ?? t.index_price ?? 1;
-    return isCoinSettledOption(instrument) ? mark * underlying : mark;
-  } catch (e) { return null; }
+    const convert = (raw) => (raw == null ? null : perp ? raw : coinOpt ? raw * underlying : raw);
+    const hasOpenPosition = pos && pos.average_price != null && Math.abs(parseFloat(pos.size ?? 0)) > 0;
+    return {
+      markUsd: convert(t.mark_price ?? 0),
+      avgPriceUsd: hasOpenPosition ? convert(pos.average_price) : null,
+    };
+  } catch (e) { return { markUsd: null, avgPriceUsd: null }; }
 }
 
 // dir is the CLOSING direction the job stores (opt_dir/fut_dir): "sell"
@@ -95,15 +111,20 @@ function signedQty(qty, dir) {
   return dir === "sell" ? mag : -mag;
 }
 
-function legLivePnl(leg, tickers) {
+// avgPrices holds the exchange's real average_price per instrument (falls
+// back to the leg's own recorded entry price when the position lookup
+// failed or came back flat, e.g. a leg that's already closed).
+function legLivePnl(leg, tickers, avgPrices) {
   let pnl = 0;
   if (leg.opt_instrument && Number(leg.opt_qty)) {
     const mark = tickers[leg.opt_instrument];
-    if (mark != null) pnl += (mark - Number(leg.opt_entry_price || 0)) * signedQty(leg.opt_qty, leg.opt_dir);
+    const entry = avgPrices?.[leg.opt_instrument] ?? Number(leg.opt_entry_price || 0);
+    if (mark != null) pnl += (mark - entry) * signedQty(leg.opt_qty, leg.opt_dir);
   }
   if (leg.fut_instrument && Number(leg.fut_qty)) {
     const mark = tickers[leg.fut_instrument];
-    if (mark != null) pnl += (mark - Number(leg.fut_entry_price || 0)) * signedQty(leg.fut_qty, leg.fut_dir);
+    const entry = avgPrices?.[leg.fut_instrument] ?? Number(leg.fut_entry_price || 0);
+    if (mark != null) pnl += (mark - entry) * signedQty(leg.fut_qty, leg.fut_dir);
   }
   return pnl;
 }
@@ -121,13 +142,13 @@ function useLivePreview(job, items, isTerminal) {
     try {
       const curItems = itemsRef.current;
       const instruments = [...new Set(curItems.flatMap((l) => [l.opt_instrument, l.fut_instrument].filter(Boolean)))];
-      const [bal, ...tickerVals] = await Promise.all([
+      const [bal, ...liveVals] = await Promise.all([
         apiGet(`/api/deribit/collateral?token=${encodeURIComponent(job.token)}${job.account_id ? `&account_id=${job.account_id}` : ""}`),
-        ...instruments.map(fetchTickerUsd),
+        ...instruments.map((inst) => fetchInstrumentLive(inst, job.account_id)),
       ]);
-      const tickers = {};
-      instruments.forEach((inst, i) => { tickers[inst] = tickerVals[i]; });
-      const bsPnl = curItems.reduce((s, l) => s + legLivePnl(l, tickers), 0);
+      const tickers = {}, avgPrices = {};
+      instruments.forEach((inst, i) => { tickers[inst] = liveVals[i].markUsd; avgPrices[inst] = liveVals[i].avgPriceUsd; });
+      const bsPnl = curItems.reduce((s, l) => s + legLivePnl(l, tickers, avgPrices), 0);
       const balOk = bal && !bal.error;
       setPreview({
         liveEquity: balOk ? bal.total_usd : null,

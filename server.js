@@ -3927,6 +3927,20 @@ app.get("/api/deribit/ticker", async (req, res) => {
     res.json(result || {});
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
+// The exchange's own average_price/size for this instrument — used by the
+// Monitor live-PnL preview instead of our own recorded entry price, since
+// the account's real cost basis can drift from what we logged at entry
+// (e.g. if the same instrument also carries other activity on the account,
+// or the fill averaged across a re-quote). Falls back to our recorded
+// entry price client-side if this returns no open position.
+app.get("/api/deribit/position", async (req, res) => {
+  const inst = req.query.instrument;
+  if (!inst) return res.status(400).json({ error: "instrument required" });
+  try {
+    const result = await deribitPrivate("get_position", { instrument_name: inst }, req.query.account_id);
+    res.json(result || {});
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
 
 // ══════════════════════════════════════════════════════════════
 //  DERIBIT LIVE EXECUTION — Options Multi-Agent DB "Save & Execute"
