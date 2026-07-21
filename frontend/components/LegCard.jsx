@@ -56,9 +56,13 @@ export function LegCalc({ derived }) {
         Auto-Calculated
       </div>
       <CalcRow label="Days to Expiry" val={fmtNum(derived.days_to_expiry, 0)} />
+      <CalcRow label="Opt PnL (Upside)" val={fmtCcy(derived.upside_opt_pnl)} signed />
+      <CalcRow label="Opt PnL (Down)" val={fmtCcy(derived.down_opt_pnl)} signed />
+      <CalcRow label="Fut PnL (Upside)" val={fmtCcy(derived.upside_fut_pnl)} signed />
+      <CalcRow label="Fut PnL (Down)" val={fmtCcy(derived.downside_fut_pnl)} signed />
       <CalcRow label="Total MM Loss" val={fmtCcy(derived.total_mm_loss)} loss />
-      <CalcRow label="Est. Net (Upside)" val={fmtCcy(derived.estimated_upside_net_pnl)} signed />
-      <CalcRow label="Est. Net (Down)" val={fmtCcy(derived.estimated_downside_net_pnl)} signed />
+      <CalcRow label="Est. Net (Upside)" val={fmtCcy(derived.estimated_upside_net_pnl)} signed big />
+      <CalcRow label="Est. Net (Down)" val={fmtCcy(derived.estimated_downside_net_pnl)} signed big />
       <CalcRow label="APY" val={derived.apy != null ? Number(derived.apy).toFixed(2) + "%" : "—"} signed big />
     </div>
   );
