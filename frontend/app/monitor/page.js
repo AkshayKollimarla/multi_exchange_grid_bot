@@ -128,7 +128,14 @@ function useLivePreview(job, items, isTerminal) {
       const tickers = {};
       instruments.forEach((inst, i) => { tickers[inst] = tickerVals[i]; });
       const bsPnl = curItems.reduce((s, l) => s + legLivePnl(l, tickers), 0);
-      setPreview({ liveEquity: bal && !bal.error ? bal.total_usd : null, bsPnl });
+      const balOk = bal && !bal.error;
+      setPreview({
+        liveEquity: balOk ? bal.total_usd : null,
+        coinSymbol: balOk ? bal.coin_symbol : null,
+        coinEquityUsd: balOk ? bal.coin_equity_usd : null,
+        usdcEquity: balOk ? bal.usdc_equity : null,
+        bsPnl,
+      });
     } catch (e) { /* keep last preview on a transient fetch error */ }
   }, [job?.id, job?.token, job?.account_id]);
 
@@ -145,9 +152,21 @@ function useLivePreview(job, items, isTerminal) {
 
 function LivePreviewRow({ preview }) {
   if (!preview) return null;
+  // Coin-specific equity is only worth its own card for coin-margined
+  // tokens (ETH/BTC) — deribitCollateral() falls back coin_symbol to
+  // "USDC" for linear-only tokens (SOL_USDC, ...), which would just
+  // duplicate the USDC Equity card below.
+  const showCoinCard = preview.coinSymbol && preview.coinSymbol !== "USDC";
+  const cols = showCoinCard ? 4 : 2;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 16, marginBottom: 20 }}>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols},1fr)`, gap: 16, marginBottom: 20 }}>
       <KpiCard label="Live Equity" value={preview.liveEquity != null ? fmtCcy(preview.liveEquity) : "—"} />
+      {showCoinCard && (
+        <KpiCard label={`${preview.coinSymbol} Equity ($)`} value={preview.coinEquityUsd != null ? fmtCcy(preview.coinEquityUsd) : "—"} color="var(--brand)" />
+      )}
+      {showCoinCard && (
+        <KpiCard label="USDC Equity" value={preview.usdcEquity != null ? fmtCcy(preview.usdcEquity) : "—"} color="var(--brand)" />
+      )}
       <KpiCard label="Live Mark-to-Market PnL" value={fmtCcy(preview.bsPnl)} color={preview.bsPnl >= 0 ? "#16a34a" : "#dc2626"} />
     </div>
   );
