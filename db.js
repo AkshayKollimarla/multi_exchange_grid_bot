@@ -134,6 +134,11 @@ async function pingDb() {
     // consulted when there's no option leg to auto-match settlement from.
     try { await conn.query("ALTER TABLE options_trades ADD COLUMN fut_instrument_type VARCHAR(20) NULL DEFAULT 'inverse'"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Implied vol at entry — previously only ever lived in transient React
+    // state (never had a column), so it was silently dropped on every save
+    // and always came back blank when editing a saved strategy.
+    try { await conn.query("ALTER TABLE options_trades ADD COLUMN iv VARCHAR(20) NULL"); }
+    catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     // Snapshot of the auto-close job's own log/target/collateral — written
     // back onto the trade row when the job finishes, so the audit trail
     // survives even after the job record itself is cleaned up.
@@ -669,7 +674,7 @@ async function isAccountReferenced(id) {
 // ============================================================
 const OPT_MANUAL_COLS = [
   "entry_date","token","option_type","investment","options_strike","expiry",
-  "opt_entry_qty","opt_entry_price","opt_exit_price",
+  "opt_entry_qty","opt_entry_price","opt_exit_price","iv",
   "fut_qty","fut_entry_price","fut_exit_price","fut_instrument_type",
   "upside_distance","down_distance","basket_distance","basket_loss",
   "net_booked_pnl","market_making_pl","end_date","status","group_id","account_id",

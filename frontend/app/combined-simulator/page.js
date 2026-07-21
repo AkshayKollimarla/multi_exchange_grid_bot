@@ -42,7 +42,7 @@ function tradeToLegForm(t) {
     entry_date: toInputDate(t.entry_date), token: t.token || "", investment: t.investment ?? "",
     options_strike: t.options_strike || "", expiry: toInputDate(t.expiry),
     opt_entry_qty: t.opt_entry_qty ?? "", opt_entry_price: t.opt_entry_price ?? "", opt_exit_price: t.opt_exit_price ?? "",
-    iv: "", fut_qty: t.fut_qty ?? "", fut_entry_price: t.fut_entry_price ?? "", fut_exit_price: t.fut_exit_price ?? "",
+    iv: t.iv ?? "", fut_qty: t.fut_qty ?? "", fut_entry_price: t.fut_entry_price ?? "", fut_exit_price: t.fut_exit_price ?? "",
     fut_instrument_type: t.fut_instrument_type || "inverse",
     upside_distance: t.upside_distance ?? "", down_distance: t.down_distance ?? "",
     basket_distance: t.basket_distance ?? "", basket_loss: t.basket_loss ?? "",

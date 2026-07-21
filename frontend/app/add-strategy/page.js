@@ -107,7 +107,7 @@ function AddStrategyInner() {
       const j = await apiGet(`/api/options-db/trades/${id}`);
       const t = j.trade;
       setForm(tradeToForm(t));
-      setIv("");
+      setIv(t.iv != null ? String(t.iv) : "");
       setEditId(id);
       if (t.account_id) setSelectedAcct(String(t.account_id));
       const isLiveToken = tokensFor(instruments).includes(t.token);
@@ -244,6 +244,7 @@ function AddStrategyInner() {
     for (const k of FIELD_KEYS) f[k] = form[k] ?? "";
     if (f.token === "__other__") f.token = manualToken;
     f.account_id = selectedAcct || "";
+    f.iv = iv || "";
     return f;
   }
 

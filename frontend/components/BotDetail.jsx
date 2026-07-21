@@ -14,8 +14,8 @@ export default function BotDetail({ bot }) {
         {bot.symbol && <span>Symbol: <b style={{ color: "var(--ink)" }}>{bot.symbol}</b></span>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
-        <Stat label="Live Price" value={bot.lastPrice != null ? `$${bot.lastPrice}` : "—"} cls="green" />
-        <Stat label="Entry Price" value={bot.entryPrice != null ? `$${bot.entryPrice}` : "—"} />
+        <Stat label="Live Price" value={bot.lastPrice != null ? `$${Number(bot.lastPrice).toFixed(2)}` : "—"} cls="green" />
+        <Stat label="Entry Price" value={bot.entryPrice != null ? `$${Number(bot.entryPrice).toFixed(2)}` : "—"} />
         <Stat label="Upper Limit" value={bot.upperLimit != null ? `$${bot.upperLimit}` : "—"} cls="red" />
         <Stat label="Lower Limit" value={bot.lowerLimit != null ? `$${bot.lowerLimit}` : "—"} cls="blue" />
       </div>
