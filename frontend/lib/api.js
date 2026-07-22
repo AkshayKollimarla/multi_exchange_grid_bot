@@ -23,6 +23,10 @@ export function apiPut(path, body) {
   return request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
+export function apiPatch(path, body) {
+  return request(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
 export function apiDelete(path) {
   return request(path, { method: "DELETE" });
 }

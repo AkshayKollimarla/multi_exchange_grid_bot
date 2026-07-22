@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiGet, apiDelete } from "@/lib/api";
+import { apiGet, apiDelete, apiPatch } from "@/lib/api";
 
 function fmtCcy(v) {
   if (v == null || isNaN(v)) return "—";
@@ -46,6 +46,60 @@ function KpiCard({ label, value, color }) {
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: 18, boxShadow: "var(--shadow-sm)" }}>
       <div style={{ fontSize: 12, fontWeight: 500, color: "var(--muted-3)", marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 700, color: color || "var(--ink)", fontFamily: "var(--font-display)", letterSpacing: "-0.01em" }}>{value}</div>
+    </div>
+  );
+}
+
+// PnL/Target KPI card with an inline editor — changes only target_pnl (and
+// the target_total_usd the server derives from it); initial_total_usd, the
+// frozen-at-start collateral baseline, is never touched by this control.
+function TargetPnlCard({ pnl, targetPnl, onSave, disabled }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(String(targetPnl ?? ""));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => { if (!editing) setVal(String(targetPnl ?? "")); }, [targetPnl, editing]);
+
+  async function save() {
+    const n = parseFloat(val);
+    if (!(n > 0)) { setErr("Target must be > 0"); return; }
+    setSaving(true); setErr(null);
+    try { await onSave(n); setEditing(false); }
+    catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: 18, boxShadow: "var(--shadow-sm)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--muted-3)" }}>PnL / Target</div>
+        {!disabled && !editing && (
+          <button onClick={() => setEditing(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--brand)", fontWeight: 600, padding: 0 }}>✎ Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
+            <input
+              type="number" step="any" min="0" value={val} onChange={(e) => setVal(e.target.value)} autoFocus
+              style={{ width: 70, fontSize: 16, fontWeight: 700, border: "1px solid var(--border-2)", borderRadius: 6, padding: "4px 6px" }}
+            />
+            <button onClick={save} disabled={saving} className="btn" style={{ height: 28, padding: "0 10px", fontSize: 12, background: "var(--green)", color: "#fff", boxShadow: "none" }}>
+              {saving ? "…" : "Save"}
+            </button>
+            <button onClick={() => { setEditing(false); setErr(null); }} disabled={saving} style={{ height: 28, padding: "0 10px", fontSize: 12, background: "transparent", border: "1px solid var(--border-2)", borderRadius: 6, cursor: "pointer" }}>
+              Cancel
+            </button>
+          </div>
+          {err && <div style={{ color: "var(--red)", fontSize: 11, marginTop: 4 }}>{err}</div>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 26, fontWeight: 700, color: pnl >= 0 ? "#16a34a" : "#dc2626", fontFamily: "var(--font-display)", letterSpacing: "-0.01em" }}>
+          {fmtCcy(pnl)} / +{fmtCcy(targetPnl)}
+        </div>
+      )}
     </div>
   );
 }
@@ -240,7 +294,10 @@ function SingleLegMonitor({ tradeId }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
         <KpiCard label="Initial Collateral" value={fmtCcy(job.initial_total_usd)} color="var(--brand)" />
         <KpiCard label="Current Equity" value={fmtCcy(job.last_equity_usd)} />
-        <KpiCard label="PnL / Target" value={`${fmtCcy(pnl)} / +${fmtCcy(job.target_pnl)}`} color={pnl >= 0 ? "#16a34a" : "#dc2626"} />
+        <TargetPnlCard
+          pnl={pnl} targetPnl={job.target_pnl} disabled={isTerminal}
+          onSave={async (n) => { await apiPatch(`/api/auto-close?id=${job.id}`, { target_pnl: n }); await load(); }}
+        />
         <KpiCard label="Final Equity" value={job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"} />
       </div>
       {!isTerminal && <LivePreviewRow preview={preview} />}
@@ -311,7 +368,10 @@ function ComboMonitor({ groupId }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
         <KpiCard label="Initial Collateral" value={fmtCcy(job.initial_total_usd)} color="var(--brand)" />
         <KpiCard label="Current Equity" value={fmtCcy(job.last_equity_usd)} />
-        <KpiCard label="PnL / Target" value={`${fmtCcy(pnl)} / +${fmtCcy(job.target_pnl)}`} color={pnl >= 0 ? "#16a34a" : "#dc2626"} />
+        <TargetPnlCard
+          pnl={pnl} targetPnl={job.target_pnl} disabled={isTerminal}
+          onSave={async (n) => { await apiPatch(`/api/auto-close-combo?id=${job.id}`, { target_pnl: n }); await load(); }}
+        />
         <KpiCard label="Final Equity" value={job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"} />
       </div>
       {!isTerminal && <LivePreviewRow preview={preview} />}
