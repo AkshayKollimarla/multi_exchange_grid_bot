@@ -59,11 +59,12 @@ function TargetPnlCard({ pnl, targetPnl, onSave, disabled }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
-  useEffect(() => { if (!editing) setVal(String(targetPnl ?? "")); }, [targetPnl, editing]);
+  useEffect(() => { if (!editing) setVal(targetPnl != null ? Number(targetPnl).toFixed(1) : ""); }, [targetPnl, editing]);
 
   async function save() {
-    const n = parseFloat(val);
-    if (!(n > 0)) { setErr("Target must be > 0"); return; }
+    const parsed = parseFloat(val);
+    if (!(parsed > 0)) { setErr("Target must be > 0"); return; }
+    const n = Math.round(parsed * 10) / 10;
     setSaving(true); setErr(null);
     try { await onSave(n); setEditing(false); }
     catch (e) { setErr(e.message); }
@@ -83,7 +84,9 @@ function TargetPnlCard({ pnl, targetPnl, onSave, disabled }) {
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <span style={{ fontSize: 13, color: "var(--muted)" }}>$</span>
             <input
-              type="number" step="any" min="0" value={val} onChange={(e) => setVal(e.target.value)} autoFocus
+              type="text" inputMode="decimal" value={val}
+              onChange={(e) => { const v = e.target.value; if (/^\d*\.?\d*$/.test(v)) setVal(v); }}
+              autoFocus
               style={{ width: 70, fontSize: 16, fontWeight: 700, border: "1px solid var(--border-2)", borderRadius: 6, padding: "4px 6px" }}
             />
             <button onClick={save} disabled={saving} className="btn" style={{ height: 28, padding: "0 10px", fontSize: 12, background: "var(--green)", color: "#fff", boxShadow: "none" }}>
