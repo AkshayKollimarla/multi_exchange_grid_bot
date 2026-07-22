@@ -465,7 +465,11 @@ function AddStrategyInner() {
         fut_qty: Math.abs(futQty),
         fut_dir: futQty > 0 ? "sell" : "buy",
         fut_entry_price: form.fut_entry_price || null,
-        initial_total_usd: bal.total_usd ?? 0,
+        // Tracked against the coin (e.g. ETH) wallet's equity alone, not
+        // coin+USDC combined — the options/futures position only ever
+        // moves the coin side, so folding in USDC (which can drift from
+        // unrelated account activity) would dilute the real PnL signal.
+        initial_total_usd: bal.coin_equity_usd ?? 0,
         target_pnl: tPnl,
         account_id: selectedAcct || undefined,
       });
@@ -475,7 +479,7 @@ function AddStrategyInner() {
       // Snapshot the target/collateral onto the trade row immediately, not
       // just when the job finishes — visible right away, survives even if
       // the job is later stopped/deleted before completing.
-      if (id) apiPut(`/api/options-db/trades/${id}`, { target_pnl: tPnl, initial_collateral_usd: bal.total_usd ?? 0 }).catch(() => {});
+      if (id) apiPut(`/api/options-db/trades/${id}`, { target_pnl: tPnl, initial_collateral_usd: bal.coin_equity_usd ?? 0 }).catch(() => {});
     } catch (e) {
       setAcError(e.message);
     } finally {

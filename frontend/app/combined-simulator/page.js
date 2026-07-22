@@ -465,7 +465,11 @@ function CombinedSimulatorInner() {
       const j = await apiPost("/api/auto-close-combo", {
         group_id: comboGroupIdRef.current || editGroupId || `combined_${Date.now()}`,
         token,
-        initial_total_usd: bal.total_usd ?? 0,
+        // Tracked against the coin (e.g. ETH) wallet's equity alone, not
+        // coin+USDC combined — the legs only ever move the coin side, so
+        // folding in USDC (which can drift from unrelated account
+        // activity) would dilute the real PnL signal.
+        initial_total_usd: bal.coin_equity_usd ?? 0,
         target_pnl: parseFloat(comboTargetPnl),
         legs: legsPayload,
         account_id: selectedAcct || undefined,
@@ -476,7 +480,7 @@ function CombinedSimulatorInner() {
       comboAcTimerRef.current = setInterval(() => pollComboAcJob(j.id), 5000);
       // Snapshot the target/collateral onto every leg's trade row
       // immediately, not just when the job finishes.
-      const tPnl = parseFloat(comboTargetPnl), initUsd = bal.total_usd ?? 0;
+      const tPnl = parseFloat(comboTargetPnl), initUsd = bal.coin_equity_usd ?? 0;
       editIds.filter(Boolean).forEach((id) => {
         apiPut(`/api/options-db/trades/${id}`, { target_pnl: tPnl, initial_collateral_usd: initUsd }).catch(() => {});
       });

@@ -4641,9 +4641,14 @@ async function autoCloseProcessJob(job) {
     }
 
     const col = await deribitCollateral(job.token, job.account_id);
-    const pnl = col.total_usd - parseFloat(job.initial_total_usd);
+    // Track against the COIN wallet's equity only, not coin+USDC combined —
+    // the options/futures position only ever moves the coin side; folding
+    // in USDC (which can drift from unrelated account activity) can mask a
+    // real coin-side loss or falsely bring the target closer.
+    const equity = col.coin_equity_usd;
+    const pnl = equity - parseFloat(job.initial_total_usd);
     const targetPnl = parseFloat(job.target_pnl);
-    await db.updateAutoCloseJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
+    await db.updateAutoCloseJob(job.id, { last_checked_at: new Date(), last_equity_usd: equity });
 
     if (!job.approach_alert_sent && targetPnl > 0 && pnl >= targetPnl * AC_APPROACH_THRESHOLD) {
       await db.updateAutoCloseJob(job.id, { approach_alert_sent: 1 });
@@ -4655,9 +4660,9 @@ async function autoCloseProcessJob(job) {
       ].join("\n"));
     }
 
-    if (col.total_usd >= parseFloat(job.target_total_usd)) {
+    if (equity >= parseFloat(job.target_total_usd)) {
       await db.appendAutoCloseLog(job.id,
-        `TARGET HIT — ${col.coin_symbol} $${col.coin_equity_usd.toFixed(2)} + USDC $${col.usdc_equity.toFixed(2)} = $${col.total_usd.toFixed(2)} | PnL +$${pnl.toFixed(2)}`);
+        `TARGET HIT — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL +$${pnl.toFixed(2)}`);
       await db.updateAutoCloseJob(job.id, { status: "closing_option", triggered: true });
       const fresh = await db.getAutoCloseJobRaw(job.id);
       await autoCloseCloseOption(fresh);
@@ -4765,7 +4770,7 @@ async function autoCloseFinishJob(jobId) {
     const job = await db.getAutoCloseJobRaw(jobId);
     if (!job) return;
     const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
-    const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
+    const finalEquity = col?.coin_equity_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateAutoCloseJob(jobId, { final_equity_usd: finalEquity });
     // Snapshot the job's own audit trail onto its trade row too, so it
     // survives even if this job record is later cleaned up.
@@ -4846,9 +4851,14 @@ async function autoCloseComboProcessJob(job) {
     }
 
     const col = await deribitCollateral(job.token, job.account_id);
-    const pnl = col.total_usd - parseFloat(job.initial_total_usd);
+    // Track against the COIN wallet's equity only, not coin+USDC combined —
+    // the options/futures legs only ever move the coin side; folding in
+    // USDC (which can drift from unrelated account activity) can mask a
+    // real coin-side loss or falsely bring the target closer.
+    const equity = col.coin_equity_usd;
+    const pnl = equity - parseFloat(job.initial_total_usd);
     const targetPnl = parseFloat(job.target_pnl);
-    await db.updateComboJob(job.id, { last_checked_at: new Date(), last_equity_usd: col.total_usd });
+    await db.updateComboJob(job.id, { last_checked_at: new Date(), last_equity_usd: equity });
 
     if (!job.approach_alert_sent && targetPnl > 0 && pnl >= targetPnl * AC_APPROACH_THRESHOLD) {
       await db.updateComboJob(job.id, { approach_alert_sent: 1 });
@@ -4859,9 +4869,9 @@ async function autoCloseComboProcessJob(job) {
       ].join("\n"));
     }
 
-    if (col.total_usd >= parseFloat(job.target_total_usd)) {
+    if (equity >= parseFloat(job.target_total_usd)) {
       await db.appendComboLog(job.id,
-        `TARGET HIT — ${col.coin_symbol} $${col.coin_equity_usd.toFixed(2)} + USDC $${col.usdc_equity.toFixed(2)} = $${col.total_usd.toFixed(2)} | PnL +$${pnl.toFixed(2)}`);
+        `TARGET HIT — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL +$${pnl.toFixed(2)}`);
       await db.updateComboJob(job.id, { status: "closing", triggered: true });
     }
     return;
@@ -4962,7 +4972,7 @@ async function autoCloseComboFinishJob(comboJobId) {
     if (!job) return;
     const legs = await db.getComboJobLegs(comboJobId);
     const col = await deribitCollateral(job.token, job.account_id).catch(() => null);
-    const finalEquity = col?.total_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
+    const finalEquity = col?.coin_equity_usd ?? parseFloat(job.last_equity_usd ?? job.initial_total_usd);
     await db.updateComboJob(comboJobId, { final_equity_usd: finalEquity });
     // Snapshot the combo job's own audit trail onto every leg's trade row,
     // so it survives even if this job record is later cleaned up.
