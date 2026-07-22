@@ -25,13 +25,14 @@ export async function runOptionEntry({ instrument, qty, isCoinSettled, onLog, is
     const data = await placeOrder({ instrument, qty: Math.abs(qty), direction: dir, price: mid, isMarket: false, postOnly: false, accountId });
     if (!data.order_id) throw new Error("Option order failed: no order_id returned");
     log(`Order #${String(data.order_id).slice(-8)} — ${data.order_state}`);
-    return { orderId: data.order_id, mid, filled: data.order_state === "filled" };
+    return { orderId: data.order_id, mid, filled: data.order_state === "filled", avgPrice: data.average_price };
   }
 
   const initial = await getTickerMid(instrument, isCoinSettled);
   if (!initial.mid_price_raw) throw new Error(`Could not get option mid price for ${instrument}`);
+  let underlying = initial.underlying_price;
 
-  let { orderId, mid, filled } = await place(initial.mid_price_raw);
+  let { orderId, mid, filled, avgPrice } = await place(initial.mid_price_raw);
   if (filled) log("Option filled immediately!");
 
   while (!filled) {
@@ -40,19 +41,26 @@ export async function runOptionEntry({ instrument, qty, isCoinSettled, onLog, is
     if (cancelled()) { await cancelOrder(orderId, accountId).catch(() => {}); throw new Error("Cancelled by user"); }
 
     const state = await getOrderState(orderId, accountId);
-    if (state.order_state === "filled") { log("Option filled!"); filled = true; break; }
+    if (state.order_state === "filled") { log("Option filled!"); filled = true; avgPrice = state.average_price; break; }
 
     const t = await getTickerMid(instrument, isCoinSettled);
+    underlying = t.underlying_price || underlying;
     const newMid = t.mid_price_raw || 0;
     if (newMid > 0 && Math.abs(newMid - mid) > REQUOTE_THRESHOLD) {
       log(`Mid ${mid.toFixed(5)} → ${newMid.toFixed(5)}, re-placing`);
       await cancelOrder(orderId, accountId).catch(() => {});
-      ({ orderId, mid, filled } = await place(newMid));
+      ({ orderId, mid, filled, avgPrice } = await place(newMid));
     } else {
       log(`Waiting — order open @ ${mid.toFixed(5)}`);
     }
   }
 
+  // Prefer the exchange's own average fill price over a fresh mark quote —
+  // the mark can drift in the moment between fill and reading it back.
+  if (avgPrice != null && avgPrice > 0) {
+    const toUsd = isCoinSettled ? underlying : 1;
+    return avgPrice * toUsd;
+  }
   try {
     const t = await getTickerMid(instrument, isCoinSettled);
     return t.mark_price_usd ?? null;
@@ -64,6 +72,9 @@ export async function runFuturesEntry({ instrument, qty, onLog, accountId }) {
   const log = onLog || (() => {});
   log(`Placing futures MARKET ${dir} ${Math.abs(qty)}x ${instrument}`);
   const data = await placeOrder({ instrument, qty: Math.abs(qty), direction: dir, isMarket: true, accountId });
-  log(`Futures filled @ ${data.price ?? "market"}`);
-  return data.price ?? null;
+  // average_price is the exchange's actual fill price; a market order's
+  // quoted `price` field can lag the real fill by the time this returns.
+  const fillPrice = (data.average_price != null && data.average_price > 0) ? data.average_price : data.price;
+  log(`Futures filled @ ${fillPrice ?? "market"}`);
+  return fillPrice ?? null;
 }

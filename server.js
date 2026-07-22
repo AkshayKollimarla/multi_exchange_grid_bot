@@ -4316,7 +4316,8 @@ app.post("/api/deribit-order", async (req, res) => {
     const order = result?.order || {};
     res.json({
       ok: true, order_id: order.order_id, amount: order.amount,
-      filled_amount: order.filled_amount, order_state: order.order_state, price: order.price,
+      filled_amount: order.filled_amount, order_state: order.order_state,
+      price: order.price, average_price: order.average_price,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -4330,7 +4331,7 @@ app.get("/api/deribit-order", async (req, res) => {
     res.json({
       ok: true, order_id: result.order_id, instrument: result.instrument_name,
       amount: result.amount, filled_amount: result.filled_amount,
-      order_state: result.order_state, price: result.price,
+      order_state: result.order_state, price: result.price, average_price: result.average_price,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
