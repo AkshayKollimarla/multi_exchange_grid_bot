@@ -420,13 +420,6 @@ function AddStrategyInner() {
     await handleExecute();
   }
 
-  // Single primary button: with a Target PnL entered, execute then start
-  // auto-close the instant it fills; without one, just execute.
-  async function handlePrimaryExecute() {
-    if (parseFloat(acTargetPnl) > 0) await handleExecuteAndAutoClose();
-    else await handleExecute();
-  }
-
   async function pollAcJob(jobId) {
     try {
       const d = await apiGet(`/api/auto-close?id=${jobId}`);
@@ -660,10 +653,18 @@ function AddStrategyInner() {
                 <button
                   className="btn"
                   style={{ background: "#ea580c", color: "#fff" }}
-                  onClick={handlePrimaryExecute}
+                  onClick={handleExecute}
                   disabled={executing || acStarting}
                 >
-                  {executing ? "Executing…" : acStarting ? "Starting Monitor…" : `⚡ Execute${parseFloat(acTargetPnl) > 0 ? " + Auto-Close" : ""}`}
+                  {executing ? "Executing…" : "⚡ Execute"}
+                </button>
+                <button
+                  className="btn"
+                  style={{ background: "var(--green)", color: "#fff" }}
+                  onClick={handleExecuteAndAutoClose}
+                  disabled={executing || acStarting}
+                >
+                  {executing ? "Executing…" : acStarting ? "Starting Monitor…" : "⚡ Execute + Auto-Close"}
                 </button>
               </div>
               {msg && <div style={{ fontSize: 12, marginTop: 8, color: msg.ok === false ? "var(--red)" : msg.ok ? "var(--green)" : "var(--muted)" }}>{msg.text}</div>}
