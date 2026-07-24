@@ -330,8 +330,13 @@ const MAKER_FEE_RATE = {
 function feeRateFor(priceSource) {
   return MAKER_FEE_RATE[priceSource] ?? 0.0005;   // 0.05% conservative default
 }
-function estimateFee(priceSource, price, qty) {
-  return Math.abs(feeRateFor(priceSource) * price * qty);
+function estimateFee(priceSource, price, qty, isInverse) {
+  // Inverse (coin-margined) contracts: qty is already the USD notional
+  // (contracts), so the fee base is qty alone — multiplying by price again
+  // would double-count it and overstate the fee by ~price×, same bug class
+  // as the round-trip PnL formula this mirrors.
+  const notional = isInverse ? qty : price * qty;
+  return Math.abs(feeRateFor(priceSource) * notional);
 }
 
 // ============================================================
@@ -1697,6 +1702,20 @@ function roundQty(qty, stepSize) {
   return parseFloat(qty.toFixed(decimals));
 }
 
+// Deribit inverse ("reversed"/coin-margined) perpetuals — ETH-PERPETUAL,
+// BTC-PERPETUAL — are coin-margined: the exchange's "amount" is USD-notional
+// CONTRACTS (1 contract = $1 for ETH, $10 for BTC — market.contractSize), not
+// a coin quantity. qtyPerStep is always entered in COINS (e.g. 0.1 ETH) —
+// convert to the nearest valid contract count using the live price, floored
+// at one contractSize unit so it never rounds down to a zero-size order.
+// Linear/USDC-margined markets (ccxt market.inverse === false) pass through
+// unchanged — those already take amount in coin units.
+function coinQtyToContracts(market, coinQty, refPrice) {
+  if (!market?.inverse || !refPrice) return coinQty;
+  const contractSize = market.contractSize || 1;
+  return Math.max(contractSize, Math.round((coinQty * refPrice) / contractSize) * contractSize);
+}
+
 // Format milliseconds → "1d 3h 24m" / "2h 18m" / "47m 13s" / "9s"
 function formatDuration(ms) {
   if (!ms || ms < 0) return "—";
@@ -2253,6 +2272,11 @@ async function processFilledOrder(botId, tracked, order) {
   if (!bot) return;
   const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
+  // Fetched once up front (ccxt caches markets after the first load, so this
+  // is cheap) and reused everywhere below — avoids each branch re-deriving
+  // tickSize/isInverse separately and risking one of them missing the flag.
+  const { tickSize, market } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
+  const isInverse = !!market?.inverse;
 
   const fillTs    = new Date().toISOString();
   const fillPrice = order ? parseFloat(order.average || order.price || tracked.price) : tracked.price;
@@ -2264,7 +2288,7 @@ async function processFilledOrder(botId, tracked, order) {
   // when they don't (e.g. Binance futures often omits it on fetchOrder).
   // This matches each exchange's pre-extraction behavior exactly.
   const feeKnown = order ? (order.fee != null && order.fee.cost != null) : false;
-  const feeCost  = order ? parseFloat(order.fee?.cost ?? 0) : estimateFee(cfg.priceSource, fillPrice, fillQty);
+  const feeCost  = order ? parseFloat(order.fee?.cost ?? 0) : estimateFee(cfg.priceSource, fillPrice, fillQty, isInverse);
   const feeCcy   = order?.fee?.currency || "USDC";
 
   if (order) {
@@ -2282,7 +2306,6 @@ async function processFilledOrder(botId, tracked, order) {
   db.recordFill(bot, fillRecord);
 
   if (tracked.type === "entry") {
-    const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
     const targetSide  = tracked.side === "sell" ? "buy" : "sell";
     const targetPrice = tracked.side === "sell"
       ? roundPrice(fillPrice - cfg.targetSpread, tickSize)
@@ -2295,6 +2318,10 @@ async function processFilledOrder(botId, tracked, order) {
       qty: fillQty, openTs: fillTs,
       openOrderId: tracked.id,
       openFee: feeKnown ? feeCost : null,
+      // Deribit inverse perpetuals: qty here is USD-notional CONTRACTS, not
+      // coin qty — carried onto the completed round trip so its PnL uses the
+      // inverse-contract formula instead of a flat linear spread*qty.
+      isInverse,
     });
     log(botId, `📌 Pending RT: ${tracked.side.toUpperCase()} @ $${fillPrice} → target ${targetSide.toUpperCase()} @ $${targetPrice} (${bot.pendingRoundTrips.length} pending)`);
     return;
@@ -2303,7 +2330,6 @@ async function processFilledOrder(botId, tracked, order) {
   if (tracked.type === "target") {
     const matched = bot.pendingRoundTrips.filter(rt => rt.targetOrderId === tracked.id);
     if (matched.length === 0) {
-      const { tickSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
       const entrySide  = tracked.side === "buy" ? "sell" : "buy";
       const entryPrice = tracked.side === "buy"
         ? roundPrice(fillPrice + cfg.targetSpread, tickSize)
@@ -2324,7 +2350,14 @@ async function processFilledOrder(botId, tracked, order) {
     for (const rt of matched) {
       const buyPrice  = rt.openSide === "buy"  ? rt.openPrice : fillPrice;
       const sellPrice = rt.openSide === "sell" ? rt.openPrice : fillPrice;
-      const grossPnl  = parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
+      // Inverse (coin-margined) contracts: rt.qty is USD-notional CONTRACTS,
+      // not coin qty. A flat linear spread*qty overstates PnL by ~buyPrice×
+      // (e.g. 180 contracts * $0.50 = "$90" instead of the real ~$0.05) — the
+      // correct formula divides by the entry price (coinQty = contracts/buyPrice,
+      // pnl = coinQty * spread = contracts * spread / buyPrice).
+      const grossPnl = rt.isInverse
+        ? parseFloat((rt.qty * (sellPrice - buyPrice) / buyPrice).toFixed(8))
+        : parseFloat(((sellPrice - buyPrice) * rt.qty).toFixed(8));
 
       let openFee, closeFee;
       if (exchangeKey === "hyperliquid") {
@@ -2350,8 +2383,8 @@ async function processFilledOrder(botId, tracked, order) {
             if (realClose == null && byOid[String(tracked.id)]     !== undefined) realClose = byOid[String(tracked.id)];
           } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
         }
-        openFee  = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty);
-        closeFee = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty);
+        openFee  = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty, rt.isInverse);
+        closeFee = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty, rt.isInverse);
       }
       const totalFee = parseFloat((openFee + closeFee).toFixed(8));
       const netPnl   = parseFloat((grossPnl - totalFee).toFixed(8));
@@ -2610,8 +2643,10 @@ async function maintainGrid(botId, currentPrice) {
   const exchangeKey = bot.exchangeKey;
   if (!bot.running) return;
   const cfg = bot.config;
-  const { tickSize, stepSize } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
-  const qty = roundQty(cfg.qtyPerStep, stepSize);
+  const { tickSize, stepSize, market } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
+  const qty = market?.inverse
+    ? coinQtyToContracts(market, cfg.qtyPerStep, currentPrice)
+    : roundQty(cfg.qtyPerStep, stepSize);
   const PER_SIDE = 3;            // exactly 3 above + 3 below = 6 total
   const isDeribit = exchangeKey === "deribit";
   // Post-only for ALL exchanges — guarantees maker fee, never accidental taker.

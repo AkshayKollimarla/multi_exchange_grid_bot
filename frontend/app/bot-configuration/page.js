@@ -37,6 +37,15 @@ export default function BotConfigurationPage() {
 
   const exchange = PRICE_SOURCES.find((p) => p.value === form.priceSource)?.exchange || "binance";
 
+  // Inverse (coin-margined) perpetuals — Deribit ETH/BTC-PERPETUAL, Binance
+  // Coin-M — quote the exchange's own unified symbol as BASE/QUOTE:SETTLE
+  // with SETTLE === BASE (e.g. "ETH/USD:ETH"). The exchange's own order
+  // "amount" for these is USD-notional contracts, not coin qty, but Quantity
+  // Per Step is always entered in COINS here — the server converts it.
+  const symParts = (form.symbol || "").split(/[/:]/);
+  const isInverseSymbol = symParts.length === 3 && symParts[0] && symParts[0] === symParts[2];
+  const coinLabel = symParts[0];
+
   useEffect(() => {
     apiGet("/api/accounts").then((list) => setAccounts(Array.isArray(list) ? list : [])).catch(() => {});
   }, []);
@@ -157,7 +166,15 @@ export default function BotConfigurationPage() {
                 <div className="field"><label>Buy Spacing ($)</label><input type="number" step="0.01" placeholder="e.g. 1" value={form.avgBuySpacing} onChange={(e) => setField("avgBuySpacing", e.target.value)} disabled={starting} /></div>
               </div>
               <div className="field"><label>Target Spread ($)</label><input type="number" step="0.01" placeholder="e.g. 0.5" value={form.targetSpread} onChange={(e) => setField("targetSpread", e.target.value)} disabled={starting} /></div>
-              <div className="field"><label>Quantity Per Step</label><input type="number" step="0.001" placeholder="e.g. 0.1" value={form.qtyPerStep} onChange={(e) => setField("qtyPerStep", e.target.value)} disabled={starting} /></div>
+              <div className="field">
+                <label>Quantity Per Step{isInverseSymbol ? ` (${coinLabel} coins)` : ""}</label>
+                <input type="number" step="0.001" placeholder="e.g. 0.1" value={form.qtyPerStep} onChange={(e) => setField("qtyPerStep", e.target.value)} disabled={starting} />
+                {isInverseSymbol && (
+                  <div className="hint" style={{ marginTop: 4 }}>
+                    Entered in {coinLabel} — {coinLabel}-PERPETUAL is coin-margined, so the server converts this to USD-notional contracts at order time.
+                  </div>
+                )}
+              </div>
 
               {msg && <div style={{ fontSize: 12, marginBottom: 10, color: msg.ok === false ? "var(--red)" : "var(--green)" }}>{msg.text}</div>}
               <button className="btn btn-start" style={{ width: "100%" }} onClick={handleStart} disabled={starting}>
