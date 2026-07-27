@@ -418,6 +418,32 @@ async function recordRoundTrip(bot, rt, sequenceNumber) {
   }
 }
 
+// Lifetime round-trip count + net PnL for a bot, straight from the DB —
+// the source of truth for the round-trip sequence number. The in-memory
+// bot.completedRoundTrips array is capped at 500 entries for memory reasons,
+// so its .length used to get reused as the sequence number and would get
+// stuck once a bot passed 500 total round trips (e.g. "Round Trip #501"
+// forever). Seeded at bot start so numbering survives restarts too.
+async function getRoundTripStats(botId) {
+  const empty = { count: 0, totalNetPnl: 0, totalGrossPnl: 0 };
+  const p = getPool();
+  if (!p) return empty;
+  try {
+    const [rows] = await p.query(
+      "SELECT COUNT(*) AS cnt, COALESCE(SUM(net_pnl), 0) AS total_net, COALESCE(SUM(gross_pnl), 0) AS total_gross FROM round_trips WHERE bot_id = ?",
+      [botId]
+    );
+    return {
+      count: rows[0]?.cnt || 0,
+      totalNetPnl: parseFloat(rows[0]?.total_net || 0),
+      totalGrossPnl: parseFloat(rows[0]?.total_gross || 0),
+    };
+  } catch (e) {
+    console.error("[DB] getRoundTripStats failed:", e.message);
+    return empty;
+  }
+}
+
 // Period-filtered report from DB — same shape as the in-memory report.
 async function queryReport({ exchange, fromTs, toTs, symbol }) {
   const p = getPool();
@@ -1084,7 +1110,7 @@ async function updateComboLeg(legId, fields = {}) {
 }
 
 module.exports = {
-  getPool, pingDb, recordFill, recordRoundTrip, queryReport,
+  getPool, pingDb, recordFill, recordRoundTrip, getRoundTripStats, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
   loadAllSessions, dbConfigured,
   listAccounts, getAccount, addAccount, deleteAccount, isAccountReferenced,

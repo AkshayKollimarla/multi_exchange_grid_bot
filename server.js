@@ -2184,13 +2184,20 @@ async function gridLoop(botId) {
     await maintainGrid(botId, currentPrice);
 
     // Telegram RT alert — fires once per actual completed round trip.
+    // Uses the lifetime bot.totalRoundTrips/totalGrossPnl/totalNetPnl
+    // counters, NOT completedRoundTrips.length/reduce() — that array is
+    // capped at 500 entries (memory cap above), so once a bot passed 500
+    // total round trips this comparison (completedCount > lastNotifiedRt)
+    // became permanently false ("500 > 500"), silently killing this summary
+    // alert forever, and the reduce()-based totals were already wrong
+    // (missing everything before the most recent 500) even while it fired.
     const cfg2 = bot.config;
-    const completedCount = bot.completedRoundTrips.length;
+    const completedCount = bot.totalRoundTrips || 0;
     if (completedCount > (bot.lastNotifiedRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
       const newlyCompleted = completedCount - (bot.lastNotifiedRt || 0);
-      const totalGross = bot.completedRoundTrips.reduce((s, r) => s + (r.grossPnl ?? r.pnl ?? 0), 0);
-      const totalFees  = bot.completedRoundTrips.reduce((s, r) => s + (r.totalFee || 0), 0);
-      const totalNet   = totalGross - totalFees;
+      const totalGross = bot.totalGrossPnl || 0;
+      const totalNet   = bot.totalNetPnl || 0;
+      const totalFees  = totalGross - totalNet;
       const tag        = EXCHANGE_TAG[exchangeKey];
       const runtimeStr = bot.startedAt ? formatDuration(Date.now() - bot.startedAt) : "—";
       const netSign    = totalNet >= 0 ? "+" : "";
@@ -2199,11 +2206,11 @@ async function gridLoop(botId) {
         `Runtime: ${runtimeStr}\n` +
         `Gross:   +$${totalGross.toFixed(4)}\n` +
         `Fees:    -$${totalFees.toFixed(4)}\n` +
-        `<b>Net:    ${netSign}$${totalNet.toFixed(4)}</b>` +
+        `<b>Net RTP PnL: ${netSign}$${totalNet.toFixed(4)}</b>` +
         (newlyCompleted > 1 ? `\n(${newlyCompleted} new since last update)` : "")
       );
       bot.lastNotifiedRt = completedCount;
-      log(botId, `📲 Telegram summary  RTs: ${completedCount}  Net: ${netSign}$${totalNet.toFixed(4)}  Runtime: ${runtimeStr}`);
+      log(botId, `📲 Telegram summary  RTs: ${completedCount}  Net RTP PnL: ${netSign}$${totalNet.toFixed(4)}  Runtime: ${runtimeStr}`);
     }
 
     broadcast("state", buildStateSnapshot());
@@ -2399,13 +2406,20 @@ async function processFilledOrder(botId, tracked, order) {
         durationMs: Date.now() - new Date(rt.openTs).getTime(),
       };
       bot.completedRoundTrips.unshift(rtRecord);
-      db.recordRoundTrip(bot, rtRecord, bot.completedRoundTrips.length);
+      // Lifetime counters — NOT completedRoundTrips.length, which is capped
+      // at 500 entries (see the periodic trim below) and would otherwise get
+      // stuck reporting the same round-trip number forever past bot #500.
+      bot.totalRoundTrips = (bot.totalRoundTrips || 0) + 1;
+      bot.totalNetPnl     = (bot.totalNetPnl || 0) + netPnl;
+      bot.totalGrossPnl   = (bot.totalGrossPnl || 0) + grossPnl;
+      db.recordRoundTrip(bot, rtRecord, bot.totalRoundTrips);
       const netSign = netPnl >= 0 ? "+" : "";
-      log(botId, `✅ ROUND TRIP #${bot.completedRoundTrips.length}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}`, "success");
+      const totalNetSign = bot.totalNetPnl >= 0 ? "+" : "";
+      log(botId, `✅ ROUND TRIP #${bot.totalRoundTrips}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}  TotalNet:${totalNetSign}$${bot.totalNetPnl.toFixed(4)}`, "success");
       if (cfg?.telegramToken && cfg?.telegramChatId) {
         const tag = EXCHANGE_TAG[exchangeKey];
         sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-          `${tag} ✅ Round Trip #${bot.completedRoundTrips.length}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}`
+          `${tag} ✅ Round Trip #${bot.totalRoundTrips}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}\nNet RTP PnL: ${totalNetSign}$${bot.totalNetPnl.toFixed(4)}`
         );
       }
     }
@@ -5416,6 +5430,17 @@ app.post("/api/start", async (req, res) => {
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
       completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
+
+    // Lifetime round-trip counter + net PnL, seeded from the DB (source of
+    // truth) rather than derived from completedRoundTrips.length — that
+    // array is capped at 500 in-memory entries, so its length used to get
+    // reused as the round-trip number and would get stuck forever once a
+    // bot passed 500 total round trips. Seeding from the DB here means the
+    // numbering is correct immediately and survives restarts.
+    const rtStats = await db.getRoundTripStats(botId);
+    bot.totalRoundTrips = rtStats.count;
+    bot.totalNetPnl     = rtStats.totalNetPnl;
+    bot.totalGrossPnl   = rtStats.totalGrossPnl;
 
     // Hedge only for Binance
     if (exchangeKey === "binance" && cfg.hedgeEnabled) {
