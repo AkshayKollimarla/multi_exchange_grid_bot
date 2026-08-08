@@ -74,13 +74,13 @@ export default function ActiveBotPage() {
           </Link>
         </div>
 
-        {list.length === 0 && (
-          <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>No bots yet — click "New Bot" to launch one.</div></div>
+        {running.length === 0 && (
+          <div className="card"><div className="card-body" style={{ color: "var(--muted)" }}>No active bots — click "New Bot" to launch one.</div></div>
         )}
 
-        {list.length > 0 && (
+        {running.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-            {list.map((b) => (
+            {running.map((b) => (
               <div
                 key={b.id}
                 onClick={() => setSelectedId(b.id)}

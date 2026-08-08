@@ -1336,6 +1336,13 @@ async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, q
     log(botId, `Telegram ${prev ? "restart" : "launch"}: RUNNING | Entry $${entryPrice} | ${cfg.symbol}`, "success");
     broadcast("state", buildStateSnapshot());
 
+    // Persist the session so it auto-resumes after a deploy/reboot — this
+    // path never called saveSession before, so any bot launched or
+    // restarted via Telegram ran with no DB backup at all and silently
+    // couldn't survive a server restart (root cause of a live ETH-PERPETUAL
+    // grid + position going unmanaged after a routine deploy).
+    db.saveSession(botId, exchangeKey, stripSecrets(cfg));
+
     await tgSend(chatId,
       `✅ <b>${tag} ${prev ? "Restarted" : "Launched"}!</b>\n\n` +
       `Symbol: <code>${cfg.symbol}</code>\n` +
