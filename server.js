@@ -1975,7 +1975,9 @@ async function emergencyStop(botId, reason) {
   bot.running = false;
   log(botId, `EMERGENCY STOP: ${reason}`, "error");
   try { await cancelAllOrders(botId); } catch(e){}
-  db.clearSession(botId);
+  // Mark stopped (not deleted) so it shows up on the Inactive Bots page with
+  // its config intact — same as a manual stop below.
+  db.markSessionStopped(botId, reason);
 
   const cfg = bot.config;
   if (cfg?.telegramToken && cfg?.telegramChatId) {
@@ -1985,6 +1987,14 @@ async function emergencyStop(botId, reason) {
     );
   }
   broadcast("state", buildStateSnapshot());
+
+  // Same in-memory cleanup /api/stop does for a manual stop — otherwise an
+  // emergency-stopped bot lingers in bots{} (and Active Bot) forever instead
+  // of moving to Inactive Bots.
+  setTimeout(() => {
+    if (!bots[botId]?.running) removeBotInstance(botId);
+    broadcast("state", buildStateSnapshot());
+  }, 5000);
 }
 
 // ============================================================
@@ -5607,7 +5617,9 @@ app.post("/api/stop", async (req, res) => {
     `${tag} 🛑 Grid Bot Manually Stopped\n\nSymbol: ${bot.config?.symbol||"—"}\nLast Price: $${bot.lastPrice||"—"}\nTime: ${new Date().toLocaleString()}`
   );
 
-  db.clearSession(botId);
+  // Mark stopped (not deleted) so it shows up on the Inactive Bots page
+  // with its config intact, ready to be edited and restarted.
+  db.markSessionStopped(botId, "Manual stop");
 
   res.json({ success: true, botId, exchange: exchangeKey });
   broadcast("state", buildStateSnapshot());
@@ -5618,6 +5630,20 @@ app.post("/api/stop", async (req, res) => {
     if (!bots[botId]?.running) removeBotInstance(botId);
     broadcast("state", buildStateSnapshot());
   }, 5000);
+});
+
+// ── Inactive Bots — stopped sessions (manual stop or upper/lower limit
+// breach) that kept their config instead of being deleted, so they can be
+// listed and re-launched from Bot Configuration without re-entering anything.
+app.get("/api/stopped-bots", async (req, res) => {
+  try { res.json({ bots: await db.listStoppedSessions() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete("/api/stopped-bots", async (req, res) => {
+  const botId = req.query?.botId;
+  if (!botId) return res.status(400).json({ error: "botId required" });
+  try { await db.clearSession(botId); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Hyperliquid account overview as structured JSON (native SDK, fast)

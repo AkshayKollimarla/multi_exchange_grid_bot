@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { apiGet, apiPost } from "@/lib/api";
 import { loadSymbolsFor } from "@/lib/symbols";
 import { fmtCcy } from "@/lib/format";
@@ -26,7 +27,10 @@ const emptyForm = {
   distance: "", avgSellSpacing: "", avgBuySpacing: "", targetSpread: "", qtyPerStep: "",
 };
 
-export default function BotConfigurationPage() {
+function BotConfigurationInner() {
+  const searchParams = useSearchParams();
+  const restoreBotId = searchParams.get("restore");
+
   const [form, setForm] = useState(emptyForm);
   const [accounts, setAccounts] = useState([]);
   const [symbols, setSymbols] = useState([]);
@@ -34,6 +38,12 @@ export default function BotConfigurationPage() {
   const [symbolQuery, setSymbolQuery] = useState("");
   const [starting, setStarting] = useState(false);
   const [msg, setMsg] = useState(null);
+  // Holds the symbol to apply once its exchange's symbol list finishes
+  // loading — restoring priceSource triggers the symbol-reset effect below
+  // (it clears form.symbol on every priceSource change), so the restored
+  // symbol has to be applied AFTER that reset settles, not in the same pass.
+  const [pendingSymbol, setPendingSymbol] = useState(null);
+  const [restoredFrom, setRestoredFrom] = useState(null);
 
   const exchange = PRICE_SOURCES.find((p) => p.value === form.priceSource)?.exchange || "binance";
 
@@ -49,6 +59,43 @@ export default function BotConfigurationPage() {
   useEffect(() => {
     apiGet("/api/accounts").then((list) => setAccounts(Array.isArray(list) ? list : [])).catch(() => {});
   }, []);
+
+  // Editing a stopped bot from Inactive Bot: pull its saved config and
+  // pre-fill the form. priceSource/distance/spacing/target/qty/account go
+  // straight in; symbol is held in pendingSymbol until the symbol-reset
+  // effect below finishes loading the new exchange's symbol list.
+  useEffect(() => {
+    if (!restoreBotId) return;
+    apiGet("/api/stopped-bots")
+      .then((d) => {
+        const match = (d.bots || []).find((b) => b.botId === restoreBotId);
+        if (!match) { setMsg({ ok: false, text: `Stopped bot "${restoreBotId}" not found.` }); return; }
+        const cfg = match.config || {};
+        setForm((f) => ({
+          ...f,
+          priceSource: cfg.priceSource || f.priceSource,
+          accountId: cfg.accountId || "",
+          distance: cfg.distance ?? "",
+          avgSellSpacing: cfg.avgSellSpacing ?? "",
+          avgBuySpacing: cfg.avgBuySpacing ?? "",
+          targetSpread: cfg.targetSpread ?? "",
+          qtyPerStep: cfg.qtyPerStep ?? "",
+        }));
+        setPendingSymbol(cfg.symbol || null);
+        setRestoredFrom(restoreBotId);
+      })
+      .catch((e) => setMsg({ ok: false, text: "Could not load stopped bot: " + e.message }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreBotId]);
+
+  useEffect(() => {
+    if (pendingSymbol && !symbolsLoading && symbols.length) {
+      setField("symbol", pendingSymbol);
+      setSymbolQuery(pendingSymbol);
+      setPendingSymbol(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSymbol, symbolsLoading, symbols]);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +139,7 @@ export default function BotConfigurationPage() {
       const data = await apiPost("/api/start", body);
       setMsg({ ok: true, text: `✓ Started — botId "${data.botId}". Upper $${data.upperLimit} · Lower $${data.lowerLimit}. See it on the Active Bot page.` });
       setForm(emptyForm);
+      setRestoredFrom(null);
     } catch (e) {
       setMsg({ ok: false, text: "Failed: " + e.message });
     } finally {
@@ -108,6 +156,12 @@ export default function BotConfigurationPage() {
           <div className="card">
             <div className="card-header">New Bot</div>
             <div className="card-body">
+              {restoredFrom && (
+                <div className="note" style={{ background: "var(--brand-soft)", color: "var(--brand)" }}>
+                  ✎ Restored settings from stopped bot "{restoredFrom}" — change anything you like, then Start Bot.
+                  Upper/Lower limits will be recalculated from the live price at start, not the old ones.
+                </div>
+              )}
               <div className="note">
                 ⚠ API keys are read from your .env file — not entered here.<br />
                 Need: <code>{ENV_KEYS_NOTE[exchange]}</code>
@@ -190,6 +244,14 @@ export default function BotConfigurationPage() {
         </div>
       </section>
     </>
+  );
+}
+
+export default function BotConfigurationPage() {
+  return (
+    <Suspense fallback={<div className="section"><div className="sec-head">⚙️ Bot Configuration</div></div>}>
+      <BotConfigurationInner />
+    </Suspense>
   );
 }
 

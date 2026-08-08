@@ -71,6 +71,18 @@ async function pingDb() {
     // Persisted in-memory state for true continuation across restarts.
     try { await conn.query("ALTER TABLE bot_sessions ADD COLUMN state_json JSON NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Inactive Bots feature — stopping a bot used to DELETE its row here,
+    // so there was nowhere to list it for a later "edit & restart" flow.
+    // Now a stop marks the row instead of deleting it; loadAllSessions()
+    // filters to status='active' so stopped rows are never auto-resumed.
+    for (const col of [
+      "ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active'",
+      "ADD COLUMN stopped_at DATETIME(3) NULL",
+      "ADD COLUMN stop_reason VARCHAR(255) NULL",
+    ]) {
+      try { await conn.query(`ALTER TABLE bot_sessions ${col}`); }
+      catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    }
     // Options Multi-Agent Database — strategies logged via the Options DB
     // sidebar section (Dashboard / Add Strategy / Combined Simulator /
     // Analysis). Mirrors the schema of the standalone options_pnl_report app
@@ -289,10 +301,14 @@ async function saveSession(botId, exchange, config) {
   const p = getPool();
   if (!p) return;
   try {
+    // A fresh start can land on a bot_id a previously-stopped bot used (the
+    // legacy binance/deribit/hyperliquid slots are reused once free) — reset
+    // status back to active so it isn't mistaken for the old stopped session.
     await p.execute(
-      `INSERT INTO bot_sessions (bot_id, exchange, config_json)
-       VALUES (?, ?, CAST(? AS JSON))
-       ON DUPLICATE KEY UPDATE exchange = VALUES(exchange), config_json = VALUES(config_json)`,
+      `INSERT INTO bot_sessions (bot_id, exchange, config_json, status, stopped_at, stop_reason)
+       VALUES (?, ?, CAST(? AS JSON), 'active', NULL, NULL)
+       ON DUPLICATE KEY UPDATE exchange = VALUES(exchange), config_json = VALUES(config_json),
+         status = 'active', stopped_at = NULL, stop_reason = NULL`,
       [botId, exchange, JSON.stringify(config)]
     );
   } catch (e) {
@@ -300,6 +316,9 @@ async function saveSession(botId, exchange, config) {
   }
 }
 
+// Hard-delete a session row entirely — used to permanently remove a stopped
+// bot from the Inactive Bots list (as opposed to markSessionStopped, which
+// just flags a running session as stopped so it can still be listed/edited).
 async function clearSession(botId) {
   const p = getPool();
   if (!p) return;
@@ -307,6 +326,43 @@ async function clearSession(botId) {
     await p.execute("DELETE FROM bot_sessions WHERE bot_id = ?", [botId]);
   } catch (e) {
     console.error("[DB] clearSession failed:", e.message);
+  }
+}
+
+// Marks a session stopped instead of deleting it, so its config survives for
+// the Inactive Bots list (and an "Edit" flow that restarts it later) — called
+// from both the manual /api/stop route and the emergencyStop (upper/lower
+// limit breach) path.
+async function markSessionStopped(botId, reason) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.execute(
+      "UPDATE bot_sessions SET status = 'stopped', stopped_at = NOW(3), stop_reason = ? WHERE bot_id = ?",
+      [reason || null, botId]
+    );
+  } catch (e) {
+    console.error("[DB] markSessionStopped failed:", e.message);
+  }
+}
+
+async function listStoppedSessions() {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const [rows] = await p.query(
+      "SELECT bot_id, exchange, config_json, stopped_at, stop_reason FROM bot_sessions WHERE status = 'stopped' ORDER BY stopped_at DESC"
+    );
+    return rows.map(r => ({
+      botId: r.bot_id,
+      exchange: r.exchange,
+      config: typeof r.config_json === "string" ? JSON.parse(r.config_json) : r.config_json,
+      stoppedAt: r.stopped_at,
+      stopReason: r.stop_reason,
+    }));
+  } catch (e) {
+    console.error("[DB] listStoppedSessions failed:", e.message);
+    return [];
   }
 }
 
@@ -331,7 +387,7 @@ async function loadAllSessions() {
   if (!p) return [];
   try {
     const [rows] = await p.query(
-      "SELECT bot_id, exchange, config_json, state_json FROM bot_sessions ORDER BY started_at ASC"
+      "SELECT bot_id, exchange, config_json, state_json FROM bot_sessions WHERE status = 'active' ORDER BY started_at ASC"
     );
     return rows.map(r => ({
       botId: r.bot_id,
@@ -1112,6 +1168,7 @@ async function updateComboLeg(legId, fields = {}) {
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, getRoundTripStats, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
+  markSessionStopped, listStoppedSessions,
   loadAllSessions, dbConfigured,
   listAccounts, getAccount, addAccount, deleteAccount, isAccountReferenced,
   listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,

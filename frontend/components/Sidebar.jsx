@@ -14,6 +14,7 @@ const TRADING_ITEMS = [
   { key: "report", label: "PnL Report", icon: "📈", href: "/pnl-report" },
   { key: "logs", label: "Bot Logs", icon: "📜", href: "/bot-logs" },
   { key: "active", label: "Active Bot", icon: "🟢", href: "/active-bot" },
+  { key: "inactive", label: "Inactive Bot", icon: "⚪", href: "/inactive-bot" },
 ];
 
 const OPTIONS_ITEMS = [
