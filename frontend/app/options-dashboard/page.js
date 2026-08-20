@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiDelete } from "@/lib/api";
-import { fmtCcy, fmtDate } from "@/lib/format";
+import { fmtCcy, fmtNum, fmtDate } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 
@@ -114,7 +114,9 @@ export default function OptionsDashboardPage() {
       const members = trades.filter((x) => x.group_id === t.group_id);
       const combinedPnl = members.reduce((s, m) => s + Number(m.net_booked_pnl || 0), 0);
       const perLegInv = Number(members[0]?.investment || 0);
-      rows.push({ kind: "group-banner", groupId: t.group_id, count: members.length, combinedPnl, perLegInv });
+      const totalTheta = members.reduce((s, m) => s + Number(m.total_theta_gain_loss || 0), 0);
+      const dailyTheta = members.reduce((s, m) => s + Number(m.per_day_theta_gain_loss || 0), 0);
+      rows.push({ kind: "group-banner", groupId: t.group_id, count: members.length, combinedPnl, perLegInv, totalTheta, dailyTheta });
       for (const m of members) rows.push({ kind: "row", trade: m, combined: true, groupId: t.group_id });
     } else {
       rows.push({ kind: "row", trade: t, combined: false });
@@ -165,22 +167,23 @@ export default function OptionsDashboardPage() {
             <table className="ord-table">
               <thead>
                 <tr>
-                  <th>#</th><th>Date</th><th>Token</th><th>Account</th><th>Type</th><th>Strike</th><th>Expiry</th>
+                  <th>#</th><th>Date</th><th>Token</th><th>Account</th><th>Type</th><th>Strike</th><th>Premium</th>
+                  <th>Opt Qty</th><th>Fut Qty</th><th>Fut Price</th><th>Distance</th><th>Expiry</th>
                   <th>Days</th><th>Status</th><th>Investment</th><th>MM PL</th><th>Booked PnL</th><th>APY</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={14} className="empty-td">Loading…</td></tr>}
-                {!loading && error && <tr><td colSpan={14} className="empty-td">Error: {error}</td></tr>}
+                {loading && <tr><td colSpan={19} className="empty-td">Loading…</td></tr>}
+                {!loading && error && <tr><td colSpan={19} className="empty-td">Error: {error}</td></tr>}
                 {!loading && !error && rows.length === 0 && (
-                  <tr><td colSpan={14} className="empty-td">
+                  <tr><td colSpan={19} className="empty-td">
                     No strategies found. <a href="/add-strategy">Add one.</a>
                   </td></tr>
                 )}
                 {!loading && !error && rows.map((r, i) =>
                   r.kind === "group-banner" ? (
                     <tr key={`g-${r.groupId}`} style={{ background: "var(--purple-soft)" }}>
-                      <td colSpan={14} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
+                      <td colSpan={19} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--purple)", color: "#fff", padding: "4px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, letterSpacing: ".02em" }}>
                           🔗 COMBINED STRATEGY
                         </span>
@@ -192,6 +195,12 @@ export default function OptionsDashboardPage() {
                         )}
                         <span style={{ marginLeft: 12, fontSize: 12, fontWeight: 600, color: r.combinedPnl >= 0 ? "#16a34a" : "#dc2626" }}>
                           Combined PnL: {fmtCcy(r.combinedPnl)}
+                        </span>
+                        <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted-3)" }}>
+                          Total Theta: <b style={{ color: r.totalTheta >= 0 ? "#16a34a" : "#dc2626" }}>{fmtCcy(r.totalTheta)}</b>
+                        </span>
+                        <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted-3)" }}>
+                          Daily Theta: <b style={{ color: r.dailyTheta >= 0 ? "#16a34a" : "#dc2626" }}>{fmtCcy(r.dailyTheta)}</b>
                         </span>
                       </td>
                     </tr>
@@ -233,6 +242,18 @@ function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
       <td style={{ fontSize: 13, color: "var(--muted)" }}>{t.account_id && acctMap?.[t.account_id] ? acctMap[t.account_id] : "—"}</td>
       <td><span style={{ color: typeColor, fontWeight: 700, fontSize: 12 }}>{t.option_type}</span></td>
       <td>{t.options_strike || "—"}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.opt_entry_price != null ? fmtCcy(t.opt_entry_price) : "—"}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.opt_entry_qty != null ? fmtNum(t.opt_entry_qty, 4) : "—"}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.fut_qty ? fmtNum(t.fut_qty, 4) : "—"}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.fut_entry_price ? fmtCcy(t.fut_entry_price) : "—"}</td>
+      <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+        {t.upside_distance || t.down_distance ? (
+          <>
+            <span style={{ color: "#16a34a" }}>↑{fmtNum(t.upside_distance, 0)}</span>{" / "}
+            <span style={{ color: "#dc2626" }}>↓{fmtNum(t.down_distance, 0)}</span>
+          </>
+        ) : "—"}
+      </td>
       <td style={{ whiteSpace: "nowrap" }}>{fmtDate(t.expiry)}</td>
       <td>{t.days_to_expiry ?? "—"}</td>
       <td><span className={`pill ${t.status === "open" ? "pill-green" : "pill-grey"}`}>{t.status}</span></td>
