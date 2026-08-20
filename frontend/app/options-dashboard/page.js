@@ -6,6 +6,17 @@ import { fmtCcy, fmtNum, fmtDate } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 
+// Whole-number qty display with a dash for anything that rounds to zero
+// (covers both a genuinely empty value and a small fractional qty like
+// -0.4 that would otherwise round to a confusing "-0" — .toFixed(0) keeps
+// the negative sign on -0, plain rounding + string coercion doesn't).
+function fmtQtyOrDash(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || Number.isNaN(n)) return "—";
+  const rounded = Math.round(n);
+  return rounded === 0 ? "—" : String(rounded);
+}
+
 export default function OptionsDashboardPage() {
   const [status, setStatus] = useState("all");
   const [token, setToken] = useState("");
@@ -168,22 +179,22 @@ export default function OptionsDashboardPage() {
               <thead>
                 <tr>
                   <th>#</th><th>Date</th><th>Token</th><th>Account</th><th>Type</th><th>Strike</th><th>Premium</th>
-                  <th>Opt Qty</th><th>Fut Qty</th><th>Fut Price</th><th>Distance</th><th>Expiry</th>
+                  <th>Opt Qty</th><th>Fut Qty</th><th>Distance</th><th>Expiry</th>
                   <th>Days</th><th>Status</th><th>MM PL</th><th>Booked PnL</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={17} className="empty-td">Loading…</td></tr>}
-                {!loading && error && <tr><td colSpan={17} className="empty-td">Error: {error}</td></tr>}
+                {loading && <tr><td colSpan={16} className="empty-td">Loading…</td></tr>}
+                {!loading && error && <tr><td colSpan={16} className="empty-td">Error: {error}</td></tr>}
                 {!loading && !error && rows.length === 0 && (
-                  <tr><td colSpan={17} className="empty-td">
+                  <tr><td colSpan={16} className="empty-td">
                     No strategies found. <a href="/add-strategy">Add one.</a>
                   </td></tr>
                 )}
                 {!loading && !error && rows.map((r, i) =>
                   r.kind === "group-banner" ? (
                     <tr key={`g-${r.groupId}`} style={{ background: "var(--purple-soft)" }}>
-                      <td colSpan={17} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
+                      <td colSpan={16} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--purple)", color: "#fff", padding: "4px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, letterSpacing: ".02em" }}>
                           🔗 COMBINED STRATEGY
                         </span>
@@ -242,10 +253,12 @@ function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
       <td style={{ fontSize: 13, color: "var(--muted)" }}>{t.account_id && acctMap?.[t.account_id] ? acctMap[t.account_id] : "—"}</td>
       <td><span style={{ color: typeColor, fontWeight: 700, fontSize: 12 }}>{t.option_type}</span></td>
       <td>{t.options_strike || "—"}</td>
-      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.opt_entry_price != null ? fmtCcy(t.opt_entry_price) : "—"}</td>
-      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.opt_entry_qty != null ? fmtNum(t.opt_entry_qty, 4) : "—"}</td>
-      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.fut_qty ? fmtNum(t.fut_qty, 4) : "—"}</td>
-      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{t.fut_entry_price ? fmtCcy(t.fut_entry_price) : "—"}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
+        {t.opt_entry_price != null ? fmtCcy(t.opt_entry_price) : "—"}
+        {Number(t.fut_entry_price) ? <div style={{ fontSize: 10, color: "var(--muted)" }}>fut {fmtCcy(t.fut_entry_price)}</div> : null}
+      </td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtQtyOrDash(t.opt_entry_qty)}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtQtyOrDash(t.fut_qty)}</td>
       <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
         {t.upside_distance || t.down_distance ? (
           <>
