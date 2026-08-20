@@ -30,6 +30,32 @@ function emptyLegForm() {
 function makeLeg(type) {
   return { type, form: { ...emptyLegForm(), option_type: type.startsWith("CALL") ? "CALL" : "PUT" } };
 }
+
+// Fields that are almost always identical across every leg of one combo
+// (same underlying, expiry, entry date, quantity, futures hedge price, and
+// distance thresholds — only strike/direction differ leg to leg) — editing
+// Leg 1 pushes the value to every other leg (and seeds it into any NEW leg
+// added afterward, via addLeg below), so a 4-leg iron condor doesn't need
+// re-typing the same thing 4 times. Deribit's Token is included here since
+// each leg still picks its own there; Alpaca's equivalent is the
+// page-level Underlying field (synced separately, in the component).
+const SYNCED_FIELDS = ["token", "entry_date", "expiry", "opt_entry_qty", "fut_entry_price", "upside_distance", "down_distance", "basket_distance"];
+
+// Applies a synced value to ONE target leg, respecting the two fields whose
+// meaning depends on the target leg itself: opt_entry_qty keeps the
+// target's own long/short sign (mirrors changeLegType's sign handling), and
+// token/expiry changing invalidates whatever strike was picked for THAT
+// leg's now-stale chain position.
+function syncedFormPatch(targetType, key, value) {
+  if (key === "opt_entry_qty") {
+    const isShort = targetType.endsWith("SHORT");
+    const mag = value !== "" && !isNaN(Number(value)) ? Math.abs(Number(value)) : "";
+    return { opt_entry_qty: mag === "" ? value : String(isShort ? -mag : mag) };
+  }
+  if (key === "token") return { token: value, expiry: "", options_strike: "" };
+  if (key === "expiry") return { expiry: value, options_strike: "" };
+  return { [key]: value };
+}
 function detectLegType(t) {
   const isCall = (t.option_type || "").toUpperCase() === "CALL", isShort = Number(t.opt_entry_qty) < 0;
   if (isCall && !isShort) return "CALL LONG";
@@ -218,7 +244,12 @@ function CombinedSimulatorInner() {
     router.replace("/combined-simulator");
   }
   function addLeg() {
-    setLegs((ls) => [...ls, makeLeg("CALL LONG")]);
+    setLegs((ls) => {
+      const newLeg = makeLeg("CALL LONG");
+      const seed = ls[0]?.form;
+      if (seed) for (const key of SYNCED_FIELDS) Object.assign(newLeg.form, syncedFormPatch(newLeg.type, key, seed[key]));
+      return [...ls, newLeg];
+    });
     setEditIds((ids) => [...ids, null]);
   }
   function removeLeg(idx) {
@@ -235,30 +266,11 @@ function CombinedSimulatorInner() {
       return { type, form: { ...l.form, option_type: type.startsWith("CALL") ? "CALL" : "PUT", opt_entry_qty } };
     }));
   }
-  // Fields that are almost always identical across every leg of one combo
-  // (same underlying, expiry, entry date, and usually quantity — only
-  // strike/direction differ leg to leg) — editing Leg 1 pushes the value to
-  // every other leg too, so a 4-leg iron condor doesn't need re-typing the
-  // same thing 4 times. Each leg still keeps its own long/short sign for
-  // qty (mirrors changeLegType's own sign handling above). Deribit's Token
-  // is included here since each leg still picks its own there; Alpaca's
-  // equivalent is the page-level Underlying field (synced separately).
-  const SYNCED_FIELDS = ["token", "entry_date", "expiry", "opt_entry_qty"];
   function setLegField(idx, key, value) {
     setLegs((ls) => {
       const next = ls.map((l, i) => (i === idx ? { ...l, form: { ...l.form, [key]: value } } : l));
       if (idx !== 0 || !SYNCED_FIELDS.includes(key)) return next;
-      return next.map((l, i) => {
-        if (i === 0) return l;
-        if (key === "opt_entry_qty") {
-          const isShort = l.type.endsWith("SHORT");
-          const mag = value !== "" && !isNaN(Number(value)) ? Math.abs(Number(value)) : "";
-          return { ...l, form: { ...l.form, opt_entry_qty: mag === "" ? value : String(isShort ? -mag : mag) } };
-        }
-        if (key === "token") return { ...l, form: { ...l.form, token: value, expiry: "", options_strike: "" } };
-        if (key === "expiry") return { ...l, form: { ...l.form, expiry: value, options_strike: "" } };
-        return { ...l, form: { ...l.form, [key]: value } }; // entry_date
-      });
+      return next.map((l, i) => (i === 0 ? l : { ...l, form: { ...l.form, ...syncedFormPatch(l.type, key, value) } }));
     });
   }
 
@@ -682,7 +694,7 @@ function CombinedSimulatorInner() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 18 }}>
           {legs.map((leg, idx) => (
             <LegCard
               key={idx} ref={(el) => { legCardRefs.current[idx] = el; }}
