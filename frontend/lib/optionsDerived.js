@@ -87,6 +87,53 @@ export function legBsTodayPnl(form, optType, Starget) {
   return legBsPnlOnDay(form, optType, Starget, 0);
 }
 
+// Projects combined PnL day-by-day from today through the furthest leg's
+// expiry, holding each leg's underlying flat at its own current price
+// (form.fut_entry_price) the whole time — futures PnL is inherently $0 in
+// this scenario since price never moves, so only options' theta decay
+// changes the total. Answers "on which day does my PnL turn positive (or
+// negative)" if the market just sits still. legs: [{form, optType}]. mmLoss
+// is a constant (not time- or price-dependent) added to every day.
+export function dayByDayFlatPnl(legs, mmLoss, maxDays) {
+  const days = Math.max(0, Math.round(maxDays || 0));
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (let day = 0; day <= days; day++) {
+    const pnl = legs.reduce((s, l) => {
+      const S = parseFloat(l.form.fut_entry_price) || 0;
+      return s + legBsPnlOnDay(l.form, l.optType, S, day);
+    }, 0) + (mmLoss || 0);
+    rows.push({ day, date: new Date(today.getTime() + day * 86400000), pnl });
+  }
+  return rows;
+}
+
+// Day-by-day PnL if the underlying makes a fixed move — each leg's own
+// Upside Distance / Down Distance — by that day, instead of dayByDayFlatPnl's
+// flat price. Option leg uses BS (time value shrinks as `day` advances,
+// same as dayByDayFlatPnl); futures leg is linear in distance so its PnL is
+// constant across days once the move has happened, matching the existing
+// bsUpsideCombined/bsDownsideCombined "Today BS" totals' fut+mm shape.
+// Answers "if the price moves $100 up (or down) by day N, what's my PnL
+// that day." direction: "upside" | "downside".
+export function dayByDayMovePnl(legs, mmLoss, maxDays, direction) {
+  const days = Math.max(0, Math.round(maxDays || 0));
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (let day = 0; day <= days; day++) {
+    const pnl = legs.reduce((s, l) => {
+      const entry = parseFloat(l.form.fut_entry_price) || 0;
+      const futQty = parseFloat(l.form.fut_qty) || 0;
+      const dist = direction === "downside" ? (parseFloat(l.form.down_distance) || 0) : (parseFloat(l.form.upside_distance) || 0);
+      const S = direction === "downside" ? entry - dist : entry + dist;
+      const futPnl = direction === "downside" ? -(futQty * dist) : futQty * dist;
+      return s + legBsPnlOnDay(l.form, l.optType, S, day) + futPnl;
+    }, 0) + (mmLoss || 0);
+    rows.push({ day, date: new Date(today.getTime() + day * 86400000), pnl });
+  }
+  return rows;
+}
+
 export function toInputDate(d) {
   if (!d && d !== 0) return "";
   const dt = typeof d === "number" ? new Date(d) : (() => {

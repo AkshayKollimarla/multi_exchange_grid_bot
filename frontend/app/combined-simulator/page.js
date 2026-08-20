@@ -4,7 +4,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { fmtCcy } from "@/lib/format";
-import { computeDerived, toInputDate, legBsTodayPnl } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate, legBsTodayPnl, dayByDayFlatPnl, dayByDayMovePnl } from "@/lib/optionsDerived";
+import DayByDayPnlStrip from "@/components/DayByDayPnlStrip";
 import { findInstrument } from "@/lib/deribitLiveChain";
 import { ALPACA_UNDERLYING_SUGGESTIONS } from "@/lib/alpacaLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
@@ -306,6 +307,27 @@ function CombinedSimulatorInner() {
     const S = parseFloat(l.form.fut_entry_price) || 0, opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
   }, 0) + downside.fut + downside.mm;
+
+  const maxDaysToExpiry = Math.max(0, ...deriveds.map((d) => Number(d.days_to_expiry) || 0));
+  const dayByDayLegs = useMemo(
+    () => legs.map((l) => ({ form: l.form, optType: (l.form.option_type || "PUT").toUpperCase() })),
+    [legs]
+  );
+  const dayByDayRows = useMemo(
+    () => dayByDayFlatPnl(dayByDayLegs, upside.mm, maxDaysToExpiry),
+    [dayByDayLegs, upside.mm, maxDaysToExpiry]
+  );
+  // If price moves the full Upside/Down Distance by day N — same distance
+  // fields as the Upside/Downside Scenario blocks below, just projected
+  // day-by-day instead of only "today".
+  const dayByDayUpsideRows = useMemo(
+    () => dayByDayMovePnl(dayByDayLegs, upside.mm, maxDaysToExpiry, "upside"),
+    [dayByDayLegs, upside.mm, maxDaysToExpiry]
+  );
+  const dayByDayDownsideRows = useMemo(
+    () => dayByDayMovePnl(dayByDayLegs, downside.mm, maxDaysToExpiry, "downside"),
+    [dayByDayLegs, downside.mm, maxDaysToExpiry]
+  );
 
   const rowsDef = [
     { label: "Upside Opt PnL", key: "upside_opt_pnl", total: upside.opt },
@@ -731,6 +753,9 @@ function CombinedSimulatorInner() {
               <ScenarioBlock title="📈 Upside Scenario" scenario="up" totals={upside} deriveds={deriveds} bsToday={bsUpsideCombined} legs={legs} />
               <ScenarioBlock title="📉 Downside Scenario" scenario="down" totals={downside} deriveds={deriveds} bsToday={bsDownsideCombined} legs={legs} />
             </div>
+            <DayByDayPnlStrip rows={dayByDayRows} title="📅 Day-by-Day PnL — Price Flat (theta decay only)" assumption="price holds flat" />
+            <DayByDayPnlStrip rows={dayByDayUpsideRows} title="📈 Day-by-Day PnL — Upside (price +Upside Distance by that day)" assumption="price is +Upside Distance by then" />
+            <DayByDayPnlStrip rows={dayByDayDownsideRows} title="📉 Day-by-Day PnL — Downside (price −Down Distance by that day)" assumption="price is −Down Distance by then" />
             <div className="section-title" style={{ marginTop: 14 }}>Side-by-Side Breakdown</div>
             <table className="ord-table">
               <thead>

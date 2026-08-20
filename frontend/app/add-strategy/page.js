@@ -4,10 +4,11 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { bsPrice, strikeNumber } from "@/lib/blackScholes";
-import { computeDerived, toInputDate } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate, dayByDayFlatPnl, dayByDayMovePnl } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
+import DayByDayPnlStrip from "@/components/DayByDayPnlStrip";
 
 const FIELD_KEYS = [
   "entry_date", "token", "option_type", "investment", "status", "end_date",
@@ -238,6 +239,28 @@ function AddStrategyInner() {
       netDnExpiry: bsDn != null ? bsDn + futDn : null,
     };
   }, [form, iv, derived]);
+
+  // Day-by-day, price held flat at today's level — separate from the
+  // upside/downside distance scenarios in `calc` above.
+  const dayByDayLeg = useMemo(
+    () => [{ form: { ...form, iv }, optType: (form.option_type || "PUT").toUpperCase() }],
+    [form, iv]
+  );
+  const dayByDayRows = useMemo(
+    () => dayByDayFlatPnl(dayByDayLeg, Number(derived.total_mm_loss) || 0, calc.dte),
+    [dayByDayLeg, derived, calc.dte]
+  );
+  // If price moves the full Upside/Down Distance by day N — same fields the
+  // "BS Option PnL" upside/downside cards above use, just projected
+  // day-by-day instead of only today/expiry.
+  const dayByDayUpsideRows = useMemo(
+    () => dayByDayMovePnl(dayByDayLeg, Number(derived.total_mm_loss) || 0, calc.dte, "upside"),
+    [dayByDayLeg, derived, calc.dte]
+  );
+  const dayByDayDownsideRows = useMemo(
+    () => dayByDayMovePnl(dayByDayLeg, Number(derived.total_mm_loss) || 0, calc.dte, "downside"),
+    [dayByDayLeg, derived, calc.dte]
+  );
 
   function buildPayload() {
     const f = {};
@@ -732,6 +755,9 @@ function AddStrategyInner() {
           </div>
         </div>
 
+        <DayByDayPnlStrip rows={dayByDayRows} title="📅 Day-by-Day PnL — Price Flat (theta decay only)" assumption="price holds flat" />
+        <DayByDayPnlStrip rows={dayByDayUpsideRows} title="📈 Day-by-Day PnL — Upside (price +Upside Distance by that day)" assumption="price is +Upside Distance by then" />
+        <DayByDayPnlStrip rows={dayByDayDownsideRows} title="📉 Day-by-Day PnL — Downside (price −Down Distance by that day)" assumption="price is −Down Distance by then" />
 
         <div className="card" style={{ marginTop: 18 }}>
           <div className="card-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
