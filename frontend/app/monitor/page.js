@@ -107,6 +107,68 @@ function TargetPnlCard({ pnl, targetPnl, onSave, disabled }) {
   );
 }
 
+// Stop Loss KPI card — same inline-editor shape as TargetPnlCard, but
+// optional (null = disabled, saving a blank value clears it) and closes on
+// PnL FALLING to -stopLossPnl instead of rising to +targetPnl.
+function StopLossCard({ stopLossPnl, onSave, disabled }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(stopLossPnl != null ? Number(stopLossPnl).toFixed(1) : "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => { if (!editing) setVal(stopLossPnl != null ? Number(stopLossPnl).toFixed(1) : ""); }, [stopLossPnl, editing]);
+
+  async function save() {
+    const trimmed = val.trim();
+    let n = null;
+    if (trimmed !== "") {
+      const parsed = parseFloat(trimmed);
+      if (!(parsed > 0)) { setErr("Must be > 0, or blank to disable"); return; }
+      n = Math.round(parsed * 10) / 10;
+    }
+    setSaving(true); setErr(null);
+    try { await onSave(n); setEditing(false); }
+    catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: 18, boxShadow: "var(--shadow-sm)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--muted-3)" }}>Stop Loss</div>
+        {!disabled && !editing && (
+          <button onClick={() => setEditing(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--brand)", fontWeight: 600, padding: 0 }}>✎ Edit</button>
+        )}
+      </div>
+      {editing ? (
+        <div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>-$</span>
+            <input
+              type="text" inputMode="decimal" value={val} placeholder="none"
+              onChange={(e) => { const v = e.target.value; if (/^\d*\.?\d*$/.test(v)) setVal(v); }}
+              autoFocus
+              style={{ width: 70, fontSize: 16, fontWeight: 700, border: "1px solid var(--border-2)", borderRadius: 6, padding: "4px 6px" }}
+            />
+            <button onClick={save} disabled={saving} className="btn" style={{ height: 28, padding: "0 10px", fontSize: 12, background: "var(--green)", color: "#fff", boxShadow: "none" }}>
+              {saving ? "…" : "Save"}
+            </button>
+            <button onClick={() => { setEditing(false); setErr(null); }} disabled={saving} style={{ height: 28, padding: "0 10px", fontSize: 12, background: "transparent", border: "1px solid var(--border-2)", borderRadius: 6, cursor: "pointer" }}>
+              Cancel
+            </button>
+          </div>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>Blank disables stop-loss</div>
+          {err && <div style={{ color: "var(--red)", fontSize: 11, marginTop: 4 }}>{err}</div>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 26, fontWeight: 700, color: stopLossPnl != null ? "#dc2626" : "var(--muted)", fontFamily: "var(--font-display)", letterSpacing: "-0.01em" }}>
+          {stopLossPnl != null ? `-${fmtCcy(stopLossPnl)}` : "Not set"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LogPanel({ logs }) {
   return (
     <div style={{ marginTop: 20, padding: 14, background: "#111827", borderRadius: 8, fontFamily: "var(--font-mono)", fontSize: 13, color: "#22c55e", maxHeight: 320, overflowY: "auto", lineHeight: 1.7 }}>
@@ -294,12 +356,16 @@ function SingleLegMonitor({ tradeId }) {
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 16, padding: 24, boxShadow: "0 2px 8px rgba(0,0,0,.04)" }}>
       <MonitorHeader subtitle={`${job.opt_instrument}${job.fut_instrument ? ` + ${job.fut_instrument}` : ""}`} status={job.status} />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 16, marginBottom: 20 }}>
         <KpiCard label="Initial Collateral" value={fmtCcy(job.initial_total_usd)} color="var(--brand)" />
         <KpiCard label="Current Equity" value={fmtCcy(job.last_equity_usd)} />
         <TargetPnlCard
           pnl={pnl} targetPnl={job.target_pnl} disabled={isTerminal}
           onSave={async (n) => { await apiPatch(`/api/auto-close?id=${job.id}`, { target_pnl: n }); await load(); }}
+        />
+        <StopLossCard
+          stopLossPnl={job.stop_loss_pnl} disabled={isTerminal}
+          onSave={async (n) => { await apiPatch(`/api/auto-close?id=${job.id}`, { stop_loss_pnl: n }); await load(); }}
         />
         <KpiCard label="Final Equity" value={job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"} />
       </div>
@@ -368,12 +434,16 @@ function ComboMonitor({ groupId }) {
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 16, padding: 24, boxShadow: "0 2px 8px rgba(0,0,0,.04)" }}>
       <MonitorHeader subtitle={`Combo — ${legs.length} legs`} status={job.status} />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 16, marginBottom: 20 }}>
         <KpiCard label="Initial Collateral" value={fmtCcy(job.initial_total_usd)} color="var(--brand)" />
         <KpiCard label="Current Equity" value={fmtCcy(job.last_equity_usd)} />
         <TargetPnlCard
           pnl={pnl} targetPnl={job.target_pnl} disabled={isTerminal}
           onSave={async (n) => { await apiPatch(`/api/auto-close-combo?id=${job.id}`, { target_pnl: n }); await load(); }}
+        />
+        <StopLossCard
+          stopLossPnl={job.stop_loss_pnl} disabled={isTerminal}
+          onSave={async (n) => { await apiPatch(`/api/auto-close-combo?id=${job.id}`, { stop_loss_pnl: n }); await load(); }}
         />
         <KpiCard label="Final Equity" value={job.final_equity_usd != null ? fmtCcy(job.final_equity_usd) : "—"} />
       </div>
@@ -450,6 +520,7 @@ function AllJobsList() {
         <td><StatusPill status={j.status} /></td>
         <td>{fmtCcy(j.initial_total_usd)}</td>
         <td>+{fmtCcy(j.target_pnl)}</td>
+        <td>{j.stop_loss_pnl != null ? `-${fmtCcy(j.stop_loss_pnl)}` : "—"}</td>
         <td>{j.last_equity_usd != null ? fmtCcy(j.last_equity_usd) : "—"}</td>
         <td>{j.created_at ? new Date(j.created_at).toLocaleString("en-IN") : "—"}</td>
       </tr>
@@ -462,10 +533,10 @@ function AllJobsList() {
         <div className="card-header">🟢 Active ({active.length})</div>
         <div className="card-body" style={{ padding: 0 }}>
           <table className="ord-table">
-            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Equity</th><th>Started</th></tr></thead>
+            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Stop Loss</th><th>Equity</th><th>Started</th></tr></thead>
             <tbody>
               {active.length === 0
-                ? <tr><td colSpan={6} className="empty-td">No active monitors — start one from Add Strategy or Combined Simulator.</td></tr>
+                ? <tr><td colSpan={7} className="empty-td">No active monitors — start one from Add Strategy or Combined Simulator.</td></tr>
                 : active.map((j) => <JobRow key={`${j.kind}-${j.id}`} j={j} />)}
             </tbody>
           </table>
@@ -475,10 +546,10 @@ function AllJobsList() {
         <div className="card-header">Recent</div>
         <div className="card-body" style={{ padding: 0 }}>
           <table className="ord-table">
-            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Equity</th><th>Started</th></tr></thead>
+            <thead><tr><th>Strategy</th><th>Status</th><th>Initial</th><th>Target</th><th>Stop Loss</th><th>Equity</th><th>Started</th></tr></thead>
             <tbody>
               {recent.length === 0
-                ? <tr><td colSpan={6} className="empty-td">Nothing yet.</td></tr>
+                ? <tr><td colSpan={7} className="empty-td">Nothing yet.</td></tr>
                 : recent.map((j) => <JobRow key={`${j.kind}-${j.id}`} j={j} />)}
             </tbody>
           </table>

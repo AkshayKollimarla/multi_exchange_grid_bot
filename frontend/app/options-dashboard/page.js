@@ -10,11 +10,21 @@ const PAGE_SIZE = 50;
 // (covers both a genuinely empty value and a small fractional qty like
 // -0.4 that would otherwise round to a confusing "-0" — .toFixed(0) keeps
 // the negative sign on -0, plain rounding + string coercion doesn't).
+// Used for Opt Qty, which is always a whole number in practice.
 function fmtQtyOrDash(v) {
   const n = Number(v);
   if (v === null || v === undefined || v === "" || Number.isNaN(n)) return "—";
   const rounded = Math.round(n);
   return rounded === 0 ? "—" : String(rounded);
+}
+
+// Fut Qty is often genuinely fractional (e.g. -0.4 ETH) — rounding it away
+// like Opt Qty would hide real data, so this only trims trailing zeros
+// (500.0000 -> 500, -0.4000 -> -0.4) and dashes true zero, not rounds to it.
+function fmtFutQtyOrDash(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || Number.isNaN(n) || n === 0) return "—";
+  return n.toFixed(4).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 }
 
 export default function OptionsDashboardPage() {
@@ -258,7 +268,7 @@ function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
         {Number(t.fut_entry_price) ? <div style={{ fontSize: 10, color: "var(--muted)" }}>fut {fmtCcy(t.fut_entry_price)}</div> : null}
       </td>
       <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtQtyOrDash(t.opt_entry_qty)}</td>
-      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtQtyOrDash(t.fut_qty)}</td>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>{fmtFutQtyOrDash(t.fut_qty)}</td>
       <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
         {t.upside_distance || t.down_distance ? (
           <>

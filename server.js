@@ -4582,6 +4582,10 @@ app.post("/api/auto-close", async (req, res) => {
     const initialTotal = parseFloat(body.initial_total_usd);
     const targetPnl = parseFloat(body.target_pnl);
     const targetTotal = initialTotal + targetPnl;
+    // Stop-loss is optional — a positive magnitude the same way target_pnl
+    // is (e.g. 10 stops at initial - $10), NOT a pre-negated number.
+    const stopLossPnl = body.stop_loss_pnl != null && body.stop_loss_pnl !== "" ? Math.abs(parseFloat(body.stop_loss_pnl)) : null;
+    const stopLossTotal = stopLossPnl != null ? initialTotal - stopLossPnl : null;
     const jobId = await db.insertAutoCloseJob({
       trade_id: body.trade_id || null,
       token: body.token,
@@ -4597,6 +4601,8 @@ app.post("/api/auto-close", async (req, res) => {
       target_pnl: targetPnl,
       target_total_usd: targetTotal,
       account_id: body.account_id || null,
+      stop_loss_pnl: stopLossPnl,
+      stop_loss_total_usd: stopLossTotal,
     });
 
     startAutoCloseWorker();
@@ -4607,10 +4613,11 @@ app.post("/api/auto-close", async (req, res) => {
         ``,
         `Initial collateral: $${initialTotal.toFixed(2)}`,
         `Target: +$${targetPnl.toFixed(2)} → closes at $${targetTotal.toFixed(2)}`,
+        ...(stopLossPnl != null ? [`Stop Loss: -$${stopLossPnl.toFixed(2)} → closes at $${stopLossTotal.toFixed(2)}`] : []),
       ].join("\n")
     );
     await db.appendAutoCloseLog(jobId, alert.ok ? "Telegram entry alert sent." : `Telegram entry alert FAILED: ${alert.error}`);
-    res.json({ id: jobId, target_total_usd: targetTotal, telegram_ok: alert.ok });
+    res.json({ id: jobId, target_total_usd: targetTotal, stop_loss_total_usd: stopLossTotal, telegram_ok: alert.ok });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.patch("/api/auto-close", async (req, res) => {
@@ -4618,14 +4625,34 @@ app.patch("/api/auto-close", async (req, res) => {
   try {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "id required" });
-    const newTargetPnl = parseFloat(req.body?.target_pnl);
-    if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
     const job = await db.getAutoCloseJobRaw(id);
     if (!job) return res.status(404).json({ error: "not found" });
     if (job.status !== "active") return res.status(400).json({ error: `Job is ${job.status} — target can only be edited while still active` });
-    const newTargetTotal = parseFloat(job.initial_total_usd) + newTargetPnl;
-    await db.updateAutoCloseJob(id, { target_pnl: newTargetPnl, target_total_usd: newTargetTotal, approach_alert_sent: 0 });
-    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal });
+    const initialTotal = parseFloat(job.initial_total_usd);
+    const patch = { approach_alert_sent: 0 };
+    let newTargetPnl = parseFloat(job.target_pnl), newTargetTotal = parseFloat(job.target_total_usd);
+    let newStopLossPnl = job.stop_loss_pnl != null ? parseFloat(job.stop_loss_pnl) : null;
+    let newStopLossTotal = job.stop_loss_total_usd != null ? parseFloat(job.stop_loss_total_usd) : null;
+    if (req.body?.target_pnl != null) {
+      newTargetPnl = parseFloat(req.body.target_pnl);
+      if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
+      newTargetTotal = initialTotal + newTargetPnl;
+      patch.target_pnl = newTargetPnl; patch.target_total_usd = newTargetTotal;
+    }
+    // stop_loss_pnl: null/"" explicitly clears (disables) the stop-loss —
+    // distinct from the field simply being absent from the request body.
+    if ("stop_loss_pnl" in (req.body || {})) {
+      if (req.body.stop_loss_pnl == null || req.body.stop_loss_pnl === "") {
+        newStopLossPnl = null; newStopLossTotal = null;
+      } else {
+        newStopLossPnl = Math.abs(parseFloat(req.body.stop_loss_pnl));
+        if (!(newStopLossPnl > 0)) return res.status(400).json({ error: "stop_loss_pnl must be a positive number, or null to disable" });
+        newStopLossTotal = initialTotal - newStopLossPnl;
+      }
+      patch.stop_loss_pnl = newStopLossPnl; patch.stop_loss_total_usd = newStopLossTotal;
+    }
+    await db.updateAutoCloseJob(id, patch);
+    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal, stop_loss_pnl: newStopLossPnl, stop_loss_total_usd: newStopLossTotal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete("/api/auto-close", async (req, res) => {
@@ -4676,8 +4703,14 @@ app.post("/api/auto-close-combo", async (req, res) => {
     const initialTotal = parseFloat(body.initial_total_usd);
     const targetPnl = parseFloat(body.target_pnl);
     const targetTotal = initialTotal + targetPnl;
+    const stopLossPnl = body.stop_loss_pnl != null && body.stop_loss_pnl !== "" ? Math.abs(parseFloat(body.stop_loss_pnl)) : null;
+    const stopLossTotal = stopLossPnl != null ? initialTotal - stopLossPnl : null;
     const jobId = await db.insertComboJob(
-      { group_id: body.group_id || null, token: body.token, initial_total_usd: initialTotal, target_pnl: targetPnl, target_total_usd: targetTotal, account_id: body.account_id || null },
+      {
+        group_id: body.group_id || null, token: body.token, initial_total_usd: initialTotal,
+        target_pnl: targetPnl, target_total_usd: targetTotal, account_id: body.account_id || null,
+        stop_loss_pnl: stopLossPnl, stop_loss_total_usd: stopLossTotal,
+      },
       body.legs.map((leg) => ({
         leg_type: leg.leg_type || null,
         opt_instrument: leg.opt_instrument || "", opt_qty: parseFloat(leg.opt_qty) || 0, opt_dir: leg.opt_dir || "sell",
@@ -4700,10 +4733,11 @@ app.post("/api/auto-close-combo", async (req, res) => {
         `${body.legs.length} legs`, ``, ...legSummary, ``,
         `Initial collateral: $${initialTotal.toFixed(2)}`,
         `Target: +$${targetPnl.toFixed(2)} → closes at $${targetTotal.toFixed(2)}`,
+        ...(stopLossPnl != null ? [`Stop Loss: -$${stopLossPnl.toFixed(2)} → closes at $${stopLossTotal.toFixed(2)}`] : []),
       ].join("\n")
     );
     await db.appendComboLog(jobId, alert.ok ? "Telegram entry alert sent." : `Telegram entry alert FAILED: ${alert.error}`);
-    res.json({ id: jobId, target_total_usd: targetTotal, telegram_ok: alert.ok });
+    res.json({ id: jobId, target_total_usd: targetTotal, stop_loss_total_usd: stopLossTotal, telegram_ok: alert.ok });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.patch("/api/auto-close-combo", async (req, res) => {
@@ -4711,14 +4745,32 @@ app.patch("/api/auto-close-combo", async (req, res) => {
   try {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: "id required" });
-    const newTargetPnl = parseFloat(req.body?.target_pnl);
-    if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
     const job = await db.getComboJobRaw(id);
     if (!job) return res.status(404).json({ error: "not found" });
     if (job.status !== "active") return res.status(400).json({ error: `Job is ${job.status} — target can only be edited while still active` });
-    const newTargetTotal = parseFloat(job.initial_total_usd) + newTargetPnl;
-    await db.updateComboJob(id, { target_pnl: newTargetPnl, target_total_usd: newTargetTotal, approach_alert_sent: 0 });
-    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal });
+    const initialTotal = parseFloat(job.initial_total_usd);
+    const patch = { approach_alert_sent: 0 };
+    let newTargetPnl = parseFloat(job.target_pnl), newTargetTotal = parseFloat(job.target_total_usd);
+    let newStopLossPnl = job.stop_loss_pnl != null ? parseFloat(job.stop_loss_pnl) : null;
+    let newStopLossTotal = job.stop_loss_total_usd != null ? parseFloat(job.stop_loss_total_usd) : null;
+    if (req.body?.target_pnl != null) {
+      newTargetPnl = parseFloat(req.body.target_pnl);
+      if (!(newTargetPnl > 0)) return res.status(400).json({ error: "target_pnl must be a number > 0" });
+      newTargetTotal = initialTotal + newTargetPnl;
+      patch.target_pnl = newTargetPnl; patch.target_total_usd = newTargetTotal;
+    }
+    if ("stop_loss_pnl" in (req.body || {})) {
+      if (req.body.stop_loss_pnl == null || req.body.stop_loss_pnl === "") {
+        newStopLossPnl = null; newStopLossTotal = null;
+      } else {
+        newStopLossPnl = Math.abs(parseFloat(req.body.stop_loss_pnl));
+        if (!(newStopLossPnl > 0)) return res.status(400).json({ error: "stop_loss_pnl must be a positive number, or null to disable" });
+        newStopLossTotal = initialTotal - newStopLossPnl;
+      }
+      patch.stop_loss_pnl = newStopLossPnl; patch.stop_loss_total_usd = newStopLossTotal;
+    }
+    await db.updateComboJob(id, patch);
+    res.json({ ok: true, target_pnl: newTargetPnl, target_total_usd: newTargetTotal, stop_loss_pnl: newStopLossPnl, stop_loss_total_usd: newStopLossTotal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete("/api/auto-close-combo", async (req, res) => {
@@ -4814,9 +4866,10 @@ async function autoCloseProcessJob(job) {
       ].join("\n"));
     }
 
-    if (equity >= parseFloat(job.target_total_usd)) {
+    const stopLossHit = job.stop_loss_total_usd != null && equity <= parseFloat(job.stop_loss_total_usd);
+    if (equity >= parseFloat(job.target_total_usd) || stopLossHit) {
       await db.appendAutoCloseLog(job.id,
-        `TARGET HIT — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL +$${pnl.toFixed(2)}`);
+        `${stopLossHit ? "STOP LOSS HIT" : "TARGET HIT"} — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`);
       await db.updateAutoCloseJob(job.id, { status: "closing_option", triggered: true });
       const fresh = await db.getAutoCloseJobRaw(job.id);
       await autoCloseCloseOption(fresh);
@@ -5023,9 +5076,10 @@ async function autoCloseComboProcessJob(job) {
       ].join("\n"));
     }
 
-    if (equity >= parseFloat(job.target_total_usd)) {
+    const stopLossHit = job.stop_loss_total_usd != null && equity <= parseFloat(job.stop_loss_total_usd);
+    if (equity >= parseFloat(job.target_total_usd) || stopLossHit) {
       await db.appendComboLog(job.id,
-        `TARGET HIT — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL +$${pnl.toFixed(2)}`);
+        `${stopLossHit ? "STOP LOSS HIT" : "TARGET HIT"} — ${col.coin_symbol} equity $${col.coin_equity_usd.toFixed(2)} (USDC $${col.usdc_equity.toFixed(2)} not counted) | PnL ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`);
       await db.updateComboJob(job.id, { status: "closing", triggered: true });
     }
     return;

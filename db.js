@@ -230,6 +230,17 @@ async function pingDb() {
     // per-account execution existed (including any already-active job).
     try { await conn.query("ALTER TABLE auto_close_jobs ADD COLUMN account_id INT NULL DEFAULT NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    // Optional stop-loss exit — mirrors target_pnl/target_total_usd exactly,
+    // just triggering a close when equity FALLS to initial - stop_loss_pnl
+    // instead of rising to initial + target_pnl. NULL = disabled (every job
+    // created before this feature existed keeps running target-only).
+    for (const col of [
+      "ADD COLUMN stop_loss_pnl DECIMAL(12,4) NULL",
+      "ADD COLUMN stop_loss_total_usd DECIMAL(14,4) NULL",
+    ]) {
+      try { await conn.query(`ALTER TABLE auto_close_jobs ${col}`); }
+      catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    }
 
     // Auto-close jobs (multi-leg / Combined Simulator) — same design as
     // auto_close_jobs, spanning N option+futures leg pairs sharing one
@@ -262,6 +273,13 @@ async function pingDb() {
     // is one shared equity target across all its legs.
     try { await conn.query("ALTER TABLE auto_close_combo_jobs ADD COLUMN account_id INT NULL DEFAULT NULL"); }
     catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    for (const col of [
+      "ADD COLUMN stop_loss_pnl DECIMAL(12,4) NULL",
+      "ADD COLUMN stop_loss_total_usd DECIMAL(14,4) NULL",
+    ]) {
+      try { await conn.query(`ALTER TABLE auto_close_combo_jobs ${col}`); }
+      catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
+    }
     await conn.query(`
       CREATE TABLE IF NOT EXISTS auto_close_combo_legs (
         id               INT AUTO_INCREMENT PRIMARY KEY,
@@ -997,12 +1015,14 @@ async function insertAutoCloseJob(f) {
     `INSERT INTO auto_close_jobs
        (trade_id, token, opt_instrument, opt_qty, opt_dir, opt_entry_price,
         fut_instrument, fut_qty, fut_dir, fut_entry_price,
-        initial_total_usd, target_pnl, target_total_usd, account_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        initial_total_usd, target_pnl, target_total_usd, account_id,
+        stop_loss_pnl, stop_loss_total_usd)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       f.trade_id || null, f.token, f.opt_instrument, f.opt_qty, f.opt_dir, f.opt_entry_price ?? null,
       f.fut_instrument || "", f.fut_qty || 0, f.fut_dir || "sell", f.fut_entry_price ?? null,
       f.initial_total_usd, f.target_pnl, f.target_total_usd, f.account_id || null,
+      f.stop_loss_pnl ?? null, f.stop_loss_total_usd ?? null,
     ]
   );
   return result.insertId;
@@ -1106,9 +1126,14 @@ async function insertComboJob(f, legs) {
   const p = getPool();
   if (!p) throw new Error("MySQL not configured");
   const [result] = await p.query(
-    `INSERT INTO auto_close_combo_jobs (group_id, token, initial_total_usd, target_pnl, target_total_usd, account_id)
-     VALUES (?,?,?,?,?,?)`,
-    [f.group_id || null, f.token, f.initial_total_usd, f.target_pnl, f.target_total_usd, f.account_id || null]
+    `INSERT INTO auto_close_combo_jobs
+       (group_id, token, initial_total_usd, target_pnl, target_total_usd, account_id,
+        stop_loss_pnl, stop_loss_total_usd)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [
+      f.group_id || null, f.token, f.initial_total_usd, f.target_pnl, f.target_total_usd, f.account_id || null,
+      f.stop_loss_pnl ?? null, f.stop_loss_total_usd ?? null,
+    ]
   );
   const jobId = result.insertId;
   const legRows = legs.map((leg, i) => [

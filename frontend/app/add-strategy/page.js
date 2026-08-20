@@ -4,10 +4,11 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { bsPrice, strikeNumber } from "@/lib/blackScholes";
-import { computeDerived, toInputDate } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate, dayByDayFlatPnl } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
+import DayByDayPnlStrip from "@/components/DayByDayPnlStrip";
 
 const FIELD_KEYS = [
   "entry_date", "token", "option_type", "investment", "status", "end_date",
@@ -239,6 +240,13 @@ function AddStrategyInner() {
     };
   }, [form, iv, derived]);
 
+  // Day-by-day, price held flat at today's level — separate from the
+  // upside/downside distance scenarios in `calc` above.
+  const dayByDayRows = useMemo(
+    () => dayByDayFlatPnl([{ form: { ...form, iv }, optType: (form.option_type || "PUT").toUpperCase() }], Number(derived.total_mm_loss) || 0, calc.dte),
+    [form, iv, derived, calc.dte]
+  );
+
   function buildPayload() {
     const f = {};
     for (const k of FIELD_KEYS) f[k] = form[k] ?? "";
@@ -288,6 +296,7 @@ function AddStrategyInner() {
   const savedTradeIdRef = useRef(null); // the trade this execute run is attached to (new or existing)
 
   const [acTargetPnl, setAcTargetPnl] = useState("");
+  const [acStopLossPnl, setAcStopLossPnl] = useState("");
   const [acJob, setAcJob] = useState(null);
   const [acError, setAcError] = useState(null);
   const [acStarting, setAcStarting] = useState(false);
@@ -464,6 +473,7 @@ function AddStrategyInner() {
         // unrelated account activity) would dilute the real PnL signal.
         initial_total_usd: bal.coin_equity_usd ?? 0,
         target_pnl: tPnl,
+        stop_loss_pnl: parseFloat(acStopLossPnl) > 0 ? parseFloat(acStopLossPnl) : undefined,
         account_id: selectedAcct || undefined,
       });
       clearInterval(acTimerRef.current);
@@ -650,6 +660,10 @@ function AddStrategyInner() {
                   <label>Target PnL ($)</label>
                   <input type="number" step="any" min="0" placeholder="e.g. 5" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} />
                 </div>
+                <div className="field" style={{ margin: 0, width: 130 }}>
+                  <label>Stop Loss ($)</label>
+                  <input type="number" step="any" min="0" placeholder="optional" value={acStopLossPnl} onChange={(e) => setAcStopLossPnl(e.target.value)} />
+                </div>
                 <button
                   className="btn"
                   style={{ background: "#ea580c", color: "#fff" }}
@@ -726,6 +740,8 @@ function AddStrategyInner() {
           </div>
         </div>
 
+        <DayByDayPnlStrip rows={dayByDayRows} />
+
         <div className="card" style={{ marginTop: 18 }}>
           <div className="card-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span>Auto-Close on Profit</span>
@@ -759,6 +775,10 @@ function AddStrategyInner() {
                     <label>Booking PnL Target ($)</label>
                     <input type="number" step="any" min="0" placeholder="e.g. 500" value={acTargetPnl} onChange={(e) => setAcTargetPnl(e.target.value)} />
                   </div>
+                  <div className="field" style={{ margin: 0, width: 160 }}>
+                    <label>Stop Loss ($, optional)</label>
+                    <input type="number" step="any" min="0" placeholder="e.g. 200" value={acStopLossPnl} onChange={(e) => setAcStopLossPnl(e.target.value)} />
+                  </div>
                   <div className="field" style={{ margin: 0 }}>
                     <label>Monitors</label>
                     <div style={{ padding: "11px 14px", borderRadius: "var(--r-sm)", background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: 13, color: "var(--muted)" }}>
@@ -770,6 +790,14 @@ function AddStrategyInner() {
                       <label>Closes When PnL ≥</label>
                       <div style={{ padding: "11px 14px", borderRadius: "var(--r-sm)", background: "var(--green-soft)", border: "1px solid var(--green)", fontSize: 13, fontWeight: 700, color: "var(--green-2)" }}>
                         +${parseFloat(acTargetPnl).toFixed(2)}
+                      </div>
+                    </div>
+                  )}
+                  {parseFloat(acStopLossPnl) > 0 && (
+                    <div className="field" style={{ margin: 0 }}>
+                      <label>Closes When PnL ≤</label>
+                      <div style={{ padding: "11px 14px", borderRadius: "var(--r-sm)", background: "var(--red-soft)", border: "1px solid var(--red)", fontSize: 13, fontWeight: 700, color: "var(--red-2)" }}>
+                        -${parseFloat(acStopLossPnl).toFixed(2)}
                       </div>
                     </div>
                   )}
