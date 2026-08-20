@@ -4,13 +4,12 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { fmtCcy } from "@/lib/format";
-import { computeDerived, toInputDate, legBsTodayPnl, dayByDayFlatPnl } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate, legBsTodayPnl } from "@/lib/optionsDerived";
 import { findInstrument } from "@/lib/deribitLiveChain";
 import { ALPACA_UNDERLYING_SUGGESTIONS } from "@/lib/alpacaLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
 import LegCard, { LegPill, LEG_TYPES } from "@/components/LegCard";
-import DayByDayPnlStrip from "@/components/DayByDayPnlStrip";
 
 // BTC/ETH have both a coin-margined ("inverse") perpetual (BTC-PERPETUAL)
 // and a USDC-margined ("linear") one (BTC_USDC-PERPETUAL); every other
@@ -307,14 +306,6 @@ function CombinedSimulatorInner() {
     const S = parseFloat(l.form.fut_entry_price) || 0, opt = (l.form.option_type || "PUT").toUpperCase();
     return s + legBsTodayPnl(l.form, opt, S - (parseFloat(l.form.down_distance) || 0));
   }, 0) + downside.fut + downside.mm;
-
-  // Day-by-day, price held flat at today's level — pure theta-decay view,
-  // separate from the upside/downside distance scenarios above.
-  const maxDaysToExpiry = Math.max(0, ...deriveds.map((d) => Number(d.days_to_expiry) || 0));
-  const dayByDayRows = useMemo(
-    () => dayByDayFlatPnl(legs.map((l) => ({ form: l.form, optType: (l.form.option_type || "PUT").toUpperCase() })), upside.mm, maxDaysToExpiry),
-    [legs, upside.mm, maxDaysToExpiry]
-  );
 
   const rowsDef = [
     { label: "Upside Opt PnL", key: "upside_opt_pnl", total: upside.opt },
@@ -740,7 +731,6 @@ function CombinedSimulatorInner() {
               <ScenarioBlock title="📈 Upside Scenario" scenario="up" totals={upside} deriveds={deriveds} bsToday={bsUpsideCombined} legs={legs} />
               <ScenarioBlock title="📉 Downside Scenario" scenario="down" totals={downside} deriveds={deriveds} bsToday={bsDownsideCombined} legs={legs} />
             </div>
-            <DayByDayPnlStrip rows={dayByDayRows} />
             <div className="section-title" style={{ marginTop: 14 }}>Side-by-Side Breakdown</div>
             <table className="ord-table">
               <thead>

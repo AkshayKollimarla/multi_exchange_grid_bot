@@ -87,27 +87,6 @@ export function legBsTodayPnl(form, optType, Starget) {
   return legBsPnlOnDay(form, optType, Starget, 0);
 }
 
-// Projects combined PnL day-by-day from today through the furthest leg's
-// expiry, holding each leg's underlying flat at its own current price
-// (form.fut_entry_price) the whole time — futures PnL is inherently $0 in
-// this scenario since price never moves, so only options' theta decay
-// changes the total. Answers "on which day does my PnL turn positive (or
-// negative)" if the market just sits still. legs: [{form, optType}]. mmLoss
-// is a constant (not time- or price-dependent) added to every day.
-export function dayByDayFlatPnl(legs, mmLoss, maxDays) {
-  const days = Math.max(0, Math.round(maxDays || 0));
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const rows = [];
-  for (let day = 0; day <= days; day++) {
-    const pnl = legs.reduce((s, l) => {
-      const S = parseFloat(l.form.fut_entry_price) || 0;
-      return s + legBsPnlOnDay(l.form, l.optType, S, day);
-    }, 0) + (mmLoss || 0);
-    rows.push({ day, date: new Date(today.getTime() + day * 86400000), pnl });
-  }
-  return rows;
-}
-
 export function toInputDate(d) {
   if (!d && d !== 0) return "";
   const dt = typeof d === "number" ? new Date(d) : (() => {

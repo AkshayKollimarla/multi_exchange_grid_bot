@@ -4,11 +4,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { bsPrice, strikeNumber } from "@/lib/blackScholes";
-import { computeDerived, toInputDate, dayByDayFlatPnl } from "@/lib/optionsDerived";
+import { computeDerived, toInputDate } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
-import DayByDayPnlStrip from "@/components/DayByDayPnlStrip";
 
 const FIELD_KEYS = [
   "entry_date", "token", "option_type", "investment", "status", "end_date",
@@ -239,13 +238,6 @@ function AddStrategyInner() {
       netDnExpiry: bsDn != null ? bsDn + futDn : null,
     };
   }, [form, iv, derived]);
-
-  // Day-by-day, price held flat at today's level — separate from the
-  // upside/downside distance scenarios in `calc` above.
-  const dayByDayRows = useMemo(
-    () => dayByDayFlatPnl([{ form: { ...form, iv }, optType: (form.option_type || "PUT").toUpperCase() }], Number(derived.total_mm_loss) || 0, calc.dte),
-    [form, iv, derived, calc.dte]
-  );
 
   function buildPayload() {
     const f = {};
@@ -740,7 +732,6 @@ function AddStrategyInner() {
           </div>
         </div>
 
-        <DayByDayPnlStrip rows={dayByDayRows} />
 
         <div className="card" style={{ marginTop: 18 }}>
           <div className="card-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
