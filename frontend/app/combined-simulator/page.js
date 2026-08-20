@@ -6,6 +6,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { fmtCcy } from "@/lib/format";
 import { computeDerived, toInputDate, legBsTodayPnl } from "@/lib/optionsDerived";
 import { findInstrument } from "@/lib/deribitLiveChain";
+import { ALPACA_UNDERLYINGS } from "@/lib/alpacaLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
 import LegCard, { LegPill, LEG_TYPES } from "@/components/LegCard";
@@ -88,10 +89,21 @@ function CombinedSimulatorInner() {
   const [instruments, setInstruments] = useState([]);
   const [msg, setMsg] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [allAccounts, setAllAccounts] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [selectedAcct, setSelectedAcct] = useState("");
   const [refreshingAll, setRefreshingAll] = useState(false);
   const legCardRefs = useRef({});
+
+  // Phase 1 of the Alpaca cross-exchange strategy: option-chain SOURCE for
+  // every leg in this combo (all legs share one source/underlying, like an
+  // iron condor's legs all trade the same underlying). Deribit's chain is
+  // fetched once for every currency; Alpaca's is fetched per underlying —
+  // see the two effects below.
+  const [legSource, setLegSource] = useState("deribit"); // "deribit" | "alpaca"
+  const [alpacaUnderlying, setAlpacaUnderlying] = useState(ALPACA_UNDERLYINGS[0].value);
+  const [alpacaInstruments, setAlpacaInstruments] = useState([]);
+  const activeInstruments = legSource === "alpaca" ? alpacaInstruments : instruments;
 
   async function refreshAllLegs() {
     setRefreshingAll(true);
@@ -124,13 +136,31 @@ function CombinedSimulatorInner() {
     // entry-alert call below threads selectedAcct through as account_id.
     // Leaving it unselected falls back to the global .env Deribit key
     // (server.js resolveDeribitCreds), matching every group saved before
-    // accounts were wired up.
-    apiGet("/api/accounts").then((list) => {
-      const deribitAccts = (Array.isArray(list) ? list : []).filter((a) => a.exchange === "deribit");
-      setAccounts(deribitAccts);
-      if (deribitAccts.length) setSelectedAcct(String(deribitAccts[0].id));
-    }).catch(() => {});
+    // accounts were wired up. Full list is kept unfiltered so switching
+    // legSource can re-filter to the matching exchange's accounts.
+    apiGet("/api/accounts").then((list) => setAllAccounts(Array.isArray(list) ? list : [])).catch(() => {});
   }, []);
+
+  // Re-filter the account dropdown whenever the leg source changes, and
+  // reset the selection (a Deribit account_id is meaningless once switched
+  // to Alpaca legs, and vice versa).
+  useEffect(() => {
+    const filtered = allAccounts.filter((a) => a.exchange === legSource);
+    setAccounts(filtered);
+    setSelectedAcct(filtered.length ? String(filtered[0].id) : "");
+  }, [allAccounts, legSource]);
+
+  // Alpaca's chain is fetched per underlying (unlike Deribit's single
+  // all-currencies fetch above) — refetch whenever the source/underlying
+  // changes. Phase 1 only reads this for live price/expiry/strike display.
+  useEffect(() => {
+    if (legSource !== "alpaca" || !alpacaUnderlying) return;
+    setAlpacaInstruments([]);
+    const acctQs = selectedAcct ? `&account_id=${encodeURIComponent(selectedAcct)}` : "";
+    apiGet(`/api/alpaca/instruments?underlying=${encodeURIComponent(alpacaUnderlying)}${acctQs}`)
+      .then((list) => setAlpacaInstruments(Array.isArray(list) ? list : []))
+      .catch(() => setAlpacaInstruments([]));
+  }, [legSource, alpacaUnderlying, selectedAcct]);
 
   const loadGroup = useCallback(async (groupId) => {
     setMsg(null);
@@ -545,6 +575,21 @@ function CombinedSimulatorInner() {
 
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-body" style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+            <div className="field" style={{ maxWidth: 160, margin: 0 }}>
+              <label>Option Chain Source</label>
+              <select value={legSource} onChange={(e) => setLegSource(e.target.value)}>
+                <option value="deribit">🟧 Deribit</option>
+                <option value="alpaca">🟡 Alpaca</option>
+              </select>
+            </div>
+            {legSource === "alpaca" && (
+              <div className="field" style={{ maxWidth: 220, margin: 0 }}>
+                <label>Underlying</label>
+                <select value={alpacaUnderlying} onChange={(e) => setAlpacaUnderlying(e.target.value)}>
+                  {ALPACA_UNDERLYINGS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+                </select>
+              </div>
+            )}
             <div className="field" style={{ maxWidth: 260, margin: 0 }}>
               <label>Exchange Account</label>
               <select value={selectedAcct} onChange={(e) => setSelectedAcct(e.target.value)}>
@@ -560,19 +605,27 @@ function CombinedSimulatorInner() {
               <label>Target PnL ($)</label>
               <input type="number" placeholder="e.g. 10" value={comboTargetPnl} onChange={(e) => setComboTargetPnl(e.target.value)} />
             </div>
-            <button className="btn" style={{ background: "var(--brand)", color: "#fff" }} onClick={handleComboExecute} disabled={executing}>
-              ⚡ Execute All Legs
-            </button>
-            <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleComboExecuteAndAutoClose} disabled={executing || comboAcStarting}>
-              {executing ? "Executing…" : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
-            </button>
-            {comboPhase === "running" && (
-              <button className="btn-refresh" onClick={cancelComboExecute} style={{ color: "var(--red)" }}>✕ Cancel</button>
-            )}
-            {editGroupId && (!comboAcJob?.job || ["completed", "failed", "stopped"].includes(comboAcJob.job.status)) && (
-              <button className="btn-refresh" onClick={startMonitorForExisting} disabled={comboAcStarting}>
-                {comboAcStarting ? "Starting…" : "▶ Start Monitor Only (no new orders)"}
-              </button>
+            {legSource === "alpaca" ? (
+              <span style={{ fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>
+                Alpaca execution isn't wired up yet — this is live price/data only for now.
+              </span>
+            ) : (
+              <>
+                <button className="btn" style={{ background: "var(--brand)", color: "#fff" }} onClick={handleComboExecute} disabled={executing}>
+                  ⚡ Execute All Legs
+                </button>
+                <button className="btn" style={{ background: "#7c3aed", color: "#fff" }} onClick={handleComboExecuteAndAutoClose} disabled={executing || comboAcStarting}>
+                  {executing ? "Executing…" : comboAcStarting ? "Starting Monitor…" : `⚡ Execute + Auto-Close (${legs.length} legs)`}
+                </button>
+                {comboPhase === "running" && (
+                  <button className="btn-refresh" onClick={cancelComboExecute} style={{ color: "var(--red)" }}>✕ Cancel</button>
+                )}
+                {editGroupId && (!comboAcJob?.job || ["completed", "failed", "stopped"].includes(comboAcJob.job.status)) && (
+                  <button className="btn-refresh" onClick={startMonitorForExisting} disabled={comboAcStarting}>
+                    {comboAcStarting ? "Starting…" : "▶ Start Monitor Only (no new orders)"}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -581,7 +634,7 @@ function CombinedSimulatorInner() {
           {legs.map((leg, idx) => (
             <LegCard
               key={idx} ref={(el) => { legCardRefs.current[idx] = el; }}
-              leg={leg} idx={idx} instruments={instruments}
+              leg={leg} idx={idx} instruments={activeInstruments} exchange={legSource} accountId={selectedAcct}
               onChangeType={changeLegType} onSetField={setLegField}
               onRemove={removeLeg} canRemove={legs.length > 2}
             />

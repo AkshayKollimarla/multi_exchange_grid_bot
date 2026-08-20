@@ -666,6 +666,7 @@ function parseCreds(raw) {
 function accountIdentifier(exchange, c) {
   if (exchange === "binance") return c.apiKey || "";
   if (exchange === "deribit") return c.clientId || "";
+  if (exchange === "alpaca") return c.apiKey || "";
   return c.walletAddress || "";   // hyperliquid
 }
 
@@ -681,6 +682,8 @@ async function listAccounts() {
       return {
         id: r.id, name: r.name, exchange: r.exchange,
         identifier: accountIdentifier(r.exchange, c) || r.wallet_address || "",
+        // Not secret — just which environment this account trades against.
+        paper: r.exchange === "alpaca" ? c.paper !== false : undefined,
         createdAt: r.created_at,
       };
     });

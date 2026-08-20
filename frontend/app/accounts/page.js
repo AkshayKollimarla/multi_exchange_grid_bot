@@ -7,8 +7,9 @@ const EXCHANGES = [
   { value: "hyperliquid", label: "🟣 Hyperliquid" },
   { value: "binance", label: "🟦 Binance" },
   { value: "deribit", label: "🟧 Deribit" },
+  { value: "alpaca", label: "🟡 Alpaca" },
 ];
-const ICON = { hyperliquid: "🟣", binance: "🟦", deribit: "🟧" };
+const ICON = { hyperliquid: "🟣", binance: "🟦", deribit: "🟧", alpaca: "🟡" };
 
 const CRED_FIELDS = {
   hyperliquid: [
@@ -23,12 +24,17 @@ const CRED_FIELDS = {
     { key: "clientId", label: "Client ID", placeholder: "Client ID", type: "text" },
     { key: "clientSecret", label: "Client Secret", placeholder: "Client secret", type: "password" },
   ],
+  alpaca: [
+    { key: "apiKey", label: "API Key", placeholder: "API key", type: "text" },
+    { key: "secretKey", label: "Secret Key", placeholder: "Secret key", type: "password" },
+  ],
 };
 
 const CRED_NOTE = {
   hyperliquid: "🔐 Use the API wallet private key — it can place orders but cannot withdraw.",
   binance: "🔐 Create an API key with trade permission (not withdrawal).",
   deribit: "🔐 A Deribit API client with trade scope.",
+  alpaca: "🔐 Paper and live keys are separate keypairs in your Alpaca dashboard — double-check which one you're pasting.",
 };
 
 export default function AccountsPage() {
@@ -37,6 +43,7 @@ export default function AccountsPage() {
   const [exchange, setExchange] = useState("hyperliquid");
   const [name, setName] = useState("");
   const [creds, setCreds] = useState({});
+  const [alpacaPaper, setAlpacaPaper] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [testing, setTesting] = useState({});
@@ -58,12 +65,13 @@ export default function AccountsPage() {
       setMsg({ ok: false, text: "All fields are required." });
       return;
     }
+    if (exchange === "alpaca") credentials.paper = alpacaPaper;
     setSaving(true);
     setMsg({ ok: null, text: "Saving…" });
     try {
       await apiPost("/api/accounts", { name: name.trim(), exchange, credentials });
       setMsg({ ok: true, text: "✓ Account saved." });
-      setName(""); setCreds({});
+      setName(""); setCreds({}); setAlpacaPaper(true);
       load();
     } catch (e) {
       setMsg({ ok: false, text: "Failed: " + e.message });
@@ -119,6 +127,15 @@ export default function AccountsPage() {
                   <input type={f.type} placeholder={f.placeholder} value={creds[f.key] || ""} onChange={(e) => setCred(f.key, e.target.value)} autoComplete={f.type === "password" ? "new-password" : "off"} />
                 </div>
               ))}
+              {exchange === "alpaca" && (
+                <div className="field">
+                  <label>Environment</label>
+                  <select value={alpacaPaper ? "paper" : "live"} onChange={(e) => setAlpacaPaper(e.target.value === "paper")}>
+                    <option value="paper">Paper Trading</option>
+                    <option value="live">Live Trading</option>
+                  </select>
+                </div>
+              )}
 
               <div className="btn-row" style={{ gridTemplateColumns: "1fr" }}>
                 <button className="btn btn-start" onClick={handleAdd} disabled={saving}>＋ Add Account</button>
@@ -147,7 +164,14 @@ export default function AccountsPage() {
                     return (
                       <tr key={a.id}>
                         <td><b>{a.name}</b></td>
-                        <td>{ICON[a.exchange] || ""} {a.exchange || "hyperliquid"}</td>
+                        <td>
+                          {ICON[a.exchange] || ""} {a.exchange || "hyperliquid"}
+                          {a.exchange === "alpaca" && (
+                            <span className={`pill ${a.paper ? "pill-blue" : "pill-red"}`} style={{ marginLeft: 6, fontSize: 10 }}>
+                              {a.paper ? "PAPER" : "LIVE"}
+                            </span>
+                          )}
+                        </td>
                         <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{masked}</td>
                         <td>
                           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>

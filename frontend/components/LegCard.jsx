@@ -6,6 +6,7 @@ import { fmtCcy, fmtNum } from "@/lib/format";
 import { strikeNumber } from "@/lib/blackScholes";
 import { computeDerived, legBsTodayPnl } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
+import { ALPACA_UNDERLYINGS, expiriesFor as alpacaExpiriesFor, strikesFor as alpacaStrikesFor, findInstrument as findAlpacaInstrument } from "@/lib/alpacaLiveChain";
 
 export const LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
 const LEG_COLORS = { "CALL LONG": "#10b981", "CALL SHORT": "#f97316", "PUT LONG": "#3b82f6", "PUT SHORT": "#ef4444" };
@@ -88,20 +89,48 @@ export function LegCalc({ derived, form }) {
 // dropdowns (shares the `instruments` chain fetched once at the page level),
 // entry fields, and its own auto-calc panel. Mirrors index.html's
 // odbLegCardHtml + odbLegLive* functions.
-const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeType, onSetField, onRemove, canRemove }, ref) {
+const LegCard = forwardRef(function LegCard({ leg, idx, instruments, exchange = "deribit", accountId, onChangeType, onSetField, onRemove, canRemove }, ref) {
   const { type, form } = leg;
   const color = LEG_COLORS[type];
-  const [manualToken, setManualToken] = useState(form.token && !tokensFor(instruments).includes(form.token) ? form.token : "");
+  const isAlpaca = exchange === "alpaca";
+  const tokens = isAlpaca ? ALPACA_UNDERLYINGS.map((u) => u.value) : tokensFor(instruments);
+  const [manualToken, setManualToken] = useState(form.token && !tokens.includes(form.token) ? form.token : "");
   const [note, setNote] = useState("");
   const fetchSeq = useRef(0);
 
   const isOther = form.token === "__other__";
-  const tokens = tokensFor(instruments);
-  const expiries = form.token && form.token !== "__other__" ? expiriesFor(instruments, form.token) : [];
-  const strikes = form.token && form.expiry && form.token !== "__other__" ? strikesFor(instruments, form.token, form.expiry, form.option_type) : [];
+  const expiries = form.token && form.token !== "__other__"
+    ? (isAlpaca ? alpacaExpiriesFor(instruments) : expiriesFor(instruments, form.token))
+    : [];
+  const strikes = form.token && form.expiry && form.token !== "__other__"
+    ? (isAlpaca ? alpacaStrikesFor(instruments, form.expiry, form.option_type) : strikesFor(instruments, form.token, form.expiry, form.option_type))
+    : [];
+
+  // Alpaca options are always USD-settled (no coin-settlement concept), and
+  // its live quote comes from a separate endpoint/host — same job as the
+  // Deribit branch below (populate entry price + IV note), different source.
+  async function fetchLivePriceAlpaca(expiry, strike) {
+    const inst = findAlpacaInstrument(instruments, expiry, form.option_type, strike);
+    if (!inst) { setNote("Not in the live chain (using saved value)."); return; }
+    const seq = ++fetchSeq.current;
+    onSetField(idx, "opt_entry_price", "");
+    setNote("Fetching live price…");
+    try {
+      const acctQs = accountId ? `&account_id=${encodeURIComponent(accountId)}` : "";
+      const q = await apiGet(`/api/alpaca/quote?symbol=${encodeURIComponent(inst.symbol)}${acctQs}`);
+      if (seq !== fetchSeq.current) return;
+      if (q.mid != null) onSetField(idx, "opt_entry_price", Number(q.mid).toFixed(4));
+      setNote(q.mid != null
+        ? `${inst.symbol} · bid $${Number(q.bid).toFixed(2)} · ask $${Number(q.ask).toFixed(2)} · mid $${Number(q.mid).toFixed(4)}`
+        : `${inst.symbol} · no live quote yet (using saved value)`);
+    } catch (e) {
+      if (seq === fetchSeq.current) setNote("Live fetch failed: " + e.message);
+    }
+  }
 
   async function fetchLivePrice(token, expiry, strike) {
     if (!token || token === "__other__" || !expiry || !strike) return;
+    if (isAlpaca) return fetchLivePriceAlpaca(expiry, strike);
     const inst = findInstrument(instruments, token, expiry, form.option_type, strike);
     if (!inst) { setNote("Not in the live chain (using saved value)."); return; }
     const seq = ++fetchSeq.current;
@@ -179,7 +208,9 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, onChangeTyp
             <>
               <select value={form.token || ""} onChange={(e) => handleTokenChange(e.target.value)}>
                 <option value="">— select —</option>
-                {tokens.map((t) => <option key={t} value={t}>{t}</option>)}
+                {isAlpaca
+                  ? ALPACA_UNDERLYINGS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)
+                  : tokens.map((t) => <option key={t} value={t}>{t}</option>)}
                 {manualToken && !tokens.includes(manualToken) && <option value={manualToken}>{manualToken} (saved, not live)</option>}
                 <option value="__other__">✎ Other / Manual…</option>
               </select>

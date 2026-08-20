@@ -4009,6 +4009,93 @@ app.get("/api/deribit/position", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+//  ALPACA — options data (Phase 1: read-only chain + quotes for the
+//  cross-exchange Combined Simulator leg type; no order placement yet).
+//  Auth is static API-key headers (no OAuth token exchange like Deribit),
+//  so there's no token cache — just resolve credentials per call.
+//  Trading endpoints live on paper-api.alpaca.markets / api.alpaca.markets
+//  depending on the account's `paper` flag; market DATA endpoints always
+//  live on data.alpaca.markets regardless of paper/live.
+// ══════════════════════════════════════════════════════════════
+function alpacaHost(paper) {
+  return paper ? "paper-api.alpaca.markets" : "api.alpaca.markets";
+}
+async function resolveAlpacaCreds(accountId) {
+  if (accountId == null) {
+    return {
+      apiKey: process.env.ALPACA_API_KEY, secretKey: process.env.ALPACA_SECRET_KEY,
+      paper: String(process.env.ALPACA_PAPER || "true").toLowerCase() === "true",
+    };
+  }
+  const acc = await db.getAccount(parseInt(accountId, 10));
+  if (!acc) throw new Error(`Alpaca account ${accountId} not found`);
+  if (acc.exchange !== "alpaca") throw new Error(`Account ${accountId} (${acc.name}) is not an Alpaca account`);
+  const c = acc.credentials || {};
+  if (!c.apiKey || !c.secretKey) throw new Error(`Account ${accountId} (${acc.name}) has no Alpaca credentials saved`);
+  return { apiKey: c.apiKey, secretKey: c.secretKey, paper: c.paper !== false };
+}
+async function alpacaTrading(method, path, accountId, body) {
+  const { apiKey, secretKey, paper } = await resolveAlpacaCreds(accountId);
+  if (!apiKey || !secretKey) throw new Error("ALPACA_API_KEY / ALPACA_SECRET_KEY missing in .env");
+  const r = await Promise.race([
+    fetch(`https://${alpacaHost(paper)}${path}`, {
+      method,
+      headers: { "APCA-API-KEY-ID": apiKey, "APCA-API-SECRET-KEY": secretKey, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("Alpaca trading call timeout 12s")), 12000)),
+  ]);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.message || `Alpaca error ${r.status}`);
+  return j;
+}
+async function alpacaMarketData(path, accountId) {
+  const { apiKey, secretKey } = await resolveAlpacaCreds(accountId);
+  if (!apiKey || !secretKey) throw new Error("ALPACA_API_KEY / ALPACA_SECRET_KEY missing in .env");
+  const r = await Promise.race([
+    fetch(`https://data.alpaca.markets${path}`, { headers: { "APCA-API-KEY-ID": apiKey, "APCA-API-SECRET-KEY": secretKey } }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("Alpaca market data call timeout 12s")), 12000)),
+  ]);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.message || `Alpaca data error ${r.status}`);
+  return j;
+}
+// Full option chain for one underlying — pages through Alpaca's
+// next_page_token since a chain can span many expiries/strikes, same
+// reason deribitMergedOptionChain fetches everything up front rather than
+// per-expiry (the frontend's tokensFor/expiriesFor/strikesFor helpers
+// filter client-side, mirroring the Deribit live-chain pattern).
+async function alpacaOptionChain(underlying, accountId) {
+  const all = [];
+  let pageToken = null;
+  do {
+    const qs = new URLSearchParams({ underlying_symbols: underlying, status: "active", limit: "1000" });
+    if (pageToken) qs.set("page_token", pageToken);
+    const j = await alpacaTrading("GET", `/v2/options/contracts?${qs.toString()}`, accountId);
+    all.push(...(j.option_contracts || []));
+    pageToken = j.next_page_token || null;
+  } while (pageToken);
+  return all;
+}
+app.get("/api/alpaca/instruments", async (req, res) => {
+  const underlying = req.query.underlying;
+  if (!underlying) return res.status(400).json({ error: "underlying required" });
+  try { res.json(await alpacaOptionChain(underlying.toUpperCase(), req.query.account_id)); }
+  catch (e) { res.status(502).json({ error: e.message }); }
+});
+app.get("/api/alpaca/quote", async (req, res) => {
+  const symbol = req.query.symbol;
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const j = await alpacaMarketData(`/v1beta1/options/quotes/latest?symbols=${encodeURIComponent(symbol)}`, req.query.account_id);
+    const q = j.quotes?.[symbol] || null;
+    if (!q) return res.json({ symbol, bid: null, ask: null, mid: null });
+    const bid = q.bp ?? null, ask = q.ap ?? null;
+    res.json({ symbol, bid, ask, mid: (bid != null && ask != null) ? (bid + ask) / 2 : null, raw: q });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 //  DERIBIT LIVE EXECUTION — Options Multi-Agent DB "Save & Execute"
 //  Places REAL post-only limit orders on Deribit. Defaults to the global
 //  DERIBIT_CLIENT_ID/DERIBIT_CLIENT_SECRET the grid bot already uses, but
