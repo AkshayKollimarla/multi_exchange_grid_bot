@@ -163,27 +163,27 @@ export default function OptionsDashboardPage() {
         </div>
 
         <div className="card">
-          <div className="card-body" style={{ padding: 0 }}>
+          <div className="card-body" style={{ padding: 0, overflowX: "auto" }}>
             <table className="ord-table">
               <thead>
                 <tr>
                   <th>#</th><th>Date</th><th>Token</th><th>Account</th><th>Type</th><th>Strike</th><th>Premium</th>
                   <th>Opt Qty</th><th>Fut Qty</th><th>Fut Price</th><th>Distance</th><th>Expiry</th>
-                  <th>Days</th><th>Status</th><th>Investment</th><th>MM PL</th><th>Booked PnL</th><th>APY</th><th>Actions</th>
+                  <th>Days</th><th>Status</th><th>MM PL</th><th>Booked PnL</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={19} className="empty-td">Loading…</td></tr>}
-                {!loading && error && <tr><td colSpan={19} className="empty-td">Error: {error}</td></tr>}
+                {loading && <tr><td colSpan={17} className="empty-td">Loading…</td></tr>}
+                {!loading && error && <tr><td colSpan={17} className="empty-td">Error: {error}</td></tr>}
                 {!loading && !error && rows.length === 0 && (
-                  <tr><td colSpan={19} className="empty-td">
+                  <tr><td colSpan={17} className="empty-td">
                     No strategies found. <a href="/add-strategy">Add one.</a>
                   </td></tr>
                 )}
                 {!loading && !error && rows.map((r, i) =>
                   r.kind === "group-banner" ? (
                     <tr key={`g-${r.groupId}`} style={{ background: "var(--purple-soft)" }}>
-                      <td colSpan={19} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
+                      <td colSpan={17} style={{ padding: "10px 16px", borderLeft: "4px solid var(--purple)" }}>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--purple)", color: "#fff", padding: "4px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, letterSpacing: ".02em" }}>
                           🔗 COMBINED STRATEGY
                         </span>
@@ -257,10 +257,8 @@ function TradeRow({ t, combined, groupId, onDelete, acctMap }) {
       <td style={{ whiteSpace: "nowrap" }}>{fmtDate(t.expiry)}</td>
       <td>{t.days_to_expiry ?? "—"}</td>
       <td><span className={`pill ${t.status === "open" ? "pill-green" : "pill-grey"}`}>{t.status}</span></td>
-      <td style={{ fontWeight: 500, color: "var(--ink)" }}>{fmtCcy(t.investment)}</td>
       <td style={{ color: Number(t.market_making_pl) >= 0 ? "#16a34a" : "#dc2626", fontWeight: 600 }}>{fmtCcy(t.market_making_pl)}</td>
       <td style={{ color: pnlColor, fontWeight: 600 }}>{t.net_booked_pnl != null ? fmtCcy(t.net_booked_pnl) : "—"}</td>
-      <td style={{ color: "var(--purple)", fontWeight: 600 }}>{t.apy != null ? Number(t.apy).toFixed(2) + "%" : "—"}</td>
       <td style={{ whiteSpace: "nowrap" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {combined
