@@ -6,7 +6,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { fmtCcy } from "@/lib/format";
 import { computeDerived, toInputDate, legBsTodayPnl } from "@/lib/optionsDerived";
 import { findInstrument } from "@/lib/deribitLiveChain";
-import { ALPACA_UNDERLYINGS } from "@/lib/alpacaLiveChain";
+import { ALPACA_UNDERLYING_SUGGESTIONS } from "@/lib/alpacaLiveChain";
 import { runOptionEntry, runFuturesEntry } from "@/lib/makerChase";
 import { getCollateral } from "@/lib/deribitOrder";
 import LegCard, { LegPill, LEG_TYPES } from "@/components/LegCard";
@@ -101,9 +101,22 @@ function CombinedSimulatorInner() {
   // fetched once for every currency; Alpaca's is fetched per underlying —
   // see the two effects below.
   const [legSource, setLegSource] = useState("deribit"); // "deribit" | "alpaca"
-  const [alpacaUnderlying, setAlpacaUnderlying] = useState(ALPACA_UNDERLYINGS[0].value);
+  const [alpacaUnderlying, setAlpacaUnderlying] = useState(ALPACA_UNDERLYING_SUGGESTIONS[0].value);
+  // Free-text ticker input, debounced into alpacaUnderlying (the effects
+  // below refetch on every alpacaUnderlying change) — without the debounce,
+  // typing "HOOD" would fire 4 separate chain fetches, one per keystroke.
+  const [underlyingInput, setUnderlyingInput] = useState(alpacaUnderlying);
   const [alpacaInstruments, setAlpacaInstruments] = useState([]);
   const activeInstruments = legSource === "alpaca" ? alpacaInstruments : instruments;
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const v = underlyingInput.trim().toUpperCase();
+      if (v && v !== alpacaUnderlying) setAlpacaUnderlying(v);
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [underlyingInput]);
 
   async function refreshAllLegs() {
     setRefreshingAll(true);
@@ -157,10 +170,20 @@ function CombinedSimulatorInner() {
     if (legSource !== "alpaca" || !alpacaUnderlying) return;
     setAlpacaInstruments([]);
     const acctQs = selectedAcct ? `&account_id=${encodeURIComponent(selectedAcct)}` : "";
-    apiGet(`/api/alpaca/instruments?underlying=${encodeURIComponent(alpacaUnderlying)}${acctQs}`)
+    apiGet(`/api/alpaca/instruments?underlying=${encodeURIComponent(alpacaUnderlying.toUpperCase())}${acctQs}`)
       .then((list) => setAlpacaInstruments(Array.isArray(list) ? list : []))
       .catch(() => setAlpacaInstruments([]));
   }, [legSource, alpacaUnderlying, selectedAcct]);
+
+  // Alpaca legs don't get a per-leg Token picker (LegCard hides it) — every
+  // leg shares this one underlying, so push it into every leg's form.token
+  // here instead. Clears expiry/strike since they belonged to whatever the
+  // old underlying was.
+  useEffect(() => {
+    if (legSource !== "alpaca") return;
+    const u = alpacaUnderlying.toUpperCase();
+    setLegs((ls) => ls.map((l) => (l.form.token === u ? l : { ...l, form: { ...l.form, token: u, expiry: "", options_strike: "" } })));
+  }, [legSource, alpacaUnderlying]);
 
   const loadGroup = useCallback(async (groupId) => {
     setMsg(null);
@@ -212,8 +235,31 @@ function CombinedSimulatorInner() {
       return { type, form: { ...l.form, option_type: type.startsWith("CALL") ? "CALL" : "PUT", opt_entry_qty } };
     }));
   }
+  // Fields that are almost always identical across every leg of one combo
+  // (same underlying, expiry, entry date, and usually quantity — only
+  // strike/direction differ leg to leg) — editing Leg 1 pushes the value to
+  // every other leg too, so a 4-leg iron condor doesn't need re-typing the
+  // same thing 4 times. Each leg still keeps its own long/short sign for
+  // qty (mirrors changeLegType's own sign handling above). Deribit's Token
+  // is included here since each leg still picks its own there; Alpaca's
+  // equivalent is the page-level Underlying field (synced separately).
+  const SYNCED_FIELDS = ["token", "entry_date", "expiry", "opt_entry_qty"];
   function setLegField(idx, key, value) {
-    setLegs((ls) => ls.map((l, i) => (i === idx ? { ...l, form: { ...l.form, [key]: value } } : l)));
+    setLegs((ls) => {
+      const next = ls.map((l, i) => (i === idx ? { ...l, form: { ...l.form, [key]: value } } : l));
+      if (idx !== 0 || !SYNCED_FIELDS.includes(key)) return next;
+      return next.map((l, i) => {
+        if (i === 0) return l;
+        if (key === "opt_entry_qty") {
+          const isShort = l.type.endsWith("SHORT");
+          const mag = value !== "" && !isNaN(Number(value)) ? Math.abs(Number(value)) : "";
+          return { ...l, form: { ...l.form, opt_entry_qty: mag === "" ? value : String(isShort ? -mag : mag) } };
+        }
+        if (key === "token") return { ...l, form: { ...l.form, token: value, expiry: "", options_strike: "" } };
+        if (key === "expiry") return { ...l, form: { ...l.form, expiry: value, options_strike: "" } };
+        return { ...l, form: { ...l.form, [key]: value } }; // entry_date
+      });
+    });
   }
 
   const deriveds = useMemo(() => legs.map((l) => computeDerived(l.form)), [legs]);
@@ -583,11 +629,17 @@ function CombinedSimulatorInner() {
               </select>
             </div>
             {legSource === "alpaca" && (
-              <div className="field" style={{ maxWidth: 220, margin: 0 }}>
-                <label>Underlying</label>
-                <select value={alpacaUnderlying} onChange={(e) => setAlpacaUnderlying(e.target.value)}>
-                  {ALPACA_UNDERLYINGS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-                </select>
+              <div className="field" style={{ maxWidth: 200, margin: 0 }}>
+                <label>Underlying (any ticker)</label>
+                <input
+                  type="text" list="alpaca-underlying-suggestions"
+                  value={underlyingInput}
+                  onChange={(e) => setUnderlyingInput(e.target.value.toUpperCase())}
+                  placeholder="e.g. HOOD, PLTR, QQQ"
+                />
+                <datalist id="alpaca-underlying-suggestions">
+                  {ALPACA_UNDERLYING_SUGGESTIONS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+                </datalist>
               </div>
             )}
             <div className="field" style={{ maxWidth: 260, margin: 0 }}>

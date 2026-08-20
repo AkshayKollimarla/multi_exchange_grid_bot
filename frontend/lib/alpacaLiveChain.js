@@ -4,16 +4,23 @@ import { toInputDate } from "./optionsDerived";
 // fields and fetch model. Deribit's chain is fetched once for ALL currencies
 // and filtered client-side by base_currency; Alpaca's isn't — the chain is
 // fetched PER underlying (/api/alpaca/instruments?underlying=BITO), so
-// there's no tokensFor() here — the underlying list is this curated,
-// crypto-proxy-ETF set instead, and the page fetches a fresh `instruments`
-// array whenever the selected underlying changes.
+// there's no tokensFor() here — the underlying is free-text (any
+// Alpaca-tradable ticker, not just crypto-proxy ETFs), and the page fetches
+// a fresh `instruments` array whenever it changes.
 
-// Curated proxy-ETF list — Alpaca has no crypto options, so a crypto-hedged
-// options leg has to go through an ETF that tracks the same underlying.
-export const ALPACA_UNDERLYINGS = [
+// Quick-pick suggestions only (rendered as a <datalist>, not a fixed
+// dropdown) — the underlying field accepts ANY ticker Alpaca lists options
+// for. Crypto-proxy ETFs first since that's this app's main use case
+// (Alpaca has no options on crypto directly), then a few common stocks.
+export const ALPACA_UNDERLYING_SUGGESTIONS = [
   { value: "BITO", label: "BITO — ProShares Bitcoin Strategy ETF (BTC proxy)" },
   { value: "IBIT", label: "IBIT — iShares Bitcoin Trust (BTC proxy)" },
   { value: "ETHA", label: "ETHA — iShares Ethereum Trust (ETH proxy)" },
+  { value: "QQQ", label: "QQQ — Invesco Nasdaq-100 ETF" },
+  { value: "SPY", label: "SPY — SPDR S&P 500 ETF" },
+  { value: "HOOD", label: "HOOD — Robinhood Markets" },
+  { value: "BE", label: "BE — Bloom Energy" },
+  { value: "PLTR", label: "PLTR — Palantir Technologies" },
 ];
 
 export function expiriesFor(instruments) {

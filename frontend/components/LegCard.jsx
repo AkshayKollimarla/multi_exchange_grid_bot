@@ -6,7 +6,7 @@ import { fmtCcy, fmtNum } from "@/lib/format";
 import { strikeNumber } from "@/lib/blackScholes";
 import { computeDerived, legBsTodayPnl } from "@/lib/optionsDerived";
 import { tokensFor, expiriesFor, strikesFor, findInstrument } from "@/lib/deribitLiveChain";
-import { ALPACA_UNDERLYINGS, expiriesFor as alpacaExpiriesFor, strikesFor as alpacaStrikesFor, findInstrument as findAlpacaInstrument } from "@/lib/alpacaLiveChain";
+import { expiriesFor as alpacaExpiriesFor, strikesFor as alpacaStrikesFor, findInstrument as findAlpacaInstrument } from "@/lib/alpacaLiveChain";
 
 export const LEG_TYPES = ["CALL LONG", "CALL SHORT", "PUT LONG", "PUT SHORT"];
 const LEG_COLORS = { "CALL LONG": "#10b981", "CALL SHORT": "#f97316", "PUT LONG": "#3b82f6", "PUT SHORT": "#ef4444" };
@@ -93,7 +93,11 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, exchange = 
   const { type, form } = leg;
   const color = LEG_COLORS[type];
   const isAlpaca = exchange === "alpaca";
-  const tokens = isAlpaca ? ALPACA_UNDERLYINGS.map((u) => u.value) : tokensFor(instruments);
+  // In Alpaca mode the underlying is picked ONCE at the page level (all legs
+  // of a spread share it) and synced into every leg's form.token — no
+  // per-leg Token selector needed, unlike Deribit where each leg picks its
+  // own currency from the shared instruments chain.
+  const tokens = isAlpaca ? [] : tokensFor(instruments);
   const [manualToken, setManualToken] = useState(form.token && !tokens.includes(form.token) ? form.token : "");
   const [note, setNote] = useState("");
   const fetchSeq = useRef(0);
@@ -204,21 +208,21 @@ const LegCard = forwardRef(function LegCard({ leg, idx, instruments, exchange = 
       <div className="card-body">
         <div className="row-2">
           {field("Entry Date", numInput("entry_date", "date"))}
-          {field("Token *", (
-            <>
-              <select value={form.token || ""} onChange={(e) => handleTokenChange(e.target.value)}>
-                <option value="">— select —</option>
-                {isAlpaca
-                  ? ALPACA_UNDERLYINGS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)
-                  : tokens.map((t) => <option key={t} value={t}>{t}</option>)}
-                {manualToken && !tokens.includes(manualToken) && <option value={manualToken}>{manualToken} (saved, not live)</option>}
-                <option value="__other__">✎ Other / Manual…</option>
-              </select>
-              {isOther && (
-                <input type="text" placeholder="e.g. HOOD" value={manualToken} onChange={(e) => { setManualToken(e.target.value); onSetField(idx, "token", e.target.value); }} style={{ marginTop: 6 }} />
-              )}
-            </>
-          ))}
+          {isAlpaca
+            ? field("Underlying", <input type="text" value={form.token || "— pick above —"} disabled style={{ color: "var(--muted)" }} />)
+            : field("Token *", (
+              <>
+                <select value={form.token || ""} onChange={(e) => handleTokenChange(e.target.value)}>
+                  <option value="">— select —</option>
+                  {tokens.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {manualToken && !tokens.includes(manualToken) && <option value={manualToken}>{manualToken} (saved, not live)</option>}
+                  <option value="__other__">✎ Other / Manual…</option>
+                </select>
+                {isOther && (
+                  <input type="text" placeholder="e.g. HOOD" value={manualToken} onChange={(e) => { setManualToken(e.target.value); onSetField(idx, "token", e.target.value); }} style={{ marginTop: 6 }} />
+                )}
+              </>
+            ))}
         </div>
         <div className="row-2">
           {field("Investment", numInput("investment"))}
