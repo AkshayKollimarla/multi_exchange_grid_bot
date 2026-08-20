@@ -5238,6 +5238,10 @@ app.post("/api/accounts", async (req, res) => {
     const clientId = s(inCreds.clientId), clientSecret = s(inCreds.clientSecret);
     if (!clientId || !clientSecret) return res.status(400).json({ error: "clientId and clientSecret are required" });
     credentials = { clientId, clientSecret };
+  } else if (exchange === "alpaca") {
+    const apiKey = s(inCreds.apiKey), secretKey = s(inCreds.secretKey);
+    if (!apiKey || !secretKey) return res.status(400).json({ error: "apiKey and secretKey are required" });
+    credentials = { apiKey, secretKey, paper: inCreds.paper !== false };
   } else {
     return res.status(400).json({ error: "Unknown exchange" });
   }
