@@ -4430,6 +4430,57 @@ app.post("/api/options-db/trades/:id/execute", async (req, res) => {
   }
 });
 
+// Resolves one options_trades row into the auto-close job/leg shape
+// ({opt_instrument, opt_qty, opt_dir, ...}) needed to actually close it —
+// same chain-matching as :id/execute above (option leg) and
+// deribitFindPerpetual (futures leg), but places no orders. opt_dir/fut_dir
+// are the CLOSING direction: a positive entry qty (long) closes by selling,
+// a negative qty (short) closes by buying — the same convention every
+// auto-close job/worker function already uses. Used by the Options Exit
+// page to preview live positions and to build a close job on confirm.
+async function resolveTradeForClose(trade) {
+  const token = String(trade.token || "").split(/[-_]/)[0].toUpperCase();
+  const optionType = String(trade.option_type || "PUT").toLowerCase();
+  const strike = db.optStrikeNumber(trade.options_strike);
+  const expiryDateStr = trade.expiry ? new Date(trade.expiry).toISOString().slice(0, 10) : null;
+  const optQty = Number(trade.opt_entry_qty) || 0;
+
+  if (!token || !expiryDateStr || !strike || !optQty) {
+    throw new Error(`Trade #${trade.id}: missing token/expiry/strike/qty — can't resolve a live instrument.`);
+  }
+
+  const chain = await deribitMergedOptionChain();
+  const inst = chain.find((i) =>
+    i.base_currency === token &&
+    new Date(i.expiration_timestamp).toISOString().slice(0, 10) === expiryDateStr &&
+    i.option_type === optionType &&
+    String(i.strike) === String(strike));
+  if (!inst) {
+    throw new Error(`No live Deribit instrument matches ${token} ${expiryDateStr} ${optionType.toUpperCase()} ${strike} — it may have expired or isn't currently listed.`);
+  }
+
+  const leg = {
+    leg_type: `${optionType.toUpperCase()} ${optQty > 0 ? "LONG" : "SHORT"}`,
+    opt_instrument: inst.instrument_name,
+    opt_qty: optQty,
+    opt_dir: optQty > 0 ? "sell" : "buy",
+    opt_entry_price: Number(trade.opt_entry_price) || null,
+    fut_instrument: "", fut_qty: 0, fut_dir: "sell", fut_entry_price: null,
+  };
+
+  const futQty = Number(trade.fut_qty) || 0;
+  if (futQty !== 0) {
+    const perp = await deribitFindPerpetual(token, inst.settlement);
+    if (!perp) throw new Error(`No perpetual futures instrument found for ${token} to close the hedge on trade #${trade.id}.`);
+    leg.fut_instrument = perp.instrument_name;
+    leg.fut_qty = futQty;
+    leg.fut_dir = futQty > 0 ? "sell" : "buy";
+    leg.fut_entry_price = Number(trade.fut_entry_price) || null;
+  }
+
+  return leg;
+}
+
 // ── Order placement primitive — the maker-chase engine's building block.
 // The frontend (Add Strategy / Combined Simulator) calls this once per
 // order: place at mid (chase loop re-calls this on every re-quote), poll
@@ -4787,6 +4838,123 @@ app.delete("/api/auto-close-combo", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
+//  OPTIONS EXIT — "close this strategy now" for a strategy that may not
+//  have any auto-close job running yet. Deliberately does NOT add any new
+//  close logic: it either fast-forwards an existing job straight past its
+//  "active" (target-waiting) phase, or creates one already in the closing
+//  state — either way the existing 5s worker below picks it up on its very
+//  next tick and runs the exact same maker-chase option close + market
+//  futures close it already uses for target/stop-loss triggers.
+// ══════════════════════════════════════════════════════════════
+app.get("/api/options-exit/resolve", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const { trade_id, group_id } = req.query;
+    if (!trade_id && !group_id) return res.status(400).json({ error: "trade_id or group_id required" });
+
+    let trades;
+    if (group_id) {
+      const result = await db.listOptionsTrades({ groupId: group_id });
+      trades = result?.trades || [];
+      if (!trades.length) return res.status(404).json({ error: "Not found." });
+      const accountIds = new Set(trades.map((t) => t.account_id ?? null));
+      if (accountIds.size > 1) {
+        return res.status(400).json({ error: "Legs in this combo use different accounts — a combined close only supports one account." });
+      }
+    } else {
+      const trade = await db.getOptionsTrade(parseInt(trade_id, 10));
+      if (!trade) return res.status(404).json({ error: "Not found." });
+      trades = [trade];
+    }
+
+    // Resolve each leg independently — one expired/delisted leg shouldn't
+    // hide the live PnL of the others, so failures surface per-leg instead
+    // of failing the whole preview.
+    const legs = await Promise.all(trades.map(async (t) => {
+      try { return await resolveTradeForClose(t); }
+      catch (e) { return { leg_type: `${t.option_type || "?"} (trade #${t.id})`, error: e.message }; }
+    }));
+
+    res.json({ token: trades[0].token, account_id: trades[0].account_id ?? null, legs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/options-exit", async (req, res) => {
+  if (!db.dbConfigured()) return res.status(503).json({ error: "MySQL not configured" });
+  try {
+    const { trade_id, group_id } = req.body || {};
+    if (!trade_id && !group_id) return res.status(400).json({ error: "trade_id or group_id required" });
+
+    if (group_id) {
+      // Already exiting (or waiting on a target that we're about to
+      // short-circuit) — never spin up a second job for the same combo.
+      const existing = await db.findActiveComboJob(group_id);
+      if (existing) {
+        if (existing.status === "active") await db.updateComboJob(existing.id, { status: "closing", triggered: true });
+        return res.json({ id: existing.id, isCombo: true });
+      }
+
+      const result = await db.listOptionsTrades({ groupId: group_id });
+      const trades = (result?.trades || []).filter((t) => t.status !== "closed");
+      if (!trades.length) return res.status(404).json({ error: "Not found or already closed." });
+      const accountIds = new Set(trades.map((t) => t.account_id ?? null));
+      if (accountIds.size > 1) {
+        return res.status(400).json({ error: "Legs in this combo use different accounts — a combined close only supports one account." });
+      }
+
+      const legs = await Promise.all(trades.map((t) => resolveTradeForClose(t)));
+      const token = trades[0].token, accountId = trades[0].account_id ?? null;
+      // Track/finish against the coin wallet only — same convention the
+      // worker itself uses (autoCloseComboProcessJob reads coin_equity_usd,
+      // never total_usd), so the completion alert's Net PnL stays consistent
+      // with every other close path.
+      const initialTotal = (await deribitCollateral(token, accountId)).coin_equity_usd;
+
+      const jobId = await db.insertComboJob(
+        { group_id, token, initial_total_usd: initialTotal, target_pnl: 0, target_total_usd: initialTotal, account_id: accountId },
+        legs
+      );
+      await db.updateComboJob(jobId, { status: "closing", triggered: true });
+      startAutoCloseComboWorker();
+      const alert = await sendTelegramAlert([
+        `🚪 <b>Manual Exit Triggered</b> — Combo Job #${jobId}`, `${legs.length} legs`, ``,
+        ...legs.map((l, i) => `Leg ${i + 1} (${l.leg_type || "?"}): ${l.opt_instrument || "—"}${l.fut_instrument ? ` + ${l.fut_instrument}` : ""}`),
+        ``, `Closing all legs now via maker chase.`,
+      ].join("\n"));
+      await db.appendComboLog(jobId, alert.ok ? "Telegram exit alert sent." : `Telegram exit alert FAILED: ${alert.error}`);
+      return res.json({ id: jobId, isCombo: true });
+    }
+
+    const existing = await db.findActiveAutoCloseJob(trade_id);
+    if (existing) {
+      if (existing.status === "active") await db.updateAutoCloseJob(existing.id, { status: "closing_option", triggered: true });
+      return res.json({ id: existing.id, isCombo: false });
+    }
+
+    const trade = await db.getOptionsTrade(parseInt(trade_id, 10));
+    if (!trade || trade.status === "closed") return res.status(404).json({ error: "Not found or already closed." });
+    const leg = await resolveTradeForClose(trade);
+    const initialTotal = (await deribitCollateral(trade.token, trade.account_id)).coin_equity_usd;
+
+    const jobId = await db.insertAutoCloseJob({
+      trade_id: trade.id, token: trade.token,
+      opt_instrument: leg.opt_instrument, opt_qty: leg.opt_qty, opt_dir: leg.opt_dir, opt_entry_price: leg.opt_entry_price,
+      fut_instrument: leg.fut_instrument, fut_qty: leg.fut_qty, fut_dir: leg.fut_dir, fut_entry_price: leg.fut_entry_price,
+      initial_total_usd: initialTotal, target_pnl: 0, target_total_usd: initialTotal, account_id: trade.account_id,
+    });
+    await db.updateAutoCloseJob(jobId, { status: "closing_option", triggered: true });
+    startAutoCloseWorker();
+    const alert = await sendTelegramAlert([
+      `🚪 <b>Manual Exit Triggered</b> — Job #${jobId}`,
+      `${leg.opt_instrument}${leg.fut_instrument ? ` + ${leg.fut_instrument}` : ""}`, ``,
+      `Closing now via maker chase.`,
+    ].join("\n"));
+    await db.appendAutoCloseLog(jobId, alert.ok ? "Telegram exit alert sent." : `Telegram exit alert FAILED: ${alert.error}`);
+    res.json({ id: jobId, isCombo: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 //  AUTO-CLOSE WORKERS — in-process 5s pollers, ported from the
 //  options_pnl_report app's lib/auto-close-worker.js and
 //  lib/auto-close-combo-worker.js. server.js is a single long-running
@@ -4983,7 +5151,7 @@ async function autoCloseFinishJob(jobId) {
     // survives even if this job record is later cleaned up.
     if (job.trade_id) {
       await db.updateOptionsTrade(job.trade_id, {
-        execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
+        status: "closed", execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
       }).catch((e) => console.error(`[auto-close #${jobId}] trade snapshot failed:`, e.message));
     }
     const initial = parseFloat(job.initial_total_usd);
@@ -5188,7 +5356,7 @@ async function autoCloseComboFinishJob(comboJobId) {
       const { trades } = await db.listOptionsTrades({ groupId: job.group_id }).catch(() => ({ trades: [] }));
       for (const t of trades || []) {
         await db.updateOptionsTrade(t.id, {
-          execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
+          status: "closed", execution_log: job.log_json, target_pnl: job.target_pnl, initial_collateral_usd: job.initial_total_usd,
         }).catch((e) => console.error(`[auto-close-combo #${comboJobId}] trade ${t.id} snapshot failed:`, e.message));
       }
     }
