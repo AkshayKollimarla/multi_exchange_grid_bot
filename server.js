@@ -4714,6 +4714,20 @@ app.delete("/api/auto-close", async (req, res) => {
     const job = await db.getAutoCloseJobRaw(id);
     if (!job) return res.status(404).json({ error: "not found" });
     if (["completed", "failed", "stopped"].includes(job.status)) return res.status(400).json({ error: `Job already ${job.status}` });
+    // Stopping mid-close used to just abandon whatever maker order was
+    // resting — the worker stops re-quoting it, but the order itself keeps
+    // sitting live on the exchange with nothing tracking it. Cancel it here
+    // so "stopped" actually means stopped on the exchange, not just in our
+    // DB. Best-effort: the order may have already filled/cancelled between
+    // the last tick and this request, which is fine either way.
+    if (job.status === "closing_option" && job.opt_order_id) {
+      try {
+        await deribitPrivate("cancel", { order_id: job.opt_order_id }, job.account_id);
+        await db.appendAutoCloseLog(id, `Manually stopped — cancelled resting option order ${job.opt_order_id}.`);
+      } catch (e) {
+        await db.appendAutoCloseLog(id, `Manually stopped — order ${job.opt_order_id} could not be cancelled (${e.message}); it may have already filled or cancelled.`);
+      }
+    }
     await db.updateAutoCloseJob(id, { status: "stopped", completed: true });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -4832,6 +4846,22 @@ app.delete("/api/auto-close-combo", async (req, res) => {
     const job = await db.getComboJobRaw(id);
     if (!job) return res.status(404).json({ error: "not found" });
     if (["completed", "failed", "stopped"].includes(job.status)) return res.status(400).json({ error: `Job already ${job.status}` });
+    // Same reasoning as the single-leg DELETE above — a combo mid-"closing"
+    // can have several legs each resting their own maker order; abandoning
+    // the job must not abandon those orders on the exchange too.
+    if (job.status === "closing") {
+      const legs = await db.getComboJobLegs(id);
+      for (const leg of legs) {
+        if (leg.opt_order_id && !leg.opt_done) {
+          try {
+            await deribitPrivate("cancel", { order_id: leg.opt_order_id }, job.account_id);
+            await db.appendComboLog(id, `Manually stopped — cancelled leg ${leg.leg_index + 1}'s resting option order ${leg.opt_order_id}.`);
+          } catch (e) {
+            await db.appendComboLog(id, `Manually stopped — leg ${leg.leg_index + 1}'s order ${leg.opt_order_id} could not be cancelled (${e.message}); it may have already filled or cancelled.`);
+          }
+        }
+      }
+    }
     await db.updateComboJob(id, { status: "stopped", completed: true });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -4975,7 +5005,27 @@ function startAutoCloseWorker() {
   setInterval(autoCloseWorkerTick, 5000);
 }
 
+// A tick that's still running when the next 5s timer fires (easily happens
+// once a job has several legs, each needing its own ticker/order-state/
+// cancel/place round-trip) used to just start a SECOND overlapping tick on
+// top of it. Both invocations would read the same stale opt_order_id,
+// independently decide to re-quote, and each place its own replacement
+// order — whichever DB write landed last "won", silently orphaning the
+// other's order: still resting live on the exchange, but no longer
+// referenced by anything, so no future tick would ever check, re-quote, or
+// cancel it again. This flag makes an overlapping tick a no-op instead —
+// at most one tick runs at a time, so opt_order_id can never be raced.
+let _autoCloseTickBusy = false;
 async function autoCloseWorkerTick() {
+  if (_autoCloseTickBusy) return;
+  _autoCloseTickBusy = true;
+  try {
+    await autoCloseWorkerTickInner();
+  } finally {
+    _autoCloseTickBusy = false;
+  }
+}
+async function autoCloseWorkerTickInner() {
   let jobs;
   try { jobs = await db.listActiveAutoCloseJobs(); }
   catch (e) { console.error("[auto-close] DB query failed:", e.message); return; }
@@ -5185,7 +5235,21 @@ function startAutoCloseComboWorker() {
   setInterval(autoCloseComboWorkerTick, 5000);
 }
 
+// Same overlap hazard as autoCloseWorkerTick above, worse here since a
+// combo job processes every leg sequentially in one tick — the more legs,
+// the more likely a tick outruns the 5s interval and a second tick starts
+// on top of it, racing opt_order_id updates and orphaning a resting order.
+let _autoCloseComboTickBusy = false;
 async function autoCloseComboWorkerTick() {
+  if (_autoCloseComboTickBusy) return;
+  _autoCloseComboTickBusy = true;
+  try {
+    await autoCloseComboWorkerTickInner();
+  } finally {
+    _autoCloseComboTickBusy = false;
+  }
+}
+async function autoCloseComboWorkerTickInner() {
   let jobs;
   try { jobs = await db.listActiveComboJobs(); }
   catch (e) { console.error("[auto-close-combo] DB query failed:", e.message); return; }

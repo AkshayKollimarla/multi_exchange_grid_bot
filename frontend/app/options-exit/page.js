@@ -54,7 +54,14 @@ function legLivePnl(leg, tickers, avgPrices) {
   return pnl;
 }
 
-function StrategyCard({ group }) {
+const ACTIVE_JOB_LABEL = {
+  active: "⏳ Waiting on target/stop-loss",
+  closing_option: "🔄 Closing…",
+  closing_futures: "🔄 Closing…",
+  closing: "🔄 Closing…",
+};
+
+function StrategyCard({ group, activeJob }) {
   const { groupId, trades } = group;
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -110,7 +117,7 @@ function StrategyCard({ group }) {
   const allLegsErrored = !!preview && preview.legs.length > 0 && preview.legs.every((l) => l.error);
 
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
+    <div className="card" style={{ marginBottom: 16, opacity: activeJob ? 0.72 : 1 }}>
       <div className="card-body">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
           <div>
@@ -119,6 +126,11 @@ function StrategyCard({ group }) {
               {groupId && (
                 <span style={{ background: "var(--purple)", color: "#fff", padding: "2px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
                   🔗 {trades.length} LEG{trades.length === 1 ? "" : "S"}
+                </span>
+              )}
+              {activeJob && (
+                <span style={{ background: "var(--border)", color: "var(--muted)", padding: "2px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                  {ACTIVE_JOB_LABEL[activeJob.status] || activeJob.status}
                 </span>
               )}
             </div>
@@ -132,14 +144,22 @@ function StrategyCard({ group }) {
             </div>
             <div style={{ fontSize: 11, color: "var(--muted-2)", marginTop: 4 }}>Entry {fmtDate(t0.entry_date)}</div>
           </div>
-          {!expanded && (
+          {activeJob ? (
+            <a
+              href={`/monitor?${groupId ? `group_id=${encodeURIComponent(groupId)}` : `trade_id=${t0.id}`}`}
+              className="btn"
+              style={{ background: "transparent", border: "1px solid var(--border-2)", color: "var(--muted)", textDecoration: "none" }}
+            >
+              View in Monitor
+            </a>
+          ) : !expanded && (
             <button className="btn" style={{ background: "#dc2626", color: "#fff" }} onClick={openExit}>
               🚪 Options Exit
             </button>
           )}
         </div>
 
-        {expanded && (
+        {!activeJob && expanded && (
           <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
             {loadingPreview && <div style={{ fontSize: 13, color: "var(--muted)" }}>Fetching live positions…</div>}
             {previewError && <div style={{ fontSize: 13, color: "#dc2626" }}>Error: {previewError}</div>}
@@ -195,6 +215,7 @@ function StrategyCard({ group }) {
 
 export default function OptionsExitPage() {
   const [trades, setTrades] = useState([]);
+  const [activeJobs, setActiveJobs] = useState({ byTradeId: new Map(), byGroupId: new Map() });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -202,8 +223,27 @@ export default function OptionsExitPage() {
     setLoading(true);
     setError(null);
     try {
-      const j = await apiGet(`/api/options-db/trades?status=open&limit=9999`);
-      setTrades(j.trades || []);
+      // Bulk-fetch every job (no id/trade_id/group_id) rather than one
+      // lookup per card — a strategy already mid-exit (or still waiting on
+      // its own target/stop-loss) shouldn't offer a second, confusing Exit
+      // button; it should show as already-in-progress instead.
+      const [tradesRes, singleJobs, comboJobs] = await Promise.all([
+        apiGet(`/api/options-db/trades?status=open&limit=9999`),
+        apiGet(`/api/auto-close`).catch(() => ({ jobs: [] })),
+        apiGet(`/api/auto-close-combo`).catch(() => ({ jobs: [] })),
+      ]);
+      setTrades(tradesRes.trades || []);
+      const SINGLE_ACTIVE = ["active", "closing_option", "closing_futures"];
+      const COMBO_ACTIVE = ["active", "closing"];
+      const byTradeId = new Map();
+      for (const j of singleJobs.jobs || []) {
+        if (j.trade_id && SINGLE_ACTIVE.includes(j.status)) byTradeId.set(j.trade_id, j);
+      }
+      const byGroupId = new Map();
+      for (const j of comboJobs.jobs || []) {
+        if (j.group_id && COMBO_ACTIVE.includes(j.status)) byGroupId.set(j.group_id, j);
+      }
+      setActiveJobs({ byTradeId, byGroupId });
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, []);
@@ -234,9 +274,10 @@ export default function OptionsExitPage() {
       {!loading && !error && groups.length === 0 && (
         <div style={{ color: "var(--muted)" }}>No open strategies. <a href="/add-strategy">Add one.</a></div>
       )}
-      {!loading && !error && groups.map((g) => (
-        <StrategyCard key={g.groupId || g.trades[0].id} group={g} />
-      ))}
+      {!loading && !error && groups.map((g) => {
+        const activeJob = g.groupId ? activeJobs.byGroupId.get(g.groupId) : activeJobs.byTradeId.get(g.trades[0].id);
+        return <StrategyCard key={g.groupId || g.trades[0].id} group={g} activeJob={activeJob} />;
+      })}
     </section>
   );
 }
