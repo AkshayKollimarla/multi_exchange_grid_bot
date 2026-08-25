@@ -1321,13 +1321,13 @@ async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, q
       logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
     });
 
-    try { await exchange.cancelAllOrders(cfg.symbol); }
-    catch(e) {
-      try {
-        const p2 = await exchange.fetchOpenOrders(cfg.symbol);
-        for (const o of p2) { try{ await exchange.cancelOrder(o.id, cfg.symbol); }catch(_){} }
-      } catch(_){}
-    }
+    // Used to bulk-cancel every resting order on the symbol before starting
+    // fresh — but that's an account/symbol-wide cancel, not scoped to this
+    // bot, so it would just as happily wipe an order the user placed
+    // manually. bot.openOrders is empty at this point (nothing tracked yet
+    // for a fresh, non-resume start), so there is nothing this bot can
+    // safely identify as its own to clean up here — leave whatever's
+    // already resting on the symbol alone and just start placing the grid.
 
     await maintainGrid(botId, entryPrice);
     const runningCount = listBots().filter(b => b.running).length;
@@ -3380,22 +3380,14 @@ async function cancelAllOrders(botId) {
   }
 
   // ── DEFAULT PATH (Binance, Deribit): use CCXT ──────────────────────
-  // Try bulk cancel first, wrapped with timeout.
-  try {
-    await Promise.race([
-      bot.exchange.cancelAllOrders(cfg.symbol),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("cancelAllOrders timeout 5s")), 5000)),
-    ]);
-    log(botId, `Bulk cancel succeeded`, "success");
-    bot.openOrders = [];
-    bot.pendingRoundTrips = [];
-    return;
-  } catch (err) {
-    log(botId, `Bulk cancel ${err.message.includes("timeout") ? "timed out" : "not supported"}: ${err.message} — using per-order cancels`, "warn");
-  }
-
-  // Per-order cancellation. Each cancelOrder call is wrapped in its own
-  // 5-second timeout so a single bad call can't stall the whole sequence.
+  // Cancel only the orders THIS bot placed and is tracking (toCancel), one
+  // at a time by order id — each wrapped in its own 5-second timeout so a
+  // single bad call can't stall the whole sequence.
+  // exchange.cancelAllOrders(symbol) used to be tried first as a "bulk"
+  // shortcut, but it cancels EVERY resting order on that symbol for the
+  // account, including anything placed manually outside the bot. Per-order
+  // cancellation is the only way to guarantee the bot never touches an
+  // order it didn't place itself.
   let successCount = 0, failCount = 0;
   for (const o of toCancel) {
     try {
@@ -3438,10 +3430,14 @@ async function syncOrdersFromExchange(botId) {
   const exchangeKey = bot.exchangeKey;
   const cfg = bot.config;
 
-  // ── HYPERLIQUID: native orphan cleanup ──
-  // CCXT's fetchOpenOrders is broken, but the native SDK works. Any order
-  // LIVE on the exchange that we are NOT tracking locally is an orphan
-  // (lost-track order) — cancel it so they can't pile up and exhaust margin.
+  // ── HYPERLIQUID: report-only orphan check ──
+  // CCXT's fetchOpenOrders is broken, but the native SDK works. An order
+  // LIVE on the exchange that we are NOT tracking locally used to be
+  // auto-cancelled as a "lost-track" orphan — but that same signature is
+  // exactly what a manually-placed order looks like, and the bot has no way
+  // to tell the two apart. Only ever touch orders THIS bot placed and is
+  // still tracking in bot.openOrders — just log what's untracked so it can
+  // be reviewed, never cancel it automatically.
   if (exchangeKey === "hyperliquid") {
     const cache = bot.hlCache;
     if (!cache?.infoClient) return;
@@ -3467,24 +3463,9 @@ async function syncOrdersFromExchange(botId) {
     const lastPlace = Math.max(0, ...bot.openOrders.map(o => o.placedAt || 0));
     if (Date.now() - lastPlace < 15000) return;
 
-    const orphans = ours.filter(o => !trackedIds.has(String(o.oid)));
-    if (orphans.length > 0) {
-      log(botId, `Found ${orphans.length} orphan order(s) on exchange — cancelling to prevent pile-up`, "warn");
-      const ids = orphans.map(o => o.oid);
-      const result = await hyperliquidNativeCancel(bot, ids);
-      if (result.ok) {
-        // Orphans were never tracked locally (no known entry/target type),
-        // so there's no round trip to open for one that turns out to have
-        // filled instead of cancelling — but that must not be silently
-        // folded into "cleared" as if it were a clean cancel.
-        const filled = result.results.filter(r => r.status && r.status.error && /filled/i.test(r.status.error) && !/never placed|already cancel/i.test(r.status.error));
-        if (filled.length > 0) {
-          log(botId, `⚠️ ${filled.length} orphan order(s) filled instead of cancelling — untracked position(s), please verify on the exchange`, "warn");
-        }
-        log(botId, `Cleared ${orphans.length - filled.length} orphan(s)${filled.length ? `, ${filled.length} filled` : ""}`, "success");
-      } else {
-        log(botId, `Orphan cancel failed: ${result.error}`, "warn");
-      }
+    const untracked = ours.filter(o => !trackedIds.has(String(o.oid)));
+    if (untracked.length > 0) {
+      log(botId, `${untracked.length} order(s) on this coin aren't in this bot's local tracking — leaving them alone (may be placed manually, or a stale local restart).`, "info");
     }
     return;
   }
@@ -3502,26 +3483,17 @@ async function syncOrdersFromExchange(botId) {
       if (now - bot.recentlyCancelled[id] > GRACE_MS) delete bot.recentlyCancelled[id];
     }
 
-    // ── Cancel TRUE orphans (on exchange, not tracked, and not recently cancelled by us) ──
-    // The recently-cancelled filter prevents re-cancelling orders that we
-    // just cancelled but Deribit's fetchOpenOrders hasn't propagated yet.
-    const orphans = exchangeOrders.filter(o =>
+    // ── Report-only: orders on the exchange we're not tracking ──
+    // "On the exchange, not tracked locally" used to be treated as a
+    // lost-track orphan and auto-cancelled — but a manually-placed order has
+    // the exact same signature, and there's no way to tell them apart. Only
+    // ever cancel orders THIS bot placed and is still tracking in
+    // bot.openOrders — just log the mismatch so it can be reviewed manually.
+    const untracked = exchangeOrders.filter(o =>
       !trackedIds.has(o.id) && !bot.recentlyCancelled[o.id]
     );
-    if (orphans.length > 0) {
-      log(botId, `Found ${orphans.length} orphan orders on exchange — cancelling`, "warn");
-      for (const o of orphans) {
-        const result = await cancelSingleOrder(botId, o.id, cfg.symbol);
-        if (result.status === "cancelled") {
-          bot.recentlyCancelled[o.id] = now;
-        } else if (result.status === "filled") {
-          // Orphans were never tracked locally (no known entry/target type),
-          // so there's no round trip to open for it here — but this must
-          // not be silently treated as "cancelled". Surface it so it can be
-          // reconciled manually instead of vanishing from the logs.
-          log(botId, `⚠️ Orphan order ${o.id} (${o.side} @ $${o.price}) filled instead of cancelling — untracked position, please verify on the exchange`, "warn");
-        }
-      }
+    if (untracked.length > 0) {
+      log(botId, `${untracked.length} order(s) on ${cfg.symbol} aren't in this bot's local tracking — leaving them alone (may be placed manually, or a stale local restart).`, "info");
     }
 
     // ── Locally-tracked orders missing from the exchange ──
@@ -5901,14 +5873,13 @@ app.post("/api/start", async (req, res) => {
       bot.entryPrice = entryPrice;
       log(botId, `Resuming previous session — ${bot.openOrders.length} open orders, ${bot.pendingRoundTrips.length} pending RTs, ${bot.completedRoundTrips.length} completed RTs restored`, "success");
     } else {
-      log(botId, `Cancelling leftover orders...`);
-      try { await exchange.cancelAllOrders(cfg.symbol); }
-      catch(e) {
-        try {
-          const prev = await exchange.fetchOpenOrders(cfg.symbol);
-          for (const o of prev) { try{ await exchange.cancelOrder(o.id, cfg.symbol); }catch(_){} }
-        } catch(_){}
-      }
+      // Used to bulk-cancel every resting order on the symbol here — but
+      // that's account/symbol-wide, not scoped to this bot, so it would
+      // just as happily wipe a manually-placed order. bot.openOrders is
+      // empty on a fresh (non-resume) start, so there's nothing this bot
+      // can safely identify as its own to clean up — leave whatever's
+      // already resting on the symbol alone.
+      log(botId, `Fresh start — leaving any existing orders on ${cfg.symbol} untouched.`);
     }
 
     log(botId, isResume ? `Bot resumed! Symbol: ${cfg.symbol}` : `Bot started! Entry: $${entryPrice} | ${cfg.symbol}`, "success");
