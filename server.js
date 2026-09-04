@@ -1985,6 +1985,11 @@ async function emergencyStop(botId, reason) {
   // Mark stopped (not deleted) so it shows up on the Inactive Bots page with
   // its config intact — same as a manual stop below.
   db.markSessionStopped(botId, reason);
+  // Also append to the permanent stop-history log — bot_sessions.bot_id is
+  // reused on restart (its row gets overwritten back to 'active'), so
+  // without this the Inactive Bots page loses the record the moment the
+  // bot is edited and restarted.
+  db.recordSessionHistory(botId, exchangeKey, stripSecrets(bot.config), bot.startedAt, reason);
 
   const cfg = bot.config;
   if (cfg?.telegramToken && cfg?.telegramChatId) {
@@ -5975,6 +5980,7 @@ app.post("/api/stop", async (req, res) => {
   // Mark stopped (not deleted) so it shows up on the Inactive Bots page
   // with its config intact, ready to be edited and restarted.
   db.markSessionStopped(botId, "Manual stop");
+  db.recordSessionHistory(botId, exchangeKey, stripSecrets(bot.config), bot.startedAt, "Manual stop");
 
   res.json({ success: true, botId, exchange: exchangeKey });
   broadcast("state", buildStateSnapshot());
@@ -5998,6 +6004,25 @@ app.delete("/api/stopped-bots", async (req, res) => {
   const botId = req.query?.botId;
   if (!botId) return res.status(400).json({ error: "botId required" });
   try { await db.clearSession(botId); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Permanent stop-event log — unlike /api/stopped-bots above (one row per
+// bot_id, overwritten the moment that slot is restarted), this never loses
+// a record: every manual stop and emergency stop (upper/lower limit) is
+// appended here and stays visible regardless of what that bot_id is doing
+// now.
+app.get("/api/stopped-bots/history", async (req, res) => {
+  try { res.json({ history: await db.listSessionHistory(req.query?.limit) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Round-trip count + PnL for a bot — with no from/to, lifetime totals for
+// that bot_id slot; with both, scoped to one run's window (a Stop History
+// entry's own started_at..stopped_at) so restarting the same slot doesn't
+// blend a different run's trades into these numbers.
+app.get("/api/round-trip-stats", async (req, res) => {
+  const botId = req.query?.botId;
+  if (!botId) return res.status(400).json({ error: "botId required" });
+  try { res.json(await db.getRoundTripStats(botId, { from: req.query?.from, to: req.query?.to })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

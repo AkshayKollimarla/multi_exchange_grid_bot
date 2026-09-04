@@ -83,6 +83,25 @@ async function pingDb() {
       try { await conn.query(`ALTER TABLE bot_sessions ${col}`); }
       catch (e) { if (!/Duplicate column/i.test(e.message)) throw e; }
     }
+    // Stop history — bot_sessions.bot_id is a PRIMARY KEY (one row per bot
+    // slot, not per run), so restarting a stopped bot overwrites the very
+    // row the Inactive Bot page was showing (saveSession's ON DUPLICATE KEY
+    // UPDATE flips it back to 'active'), and the stop event just vanishes.
+    // This table is append-only — never updated, only inserted — so every
+    // stop (manual or emergency) survives being overwritten or restarted.
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS bot_session_history (
+        id           INT AUTO_INCREMENT PRIMARY KEY,
+        bot_id       VARCHAR(64) NOT NULL,
+        exchange     VARCHAR(32) NOT NULL,
+        config_json  JSON NOT NULL,
+        started_at   DATETIME(3) NULL,
+        stopped_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        stop_reason  VARCHAR(255) NULL,
+        INDEX idx_bsh_bot (bot_id),
+        INDEX idx_bsh_stopped (stopped_at)
+      ) ENGINE=InnoDB
+    `);
     // Options Multi-Agent Database — strategies logged via the Options DB
     // sidebar section (Dashboard / Add Strategy / Combined Simulator /
     // Analysis). Mirrors the schema of the standalone options_pnl_report app
@@ -384,6 +403,49 @@ async function listStoppedSessions() {
   }
 }
 
+// Append-only — called alongside markSessionStopped from both the manual
+// /api/stop route and emergencyStop (upper/lower limit breach), so every
+// stop event is preserved even after the bot_sessions row for that bot_id
+// gets overwritten by a later restart. startedAtMs is the in-memory
+// bot.startedAt (the ACTUAL start of this run) — bot_sessions.started_at
+// isn't usable for this since saveSession's ON DUPLICATE KEY UPDATE never
+// touches it, so it's stuck at that slot's very first-ever start.
+async function recordSessionHistory(botId, exchange, config, startedAtMs, reason) {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.execute(
+      `INSERT INTO bot_session_history (bot_id, exchange, config_json, started_at, stop_reason)
+       VALUES (?, ?, CAST(? AS JSON), ?, ?)`,
+      [botId, exchange, JSON.stringify(config), toMysqlDate(startedAtMs), reason || null]
+    );
+  } catch (e) {
+    console.error("[DB] recordSessionHistory failed:", e.message);
+  }
+}
+
+async function listSessionHistory(limit = 200) {
+  const p = getPool();
+  if (!p) return [];
+  try {
+    const [rows] = await p.query(
+      "SELECT bot_id, exchange, config_json, started_at, stopped_at, stop_reason FROM bot_session_history ORDER BY stopped_at DESC LIMIT ?",
+      [Math.min(1000, Math.max(1, parseInt(limit, 10) || 200))]
+    );
+    return rows.map(r => ({
+      botId: r.bot_id,
+      exchange: r.exchange,
+      config: typeof r.config_json === "string" ? JSON.parse(r.config_json) : r.config_json,
+      startedAt: r.started_at,
+      stoppedAt: r.stopped_at,
+      stopReason: r.stop_reason,
+    }));
+  } catch (e) {
+    console.error("[DB] listSessionHistory failed:", e.message);
+    return [];
+  }
+}
+
 // Save the bot's in-memory state (open orders, pending RTs, etc.) so a
 // restart can pick up exactly where it left off. Called from gridLoop,
 // throttled by the caller (we do raw writes here).
@@ -498,14 +560,24 @@ async function recordRoundTrip(bot, rt, sequenceNumber) {
 // so its .length used to get reused as the sequence number and would get
 // stuck once a bot passed 500 total round trips (e.g. "Round Trip #501"
 // forever). Seeded at bot start so numbering survives restarts too.
-async function getRoundTripStats(botId) {
+// { from, to } (ISO strings or Date-able values) optionally scopes this to
+// one run's window instead of the bot_id's lifetime — used to show a Stop
+// History entry's own round-trip stats (its started_at..stopped_at) rather
+// than blending in every other run that ever used the same bot_id slot.
+async function getRoundTripStats(botId, { from, to } = {}) {
   const empty = { count: 0, totalNetPnl: 0, totalGrossPnl: 0 };
   const p = getPool();
   if (!p) return empty;
   try {
+    const where = ["bot_id = ?"];
+    const params = [botId];
+    if (from && to) {
+      where.push("closed_at BETWEEN ? AND ?");
+      params.push(toMysqlDate(from), toMysqlDate(to));
+    }
     const [rows] = await p.query(
-      "SELECT COUNT(*) AS cnt, COALESCE(SUM(net_pnl), 0) AS total_net, COALESCE(SUM(gross_pnl), 0) AS total_gross FROM round_trips WHERE bot_id = ?",
-      [botId]
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM(net_pnl), 0) AS total_net, COALESCE(SUM(gross_pnl), 0) AS total_gross FROM round_trips WHERE ${where.join(" AND ")}`,
+      params
     );
     return {
       count: rows[0]?.cnt || 0,
@@ -1196,7 +1268,7 @@ async function updateComboLeg(legId, fields = {}) {
 module.exports = {
   getPool, pingDb, recordFill, recordRoundTrip, getRoundTripStats, queryReport,
   loadRecentRoundTrips, saveSession, saveSessionState, clearSession,
-  markSessionStopped, listStoppedSessions,
+  markSessionStopped, listStoppedSessions, recordSessionHistory, listSessionHistory,
   loadAllSessions, dbConfigured,
   listAccounts, getAccount, addAccount, deleteAccount, isAccountReferenced,
   listOptionsTrades, getOptionsTrade, addOptionsTrade, updateOptionsTrade,
