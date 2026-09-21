@@ -722,7 +722,7 @@ function CombinedSimulatorInner() {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 18 }}>
+        <div className="legs-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 18 }}>
           {legs.map((leg, idx) => (
             <LegCard
               key={idx} ref={(el) => { legCardRefs.current[idx] = el; }}

@@ -123,12 +123,6 @@ a { color: inherit; text-decoration: none; }
    inline for their own column ratio. */
 .page { display: grid; grid-template-columns: 420px 1fr; gap: 20px; }
 @media (max-width: 1100px) { .page { grid-template-columns: 1fr !important; } }
-@media (max-width: 880px) {
-  .app-shell { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; }
-  .sidebar .brand { width: 100%; }
-}
-
 /* ══════════════════════════════════════════════════════════════
    HEADER
 ══════════════════════════════════════════════════════════════ */
@@ -588,3 +582,86 @@ a { color: inherit; text-decoration: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+
+/* Mobile chrome — hidden on desktop, shown by the ≤880px block below. */
+.mobile-topbar, .sidebar-backdrop { display: none; }
+
+/* ══════════════════════════════════════════════════════════════
+   MOBILE / TABLET
+   ≤880px: sidebar becomes a slide-in drawer opened from a top-bar
+   hamburger (it used to just wrap all 17 links across the top of the
+   page, eating most of a phone screen).
+   ≤720px: content tightens up — inline multi-column grids collapse,
+   wide tables scroll sideways instead of crushing/overflowing the page,
+   and form controls get touch-sized.
+══════════════════════════════════════════════════════════════ */
+@media (max-width: 880px) {
+  .app-shell { flex-direction: column; }
+  .mobile-topbar {
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 50;
+    background: var(--sidebar-bg); color: #fff; padding: 8px 12px;
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
+  }
+  .hamburger {
+    width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
+    background: rgba(255,255,255,.08); color: #fff; font-size: 20px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mobile-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+  .mobile-brand .logo {
+    width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg,#3b82f6,#1e40af);
+    display: flex; align-items: center; justify-content: center; font-size: 12px;
+  }
+  .sidebar-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 55; background: rgba(15,23,42,.5);
+    opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  }
+  .sidebar-backdrop.show { opacity: 1; pointer-events: auto; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 60;
+    width: min(280px, 82vw); flex: none; height: 100dvh;
+    transform: translateX(-100%); transition: transform .22s ease;
+    box-shadow: none; padding-top: calc(18px + env(safe-area-inset-top, 0px));
+  }
+  .sidebar.open { transform: translateX(0); box-shadow: 8px 0 30px rgba(0,0,0,.35); }
+  .nav-item { padding: 12px 10px; font-size: 14px; }   /* touch-sized rows */
+}
+
+@media (max-width: 720px) {
+  .section { padding: 0 12px 22px; }
+  .sec-head { font-size: 22px; margin: 14px 2px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  /* The page-level "GridBot — Multi-Exchange" title bar just repeats the
+     brand already shown in the mobile top bar. */
+  .header { display: none; }
+  /* Pills hold short labels (account names etc.) — never squash them into
+     a wrapped blob when a flex row runs out of room. */
+  .pill { white-space: nowrap; }
+  .card-body { padding: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .card-header { flex-wrap: wrap; }
+
+  /* Inline multi-column grids (set via style={{gridTemplateColumns}} in
+     the pages) — !important is needed to beat the inline style. The
+     [style*="repeat(N,"] form matches whether or not the browser
+     normalises a space after the comma. */
+  [style*="repeat(4,"], [style*="repeat(5,"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 10px !important; }
+  [style*="420px 1fr"], [style*="1.7fr 1fr"], [style*="1fr 1fr"], .legs-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .row-2 { gap: 8px; }
+  .btn-row { grid-template-columns: 1fr !important; }
+  .btn-row .btn, .btn-row .btn-refresh { width: 100%; }
+
+  /* Tables: keep cells on one line and let the card scroll sideways,
+     instead of squeezing every column into unreadable slivers. */
+  .ord-table { font-size: 13px; }
+  .ord-table th, .ord-table td { padding: 10px 12px; white-space: nowrap; }
+
+  /* ≥16px stops iOS Safari zooming the page when an input gets focus. */
+  input, select, textarea { font-size: 16px !important; }
+  .btn, .btn-refresh, .tab-btn { min-height: 40px; }
+  .stat-value { font-size: 22px; }
+}
+
+@media (max-width: 400px) {
+  .row-2 { grid-template-columns: minmax(0, 1fr); }
+  [style*="repeat(4,"], [style*="repeat(5,"] { gap: 8px !important; }
+}

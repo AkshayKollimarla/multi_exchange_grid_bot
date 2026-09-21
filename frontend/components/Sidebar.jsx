@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -37,13 +38,43 @@ function NavItem({ item, pathname }) {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  // Mobile only (see the ≤880px block in globals.css): the sidebar becomes
+  // a slide-in drawer opened from a top-bar hamburger. On desktop these
+  // states/elements are inert — the hamburger and backdrop are display:none
+  // and the drawer transform is unset.
+  const [open, setOpen] = useState(false);
+
+  // Close the drawer after navigating, and on Escape.
+  useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   return (
-    <aside className="sidebar">
-      <div className="brand"><span className="logo">▲</span> GridBot-MultiExchange</div>
-      <div className="nav-group">Trading</div>
-      {TRADING_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
-      <div className="nav-group">Options Strategy</div>
-      {OPTIONS_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
-    </aside>
+    <>
+      <div className="mobile-topbar">
+        <button
+          type="button"
+          className="hamburger"
+          aria-label={open ? "Close menu" : "Open menu"}
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "✕" : "☰"}
+        </button>
+        <span className="mobile-brand"><span className="logo">▲</span> GridBot</span>
+      </div>
+      <div className={`sidebar-backdrop${open ? " show" : ""}`} onClick={() => setOpen(false)} />
+      <aside className={`sidebar${open ? " open" : ""}`}>
+        <div className="brand"><span className="logo">▲</span> GridBot-MultiExchange</div>
+        <div className="nav-group">Trading</div>
+        {TRADING_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
+        <div className="nav-group">Options Strategy</div>
+        {OPTIONS_ITEMS.map((item) => <NavItem key={item.key} item={item} pathname={pathname} />)}
+      </aside>
+    </>
   );
 }

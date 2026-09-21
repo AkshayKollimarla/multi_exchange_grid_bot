@@ -12,12 +12,18 @@ export default function ActiveBotPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [stoppingId, setStoppingId] = useState(null);
   const pollRef = useRef(null);
+  // When the last /api/status poll actually SUCCEEDED (not just was attempted)
+  // — a failed poll used to be swallowed silently, leaving stale data on
+  // screen with nothing to show it was stale.
+  const [lastOkAt, setLastOkAt] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(async () => {
     try {
       const data = await apiGet("/api/status");
       setBots(data || {});
-    } catch (e) { /* transient — next poll will retry */ }
+      setLastOkAt(Date.now());
+    } catch (e) { /* transient — next poll will retry; lastOkAt stops advancing so the UI flags it as stale */ }
   }, []);
 
   useEffect(() => {
@@ -25,6 +31,15 @@ export default function ActiveBotPage() {
     pollRef.current = setInterval(refresh, 4000);
     return () => clearInterval(pollRef.current);
   }, [refresh]);
+
+  // 1s tick so the "updated Xs ago" label counts up between polls.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const ageSec = lastOkAt ? Math.max(0, Math.round((now - lastOkAt) / 1000)) : null;
+  const isStale = ageSec != null && ageSec > 15;
 
   const list = Object.entries(bots).map(([id, b]) => ({ id, ...b }));
   const running = list.filter((b) => b.running);
@@ -61,6 +76,13 @@ export default function ActiveBotPage() {
       <section className="section">
         <div className="sec-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>🟢 Active Bot</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: isStale ? "#dc2626" : "var(--muted)" }}>
+            {ageSec == null
+              ? "Connecting…"
+              : isStale
+                ? `⚠ Not updating — last update ${ageSec}s ago`
+                : `● Live · updated ${ageSec}s ago`}
+          </span>
           <Link
             href="/bot-configuration"
             style={{
@@ -86,17 +108,17 @@ export default function ActiveBotPage() {
                 onClick={() => setSelectedId(b.id)}
                 className="card"
                 style={{
-                  cursor: "pointer", padding: "12px 16px", display: "flex", alignItems: "center", gap: 12,
+                  cursor: "pointer", padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
                   border: b.id === selectedId ? "1.5px solid var(--brand-2)" : undefined,
                 }}
               >
                 <span style={{
-                  width: 9, height: 9, borderRadius: "50%",
+                  width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
                   background: b.running ? "var(--green)" : "var(--muted-2)",
                   boxShadow: b.running ? "0 0 0 3px rgba(22,163,74,.18)" : "none",
                 }} />
                 <span style={{
-                  width: 8, height: 8, borderRadius: "50%",
+                  width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
                   background: EXCHANGE_DOT[b.exchangeKey] || "#888",
                 }} />
                 <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>{b.label || b.id}</span>

@@ -2,6 +2,18 @@
 
 import { fmtCcy } from "@/lib/format";
 
+// Time only for today's trades ("2:45:31 PM"), date + time for older ones —
+// a bare time on a multi-day run would be ambiguous.
+function fmtWhen(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "—";
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString()
+    : d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " " + d.toLocaleTimeString();
+}
+
 export default function BotDetail({ bot }) {
   const stats = bot.stats || {};
   const orders = bot.openOrders || [];
@@ -58,12 +70,14 @@ export default function BotDetail({ bot }) {
         </div>
         <div className="card-body" style={{ padding: 0 }}>
           <table className="ord-table">
-            <thead><tr><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th></tr></thead>
+            <thead><tr><th>Closed</th><th>Opened</th><th>Side</th><th>Buy</th><th>Sell</th><th>Qty</th><th>Fee</th><th>Net PnL</th></tr></thead>
             <tbody>
               {rts.length === 0
-                ? <tr><td colSpan={6} className="empty-td">No round trips yet — waiting for first target fill</td></tr>
+                ? <tr><td colSpan={8} className="empty-td">No round trips yet — waiting for first target fill</td></tr>
                 : rts.slice(0, 20).map((r, i) => (
                   <tr key={i}>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtWhen(r.closeTs)}</td>
+                    <td style={{ whiteSpace: "nowrap", color: "var(--muted)" }}>{fmtWhen(r.openTs)}</td>
                     <td style={{ color: r.openSide === "buy" ? "var(--green)" : "var(--red)", fontWeight: 700 }}>{String(r.openSide).toUpperCase()}</td>
                     <td>${r.buyPrice}</td>
                     <td>${r.sellPrice}</td>
