@@ -2819,18 +2819,46 @@ async function maintainGrid(botId, currentPrice) {
   }
   const anchor = bot.gridAnchor;
 
+  // HOLD ENTRIES BEHIND PENDING TARGETS (equal-step grids only).
+  // When sell spacing, buy spacing and target spread are all the same step
+  // (e.g. 0.3 / 0.3 / 0.3), entries and targets land on the SAME price
+  // levels. The moment a SELL target filled, its level was free again and a
+  // fresh SELL entry went in at that exact price — so the bot sold twice at
+  // one level (once to close the long, once more to open a short) while it
+  // still had other SELL targets waiting above. So on such a grid, a side
+  // gets no new ENTRY orders while ANY target is still pending on that side
+  // (parked ones included — they're still unfilled). Entries resume once
+  // every target on that side has filled. The opposite side is unaffected:
+  // BUY entries keep working while SELL targets are pending, and vice versa.
+  // Any entry already resting on a held side simply isn't in `desired`
+  // below, so the normal diff cancels it.
+  const stepEps = 1e-9;   // float noise only — 0.3 vs 0.31 must NOT count as equal
+  const equalStepGrid =
+    Math.abs(sSpace - bSpace) <= stepEps &&
+    Math.abs(sSpace - Math.abs(cfg.targetSpread)) <= stepEps;
+  const holdSellEntries = equalStepGrid && bot.pendingRoundTrips.some(rt => rt.targetSide === "sell");
+  const holdBuyEntries  = equalStepGrid && bot.pendingRoundTrips.some(rt => rt.targetSide === "buy");
+  // Log only when the hold state flips, not every loop.
+  const holdKey = `${holdSellEntries ? "S" : ""}${holdBuyEntries ? "B" : ""}`;
+  if (holdKey !== (bot.entryHoldKey || "")) {
+    bot.entryHoldKey = holdKey;
+    if (holdSellEntries) log(botId, `SELL entries on hold — SELL target(s) still pending; they resume once all SELL targets fill`, "info");
+    if (holdBuyEntries)  log(botId, `BUY entries on hold — BUY target(s) still pending; they resume once all BUY targets fill`, "info");
+    if (!holdKey)        log(botId, `No targets pending — entries active on both sides`, "info");
+  }
+
   // Generate entries purely from the anchor (NOT compared to currentPrice,
   // which moves and would cause flicker). Bounds checks use the static
   // upper/lower limits and the exchange post-only floors only.
   for (let i = 1; i <= PER_SIDE + 3; i++) {
     const ps = roundPrice(anchor + i * sSpace, tickSize);
-    if (ps >= minSellPrice && ps <= bot.upperLimit
+    if (!holdSellEntries && ps >= minSellPrice && ps <= bot.upperLimit
         && !reservedEntryPrices.has(`sell_${ps}`)) {
       wantSell.push({ side: "sell", price: ps, qty, type: "entry", rtId: null,
                       distance: Math.abs(ps - currentPrice) });
     }
     const pb = roundPrice(anchor - i * bSpace, tickSize);
-    if (pb <= maxBuyPrice && pb >= bot.lowerLimit
+    if (!holdBuyEntries && pb <= maxBuyPrice && pb >= bot.lowerLimit
         && !reservedEntryPrices.has(`buy_${pb}`)) {
       wantBuy.push({ side: "buy", price: pb, qty, type: "entry", rtId: null,
                      distance: Math.abs(pb - currentPrice) });
