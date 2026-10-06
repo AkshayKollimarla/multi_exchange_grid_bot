@@ -16,7 +16,9 @@ function fmtWhen(ts) {
 
 export default function BotDetail({ bot }) {
   const stats = bot.stats || {};
-  const orders = bot.openOrders || [];
+  // Highest price first, like an order book: sells on top, buys below. The
+  // server sends them in the order they were placed, which jumps around.
+  const orders = [...(bot.openOrders || [])].sort((a, b) => Number(b.price) - Number(a.price));
   const rts = bot.completedRoundTrips || [];
   // Every individual filled order (entry and target legs alike), newest
   // first — unlike Recent Round Trips, which only lists a buy+sell pair
