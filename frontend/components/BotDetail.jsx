@@ -18,6 +18,10 @@ export default function BotDetail({ bot }) {
   const stats = bot.stats || {};
   const orders = bot.openOrders || [];
   const rts = bot.completedRoundTrips || [];
+  // Every individual filled order (entry and target legs alike), newest
+  // first — unlike Recent Round Trips, which only lists a buy+sell pair
+  // once BOTH legs have filled.
+  const fills = bot.fillHistory || [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -84,6 +88,38 @@ export default function BotDetail({ bot }) {
                     <td>{r.qty}</td>
                     <td>{fmtCcy(r.totalFee)}</td>
                     <td style={{ color: r.netPnl >= 0 ? "var(--green)" : "var(--red)", fontWeight: 700 }}>{fmtCcy(r.netPnl)}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div className="card-header-row">
+            <span>🧾 Trade History</span>
+            <span style={{ fontFamily: "var(--font-display)", fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>
+              {fills.length ? `Last fill: ${String(fills[0].side).toUpperCase()} @ $${fills[0].price}` : "No fills yet"}
+            </span>
+          </div>
+        </div>
+        <div className="card-body" style={{ padding: 0 }}>
+          <table className="ord-table">
+            {/* No Fee column: the per-fill fee is often 0/unknown at fill time
+                (the real fee is only looked up when a round trip closes), so
+                it would disagree with the Fee shown in Recent Round Trips. */}
+            <thead><tr><th>Time</th><th>Side</th><th>Type</th><th>Price</th><th>Qty</th></tr></thead>
+            <tbody>
+              {fills.length === 0
+                ? <tr><td colSpan={5} className="empty-td">No fills yet — every filled order (entry or target) shows up here, newest first</td></tr>
+                : fills.map((f, i) => (
+                  <tr key={f.orderId ?? i}>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtWhen(f.ts)}</td>
+                    <td style={{ color: f.side === "buy" ? "var(--green)" : "var(--red)", fontWeight: 700 }}>{String(f.side).toUpperCase()}</td>
+                    <td>{f.type}</td>
+                    <td>${f.price}</td>
+                    <td>{f.qty}</td>
                   </tr>
                 ))}
             </tbody>
