@@ -2830,41 +2830,24 @@ async function maintainGrid(botId, currentPrice) {
   }
   const anchor = bot.gridAnchor;
 
-  // HOLD ENTRIES BEHIND PENDING TARGETS (equal-step grids only).
+  // NO SAME-PRICE RE-ENTRY AFTER A TARGET FILL (equal-step grids only).
   // When sell spacing, buy spacing and target spread are all the same step
   // (e.g. 0.3 / 0.3 / 0.3), entries and targets land on the SAME price
-  // levels. The moment a SELL target filled, its level was free again and a
-  // fresh SELL entry went in at that exact price — so the bot sold twice at
-  // one level (once to close the long, once more to open a short) while it
-  // still had other SELL targets waiting above. So on such a grid, a side
-  // gets no new ENTRY orders while ANY target is still pending on that side
-  // (parked ones included — they're still unfilled). Entries resume once
-  // every target on that side has filled. The opposite side is unaffected:
-  // BUY entries keep working while SELL targets are pending, and vice versa.
-  // Any entry already resting on a held side simply isn't in `desired`
-  // below, so the normal diff cancels it.
+  // levels. The moment a SELL target filled at T, a fresh SELL entry could
+  // go in at T and fill seconds later — the bot sold twice at one level
+  // (once to close the long, once more to open a short). bot.lastTargetFill
+  // (set in processFilledOrder, cleared by the next fill of any order) marks
+  // that one level, and that side's entries skip it.
+  // This is deliberately the ONLY restriction: every other level stays
+  // open. In particular an entry's own level is free again as soon as its
+  // round trip closes (sell entry @93.3 -> buy target @93.0 fills -> sell
+  // entry @93.3 may be placed again), even while other targets on that
+  // side are still pending. (A side-wide "no entries while any target is
+  // pending" hold was tried here and removed — it kept freed levels empty.)
   const stepEps = 1e-9;   // float noise only — 0.3 vs 0.31 must NOT count as equal
   const equalStepGrid =
     Math.abs(sSpace - bSpace) <= stepEps &&
     Math.abs(sSpace - Math.abs(cfg.targetSpread)) <= stepEps;
-  const holdSellEntries = equalStepGrid && bot.pendingRoundTrips.some(rt => rt.targetSide === "sell");
-  const holdBuyEntries  = equalStepGrid && bot.pendingRoundTrips.some(rt => rt.targetSide === "buy");
-  // Log only when the hold state flips, not every loop.
-  const holdKey = `${holdSellEntries ? "S" : ""}${holdBuyEntries ? "B" : ""}`;
-  if (holdKey !== (bot.entryHoldKey || "")) {
-    bot.entryHoldKey = holdKey;
-    if (holdSellEntries) log(botId, `SELL entries on hold — SELL target(s) still pending; they resume once all SELL targets fill`, "info");
-    if (holdBuyEntries)  log(botId, `BUY entries on hold — BUY target(s) still pending; they resume once all BUY targets fill`, "info");
-    if (!holdKey)        log(botId, `No targets pending — entries active on both sides`, "info");
-  }
-
-  // NO SAME-PRICE RE-ENTRY AFTER A TARGET FILL (equal-step grids only).
-  // The hold above only lasts while targets are pending. Once the LAST sell
-  // target fills at T, the sell side is free again — and if price ticks back
-  // under T, the first sell entry would land right back on T and could fill
-  // seconds after the target did. bot.lastTargetFill (set in
-  // processFilledOrder, cleared by the next fill of any order) marks that
-  // level so the side's entries start one step further out instead.
   const justFilled = equalStepGrid ? bot.lastTargetFill : null;
   const isJustFilledLevel = (side, price) =>
     !!justFilled && justFilled.side === side &&
@@ -2875,14 +2858,14 @@ async function maintainGrid(botId, currentPrice) {
   // upper/lower limits and the exchange post-only floors only.
   for (let i = 1; i <= PER_SIDE + 3; i++) {
     const ps = roundPrice(anchor + i * sSpace, tickSize);
-    if (!holdSellEntries && ps >= minSellPrice && ps <= bot.upperLimit
+    if (ps >= minSellPrice && ps <= bot.upperLimit
         && !reservedEntryPrices.has(`sell_${ps}`)
         && !isJustFilledLevel("sell", ps)) {
       wantSell.push({ side: "sell", price: ps, qty, type: "entry", rtId: null,
                       distance: Math.abs(ps - currentPrice) });
     }
     const pb = roundPrice(anchor - i * bSpace, tickSize);
-    if (!holdBuyEntries && pb <= maxBuyPrice && pb >= bot.lowerLimit
+    if (pb <= maxBuyPrice && pb >= bot.lowerLimit
         && !reservedEntryPrices.has(`buy_${pb}`)
         && !isJustFilledLevel("buy", pb)) {
       wantBuy.push({ side: "buy", price: pb, qty, type: "entry", rtId: null,
