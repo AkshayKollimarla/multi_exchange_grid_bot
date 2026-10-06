@@ -1318,7 +1318,7 @@ async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, q
       bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true, startedAt: Date.now(), openOrders: [],
       fillHistory: [], pendingRoundTrips: [], completedRoundTrips: [],
-      logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
+      logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null, lastTargetFill: null,
     });
 
     // Used to bulk-cancel every resting order on the symbol before starting
@@ -2249,6 +2249,7 @@ async function gridLoop(botId) {
         completedRoundTrips: bot.completedRoundTrips.slice(0, 200),
         fillHistory        : bot.fillHistory.slice(0, 100),
         gridAnchor         : bot.gridAnchor,
+        lastTargetFill     : bot.lastTargetFill || null,
         entryPrice         : bot.entryPrice,
         upperLimit         : bot.upperLimit,
         lowerLimit         : bot.lowerLimit,
@@ -2333,6 +2334,16 @@ async function processFilledOrder(botId, tracked, order) {
   };
   bot.fillHistory.unshift(fillRecord);
   db.recordFill(bot, fillRecord);
+
+  // Remember the grid level a TARGET just filled at. On an equal-step grid
+  // maintainGrid() keeps that side's next entries off this exact price (they
+  // start one step further out), so the bot doesn't fill a target and then
+  // immediately re-enter the same side at the same price. Any later fill —
+  // entry or target, either side — means the market has moved on, and
+  // releases the level again.
+  bot.lastTargetFill = tracked.type === "target"
+    ? { side: tracked.side, price: roundPrice(tracked.price, tickSize) }
+    : null;
 
   if (tracked.type === "entry") {
     const targetSide  = tracked.side === "sell" ? "buy" : "sell";
@@ -2847,19 +2858,33 @@ async function maintainGrid(botId, currentPrice) {
     if (!holdKey)        log(botId, `No targets pending — entries active on both sides`, "info");
   }
 
+  // NO SAME-PRICE RE-ENTRY AFTER A TARGET FILL (equal-step grids only).
+  // The hold above only lasts while targets are pending. Once the LAST sell
+  // target fills at T, the sell side is free again — and if price ticks back
+  // under T, the first sell entry would land right back on T and could fill
+  // seconds after the target did. bot.lastTargetFill (set in
+  // processFilledOrder, cleared by the next fill of any order) marks that
+  // level so the side's entries start one step further out instead.
+  const justFilled = equalStepGrid ? bot.lastTargetFill : null;
+  const isJustFilledLevel = (side, price) =>
+    !!justFilled && justFilled.side === side &&
+    Math.abs(price - justFilled.price) < Math.max(tickSize || 0, 1e-9) / 2;
+
   // Generate entries purely from the anchor (NOT compared to currentPrice,
   // which moves and would cause flicker). Bounds checks use the static
   // upper/lower limits and the exchange post-only floors only.
   for (let i = 1; i <= PER_SIDE + 3; i++) {
     const ps = roundPrice(anchor + i * sSpace, tickSize);
     if (!holdSellEntries && ps >= minSellPrice && ps <= bot.upperLimit
-        && !reservedEntryPrices.has(`sell_${ps}`)) {
+        && !reservedEntryPrices.has(`sell_${ps}`)
+        && !isJustFilledLevel("sell", ps)) {
       wantSell.push({ side: "sell", price: ps, qty, type: "entry", rtId: null,
                       distance: Math.abs(ps - currentPrice) });
     }
     const pb = roundPrice(anchor - i * bSpace, tickSize);
     if (!holdBuyEntries && pb <= maxBuyPrice && pb >= bot.lowerLimit
-        && !reservedEntryPrices.has(`buy_${pb}`)) {
+        && !reservedEntryPrices.has(`buy_${pb}`)
+        && !isJustFilledLevel("buy", pb)) {
       wantBuy.push({ side: "buy", price: pb, qty, type: "entry", rtId: null,
                      distance: Math.abs(pb - currentPrice) });
     }
@@ -5827,7 +5852,7 @@ app.post("/api/start", async (req, res) => {
       bestBid: tick.bid, bestAsk: tick.ask,
       upperLimit, lowerLimit, running: true, startedAt: Date.now(),
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
-      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null,
+      completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null, lastTargetFill: null,
     });
 
     // Lifetime round-trip counter + net PnL, seeded from the DB (source of
@@ -5875,6 +5900,7 @@ app.post("/api/start", async (req, res) => {
       if (Array.isArray(resumeState.completedRoundTrips)) bot.completedRoundTrips = resumeState.completedRoundTrips;
       if (Array.isArray(resumeState.fillHistory))         bot.fillHistory         = resumeState.fillHistory;
       if (resumeState.gridAnchor     != null) bot.gridAnchor     = resumeState.gridAnchor;
+      if (resumeState.lastTargetFill != null) bot.lastTargetFill = resumeState.lastTargetFill;
       if (resumeState.upperLimit     != null) upperLimit         = resumeState.upperLimit;
       if (resumeState.lowerLimit     != null) lowerLimit         = resumeState.lowerLimit;
       if (resumeState.entryPrice     != null) entryPrice         = resumeState.entryPrice;
