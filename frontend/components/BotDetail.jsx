@@ -2,16 +2,12 @@
 
 import { fmtCcy } from "@/lib/format";
 
-// Time only for today's trades ("2:45:31 PM"), date + time for older ones —
-// a bare time on a multi-day run would be ambiguous.
+// Always date + time ("Nov 09 5:19:29 PM"), including today's trades.
 function fmtWhen(ts) {
   if (!ts) return "—";
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "—";
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay
-    ? d.toLocaleTimeString()
-    : d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " " + d.toLocaleTimeString();
+  return d.toLocaleDateString(undefined, { day: "2-digit", month: "short" }) + " " + d.toLocaleTimeString();
 }
 
 export default function BotDetail({ bot }) {
