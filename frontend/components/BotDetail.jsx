@@ -19,11 +19,15 @@ export default function BotDetail({ bot }) {
   // Highest price first, like an order book: sells on top, buys below. The
   // server sends them in the order they were placed, which jumps around.
   const orders = [...(bot.openOrders || [])].sort((a, b) => Number(b.price) - Number(a.price));
-  const rts = bot.completedRoundTrips || [];
+  // Newest first by actual time, not by the order the server recorded them —
+  // a fill detected late (e.g. after an outage) carries its real, earlier
+  // exchange time and would otherwise sit above newer rows.
+  const byTimeDesc = (key) => (a, b) => new Date(b[key]).getTime() - new Date(a[key]).getTime();
+  const rts = [...(bot.completedRoundTrips || [])].sort(byTimeDesc("closeTs"));
   // Every individual filled order (entry and target legs alike), newest
   // first — unlike Recent Round Trips, which only lists a buy+sell pair
   // once BOTH legs have filled.
-  const fills = bot.fillHistory || [];
+  const fills = [...(bot.fillHistory || [])].sort(byTimeDesc("ts"));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

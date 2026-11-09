@@ -1319,6 +1319,7 @@ async function tgDoRestart(chatId, botId, sellSpread, buySpread, targetSpread, q
       upperLimit, lowerLimit, running: true, startedAt: Date.now(), openOrders: [],
       fillHistory: [], pendingRoundTrips: [], completedRoundTrips: [],
       logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null, lastTargetFill: null,
+      runRoundTrips: 0, runGrossPnl: 0, runFees: 0, runNetPnl: 0, lastNotifiedRunRt: 0,
     });
 
     // Used to bulk-cancel every resting order on the symbol before starting
@@ -2240,20 +2241,21 @@ async function gridLoop(botId) {
     await maintainGrid(botId, currentPrice);
 
     // Telegram RT alert — fires once per actual completed round trip.
-    // Uses the lifetime bot.totalRoundTrips/totalGrossPnl/totalNetPnl
-    // counters, NOT completedRoundTrips.length/reduce() — that array is
-    // capped at 500 entries (memory cap above), so once a bot passed 500
-    // total round trips this comparison (completedCount > lastNotifiedRt)
-    // became permanently false ("500 > 500"), silently killing this summary
-    // alert forever, and the reduce()-based totals were already wrong
-    // (missing everything before the most recent 500) even while it fired.
+    // Uses THIS RUN's counters (bot.runRoundTrips etc. — the same numbers
+    // the dashboard shows), NOT completedRoundTrips.length/reduce() — that
+    // array is capped at 500 entries (memory cap above), so once a bot
+    // passed 500 round trips this comparison became permanently false
+    // ("500 > 500"), silently killing this summary forever. It used the
+    // all-time DB totals before, which never matched the dashboard.
+    // lastNotifiedRunRt is separate from the old lifetime lastNotifiedRt so
+    // a resumed session doesn't compare a run count against a lifetime one.
     const cfg2 = bot.config;
-    const completedCount = bot.totalRoundTrips || 0;
-    if (completedCount > (bot.lastNotifiedRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
-      const newlyCompleted = completedCount - (bot.lastNotifiedRt || 0);
-      const totalGross = bot.totalGrossPnl || 0;
-      const totalNet   = bot.totalNetPnl || 0;
-      const totalFees  = totalGross - totalNet;
+    const completedCount = bot.runRoundTrips || 0;
+    if (completedCount > (bot.lastNotifiedRunRt || 0) && cfg2?.telegramToken && cfg2?.telegramChatId) {
+      const newlyCompleted = completedCount - (bot.lastNotifiedRunRt || 0);
+      const totalGross = bot.runGrossPnl || 0;
+      const totalNet   = bot.runNetPnl || 0;
+      const totalFees  = bot.runFees || 0;
       const tag        = EXCHANGE_TAG[exchangeKey];
       const runtimeStr = bot.startedAt ? formatDuration(Date.now() - bot.startedAt) : "—";
       const netSign    = totalNet >= 0 ? "+" : "";
@@ -2265,7 +2267,7 @@ async function gridLoop(botId) {
         `<b>Net RTP PnL: ${netSign}$${totalNet.toFixed(4)}</b>` +
         (newlyCompleted > 1 ? `\n(${newlyCompleted} new since last update)` : "")
       );
-      bot.lastNotifiedRt = completedCount;
+      bot.lastNotifiedRunRt = completedCount;
       log(botId, `📲 Telegram summary  RTs: ${completedCount}  Net RTP PnL: ${netSign}$${totalNet.toFixed(4)}  Runtime: ${runtimeStr}`);
     }
 
@@ -2289,6 +2291,11 @@ async function gridLoop(botId) {
         lowerLimit         : bot.lowerLimit,
         lastPrice          : bot.lastPrice,
         lastNotifiedRt     : bot.lastNotifiedRt,
+        runRoundTrips      : bot.runRoundTrips,
+        runGrossPnl        : bot.runGrossPnl,
+        runFees            : bot.runFees,
+        runNetPnl          : bot.runNetPnl,
+        lastNotifiedRunRt  : bot.lastNotifiedRunRt,
         startedAt          : bot.startedAt,
         savedAt            : new Date().toISOString(),
       });
@@ -2342,7 +2349,16 @@ async function processFilledOrder(botId, tracked, order) {
   const { tickSize, market } = await getMarketInfo(bot.exchange, cfg.symbol, bot);
   const isInverse = !!market?.inverse;
 
-  const fillTs    = new Date().toISOString();
+  // Use the exchange's own fill time when it gives one (ccxt's
+  // lastTradeTimestamp — Binance's updateTime for a filled order). Stamping
+  // "now" was wrong whenever a fill was detected late: after the Nov 8
+  // outage three buys that filled overnight were all recorded at the moment
+  // the bot came back, out of order with everything else. Falls back to now
+  // when there's no exchange order (Hyperliquid) or the value looks bogus.
+  const exchangeFillMs = Number(order?.lastTradeTimestamp || order?.lastUpdateTimestamp);
+  const fillTs = new Date(
+    exchangeFillMs > 0 && exchangeFillMs <= Date.now() + 60_000 ? exchangeFillMs : Date.now()
+  ).toISOString();
   const fillPrice = order ? parseFloat(order.average || order.price || tracked.price) : tracked.price;
   const fillQty   = order ? parseFloat(order.filled  || order.amount || tracked.qty)   : tracked.qty;
 
@@ -2470,23 +2486,27 @@ async function processFilledOrder(botId, tracked, order) {
         pnl: grossPnl,
         grossPnl, totalFee, netPnl,
         openTs: rt.openTs, closeTs: fillTs,
-        durationMs: Date.now() - new Date(rt.openTs).getTime(),
+        durationMs: new Date(fillTs).getTime() - new Date(rt.openTs).getTime(),
       };
       bot.completedRoundTrips.unshift(rtRecord);
       // Lifetime counters — NOT completedRoundTrips.length, which is capped
       // at 500 entries (see the periodic trim below) and would otherwise get
       // stuck reporting the same round-trip number forever past bot #500.
+      // Only the DB's round-trip sequence number uses these now.
       bot.totalRoundTrips = (bot.totalRoundTrips || 0) + 1;
       bot.totalNetPnl     = (bot.totalNetPnl || 0) + netPnl;
       bot.totalGrossPnl   = (bot.totalGrossPnl || 0) + grossPnl;
       db.recordRoundTrip(bot, rtRecord, bot.totalRoundTrips);
+      // THIS RUN's counters — what the dashboard and every Telegram message
+      // show, so the two always agree (see addRunRoundTrip).
+      addRunRoundTrip(bot, grossPnl, totalFee, netPnl);
       const netSign = netPnl >= 0 ? "+" : "";
-      const totalNetSign = bot.totalNetPnl >= 0 ? "+" : "";
-      log(botId, `✅ ROUND TRIP #${bot.totalRoundTrips}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}  TotalNet:${totalNetSign}$${bot.totalNetPnl.toFixed(4)}`, "success");
+      const runNetSign = bot.runNetPnl >= 0 ? "+" : "";
+      log(botId, `✅ ROUND TRIP #${bot.runRoundTrips}  Buy@$${buyPrice.toFixed(4)} → Sell@$${sellPrice.toFixed(4)}  qty:${rt.qty}  Gross:+$${grossPnl.toFixed(4)}  Fee:-$${totalFee.toFixed(4)}  Net:${netSign}$${netPnl.toFixed(4)}  TotalNet:${runNetSign}$${bot.runNetPnl.toFixed(4)}`, "success");
       if (cfg?.telegramToken && cfg?.telegramChatId) {
         const tag = EXCHANGE_TAG[exchangeKey];
         sendTelegram(cfg.telegramToken, cfg.telegramChatId,
-          `${tag} ✅ Round Trip #${bot.totalRoundTrips}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}\nNet RTP PnL: ${totalNetSign}$${bot.totalNetPnl.toFixed(4)}`
+          `${tag} ✅ Round Trip #${bot.runRoundTrips}\nSymbol: ${cfg.symbol}\nBuy: $${buyPrice.toFixed(4)}\nSell: $${sellPrice.toFixed(4)}\nQty: ${rt.qty}\nGross: +$${grossPnl.toFixed(4)}\nFees:  -$${totalFee.toFixed(4)}\nNet:   ${netSign}$${netPnl.toFixed(4)}\nNet RTP PnL: ${runNetSign}$${bot.runNetPnl.toFixed(4)}`
         );
       }
     }
@@ -3607,6 +3627,29 @@ async function syncOrdersFromExchange(botId) {
 // ============================================================
 //  STATS / REPORT
 // ============================================================
+// THIS RUN's round-trip counters (reset on every fresh start, carried across
+// a resume). The dashboard and all Telegram round-trip messages read these,
+// so they always show the same numbers. They replace completedRoundTrips
+// .length/reduce() as the count: that array is capped at 500 in memory and
+// only its newest 200 entries are saved for a resume, so a long run's count
+// and PnL used to shrink after a restart.
+function addRunRoundTrip(bot, grossPnl, fee, netPnl) {
+  bot.runRoundTrips = (bot.runRoundTrips || 0) + 1;
+  bot.runGrossPnl   = (bot.runGrossPnl   || 0) + grossPnl;
+  bot.runFees       = (bot.runFees       || 0) + fee;
+  bot.runNetPnl     = (bot.runNetPnl     || 0) + netPnl;
+}
+// Sessions saved before these counters existed: rebuild them from the
+// restored completedRoundTrips (which is complete for a run under 200 RTs).
+function seedRunCountersFromHistory(bot) {
+  const c = bot.completedRoundTrips || [];
+  bot.runRoundTrips = c.length;
+  bot.runGrossPnl   = c.reduce((s, x) => s + (x.grossPnl ?? x.pnl ?? 0), 0);
+  bot.runFees       = c.reduce((s, x) => s + (x.totalFee || 0), 0);
+  bot.runNetPnl     = bot.runGrossPnl - bot.runFees;
+  bot.lastNotifiedRunRt = bot.runRoundTrips;   // don't re-announce old RTs
+}
+
 function calcLiveStats(exchangeKey) {
   const bot = bots[exchangeKey];
   const fills = bot.fillHistory;
@@ -3618,10 +3661,13 @@ function calcLiveStats(exchangeKey) {
   // SINGLE SOURCE OF TRUTH: completedRoundTrips
   // Each entry is created when a target order fills against a tracked entry order,
   // so this is the ACTUAL count and PnL — not an estimate based on min(buys, sells).
+  // Prefer this run's counters (see addRunRoundTrip); fall back to the
+  // in-memory list for a bot object that never had them set.
   const completed = bot.completedRoundTrips || [];
-  const rt        = completed.length;
-  const grossPnl  = completed.reduce((s, x) => s + (x.grossPnl ?? x.pnl ?? 0), 0);
-  const rtFees    = completed.reduce((s, x) => s + (x.totalFee || 0), 0);
+  const hasRun    = bot.runRoundTrips != null;
+  const rt        = hasRun ? bot.runRoundTrips : completed.length;
+  const grossPnl  = hasRun ? bot.runGrossPnl : completed.reduce((s, x) => s + (x.grossPnl ?? x.pnl ?? 0), 0);
+  const rtFees    = hasRun ? bot.runFees     : completed.reduce((s, x) => s + (x.totalFee || 0), 0);
   const netPnl    = grossPnl - rtFees;
 
   const qty = bot.config?.qtyPerStep    || 0;
@@ -5870,6 +5916,7 @@ app.post("/api/start", async (req, res) => {
       upperLimit, lowerLimit, running: true, startedAt: Date.now(),
       openOrders: [], fillHistory: [], pendingRoundTrips: [],
       completedRoundTrips: [], logs: [], loopCount: 0, lastNotifiedRt: 0, gridAnchor: null, lastTargetFill: null,
+      runRoundTrips: 0, runGrossPnl: 0, runFees: 0, runNetPnl: 0, lastNotifiedRunRt: 0,
     });
 
     // Lifetime round-trip counter + net PnL, seeded from the DB (source of
@@ -5935,6 +5982,15 @@ app.post("/api/start", async (req, res) => {
         log(botId, `Market $${curPx} drifted outside the saved band — re-centered to $${lowerLimit}–$${upperLimit} on resume (was breaching, would have stopped)`, "warn");
       }
       if (resumeState.lastNotifiedRt != null) bot.lastNotifiedRt = resumeState.lastNotifiedRt;
+      if (resumeState.runRoundTrips != null) {
+        bot.runRoundTrips     = resumeState.runRoundTrips;
+        bot.runGrossPnl       = resumeState.runGrossPnl || 0;
+        bot.runFees           = resumeState.runFees || 0;
+        bot.runNetPnl         = resumeState.runNetPnl || 0;
+        bot.lastNotifiedRunRt = resumeState.lastNotifiedRunRt ?? resumeState.runRoundTrips;
+      } else {
+        seedRunCountersFromHistory(bot);
+      }
       // Runtime should reflect actual UPTIME, not wall-clock since first start.
       // Shift the start forward by the downtime (≈ time since the last state
       // save) on each resume, so crash/outage/deploy gaps don't inflate it.
