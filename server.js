@@ -1874,21 +1874,55 @@ async function syncExchangeTime(exchange) {
     else if (isUsdm)                     host = "fapi.binance.com";
     else if (isCoinm)                    host = "dapi.binance.com";
     else                                 host = "api.binance.com";
+    const t0 = Date.now();
     const serverTime = await new Promise((resolve, reject) => {
-      https.get({host, path, headers:{"User-Agent":"node"}}, (res) => {
+      const req = https.get({host, path, headers:{"User-Agent":"node"}}, (res) => {
         let raw=""; res.on("data",c=>raw+=c);
         res.on("end",()=>{ try{resolve(JSON.parse(raw).serverTime)}catch(e){reject(e)} });
-      }).on("error", reject);
+      });
+      req.on("error", reject);
+      req.setTimeout(5000, () => req.destroy(new Error("time sync timeout 5s")));
     });
-    const offset = serverTime - Date.now();
+    const t1 = Date.now();
+    // Compare against the round-trip MIDPOINT — serverTime was stamped
+    // roughly halfway through the request, not when the response landed.
+    const offset = Math.round(serverTime - (t0 + t1) / 2);
+    const prev = exchange.timeDifference;
     exchange.timeDifference = offset;
-    exchange.options.timeDifference = offset;
+    // ccxt's own convention is local-minus-server (its nonce() subtracts it).
+    // The nonce override below is what's actually used, but keep this
+    // consistent in case any ccxt path reads it directly.
+    exchange.options.timeDifference = -offset;
     exchange.nonce = () => Date.now() + offset;
     exchange.milliseconds = () => Date.now() + offset;
-    console.log(`[TIME SYNC] ${exchange.id} via ${host} offset=${offset}ms`);
+    exchange._lastTimeSync = t1;
+    // Initial sync logs always; periodic resyncs only when the offset moved.
+    if (prev == null || Math.abs(offset - prev) >= 100) {
+      console.log(`[TIME SYNC] ${exchange.id} via ${host} offset=${offset}ms${prev != null ? ` (was ${prev}ms)` : ""} rtt=${t1 - t0}ms`);
+    }
   } catch (err) {
     console.warn("[TIME SYNC] Failed:", err.message);
   }
+}
+
+// The offset above used to be measured ONCE, when a bot started, and frozen
+// for the life of the process. The EC2 clock keeps being corrected by NTP
+// after that, so over days the frozen offset goes stale — once Binance sees
+// a request stamped more than 1000ms ahead of its own clock it rejects it
+// (-1021), and EVERY signed call fails: fetchOrder (fills go undetected),
+// cancelOrder, createOrder. Re-measure every minute for every running
+// Binance bot (and its hedge futures client) so drift can never build up.
+let _timeResyncRunning = false;
+function startBinanceTimeResync() {
+  if (_timeResyncRunning) return;
+  _timeResyncRunning = true;
+  setInterval(() => {
+    for (const bot of Object.values(bots)) {
+      if (!bot?.running || bot.exchangeKey !== "binance") continue;
+      if (bot.exchange) syncExchangeTime(bot.exchange);
+      if (bot.hedge?.futuresExchange) syncExchangeTime(bot.hedge.futuresExchange);
+    }
+  }, 60_000);
 }
 
 async function getCurrentPrice(exchange, symbol) {
@@ -6198,6 +6232,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`  📄 Per-bot logs: ${LOG_DIR}/<botId>.log`);
   console.log(`     Tail any bot's stream:  tail -f ${LOG_DIR}/<botId>.log\n`);
   startTelegramPoller();
+  startBinanceTimeResync();
   db.pingDb().then(ok => {
     if (ok) {
       seedEnvAccounts();
