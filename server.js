@@ -322,6 +322,7 @@ const MAKER_FEE_RATE = {
   // Binance
   binance_spot      : 0.001000,  // 0.10% standard spot maker (BNB pays 0.075%)
   binance_usdm      : 0.000200,  // 0.02% USDM futures maker
+  binance_futures   : 0.000200,  // same USDM futures — the priceSource name bots actually use (was falling to the 0.05% default)
   binance_coinm     : 0.000100,  // 0.01% COIN-M futures maker
   // Deribit
   deribit           : -0.000010, // -0.01% maker REBATE on options (yes, you get paid)
@@ -2461,18 +2462,21 @@ async function processFilledOrder(botId, tracked, order) {
         // the exchange still gives us nothing.
         let realOpen  = rt.openFee;
         let realClose = feeKnown ? feeCost : null;
-        if (realOpen == null || realClose == null) {
-          try {
-            const trades = await bot.exchange.fetchMyTrades(cfg.symbol, undefined, 100);
-            const byOid = {};
-            for (const t of trades) {
-              const oid = String(t.order ?? t.info?.orderId ?? t.info?.order_id ?? "");
-              if (oid) byOid[oid] = (byOid[oid] || 0) + parseFloat(t.fee?.cost ?? 0);
-            }
-            if (realOpen  == null && byOid[String(rt.openOrderId)] !== undefined) realOpen  = byOid[String(rt.openOrderId)];
-            if (realClose == null && byOid[String(tracked.id)]     !== undefined) realClose = byOid[String(tracked.id)];
-          } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
-        }
+        // Look each leg's trades up BY ORDER ID. The old call
+        // fetchMyTrades(symbol, undefined, 100) returned Binance's OLDEST 100
+        // trades in its default 7-day window, not the newest — so recent
+        // order ids were never found and every fee fell through to the
+        // estimate (at a 0.05% default rate, ~2.5x the real 0.02% maker fee).
+        const feeForOrder = async (orderId) => {
+          if (orderId == null) return null;
+          const trades = await bot.exchange.fetchMyTrades(cfg.symbol, undefined, undefined, { orderId: String(orderId) });
+          if (!trades.length) return null;
+          return trades.reduce((s, t) => s + parseFloat(t.fee?.cost ?? 0), 0);
+        };
+        try {
+          if (realOpen  == null) realOpen  = await feeForOrder(rt.openOrderId);
+          if (realClose == null) realClose = await feeForOrder(tracked.id);
+        } catch (e) { log(botId, `Fee lookup failed, estimating: ${e.message}`, "warn"); }
         openFee  = realOpen  != null ? realOpen  : estimateFee(cfg.priceSource, rt.openPrice, rt.qty, rt.isInverse);
         closeFee = realClose != null ? realClose : estimateFee(cfg.priceSource, fillPrice, rt.qty, rt.isInverse);
       }
